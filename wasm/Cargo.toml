@@ -1,0 +1,24 @@
+[package]
+name = "fourk-wasm"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Browser bindings for the FourK covenant: embeds contracts/fourk.sil and
+# exposes state -> redeem script and entrypoint -> signature script, so the
+# React app can derive addresses and build spends entirely client-side.
+# Kaspa crate tags must match the silverscript workspace (v2.0.1).
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+silverscript-lang = { path = "../../silverscript/silverscript-lang" }
+kaspa-txscript = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.0.1" }
+# silverscript-lang's secp256k1/rand deps need the js randomness backend on
+# wasm32 — both getrandom major versions appear in the tree.
+getrandom = { version = "0.2", features = ["js"] }
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+
+[workspace]

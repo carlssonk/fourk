@@ -1,0 +1,17 @@
+node_modules/
+harness/target/
+contracts/fourk.json
+*.key
+app/dist/
+wasm/target/
+faucet/faucet.key
+
+# local env overrides (pinned node URLs etc.)
+.env.local
+.env.*.local
+
+# local CLI play artifacts
+/match.json
+
+# local design notes
+app/IDEAS.md

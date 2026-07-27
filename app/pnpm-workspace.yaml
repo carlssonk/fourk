@@ -1,0 +1,6 @@
+onlyBuiltDependencies:
+  - esbuild
+
+# Refuse versions published less than a week ago — neutralizes the
+# just-published-malware window across ALL deps, dev tooling included.
+minimumReleaseAge: 10080

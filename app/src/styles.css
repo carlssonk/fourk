@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #191512;
+  --color-panel: #221d18;
+  --color-line: #3a332a;
+  --color-ink: #ece4d6;
+  --color-dim: #a49882;
+  --color-accent: #5aa08c;
+  --color-red: #e0523f;
+  --color-blue: #5b8de0;
+  --color-frame: #c8931f;
+  --color-field: #14110e;
+  --color-ok: #6fb35f;
+}
+
+@layer base {
+  body {
+    @apply bg-bg text-ink;
+    font:
+      15px/1.5 ui-rounded,
+      system-ui,
+      sans-serif;
+  }
+}
+
+/* The connecting loader's discs hop in turn (see DiscLoader). */
+@keyframes disc-hop {
+  0%,
+  50%,
+  100% {
+    transform: translateY(0);
+  }
+  25% {
+    transform: translateY(-0.4rem);
+  }
+}
+
+@layer components {
+  /* Card surface: translucent over the page so the board backdrop shows
+   * through, with a light backdrop blur for the glass read. The blur must
+   * stay small: the backdrop's discs are ~12px, and a heavier blur smears
+   * them into a flat tint that looks like no glass at all. Utilities on the
+   * same element (e.g. a conditional border-accent) still win. */
+  .card {
+    @apply rounded-[10px] border border-line bg-panel/50 backdrop-blur-xs;
+  }
+
+  .btn {
+    @apply cursor-pointer rounded-md bg-accent px-3.5 py-[0.45rem] font-semibold whitespace-nowrap text-[#fff8ee] disabled:cursor-default disabled:opacity-45;
+  }
+
+  .btn-danger {
+    @apply border border-red bg-transparent text-red;
+  }
+
+  .btn-ghost {
+    @apply border border-accent bg-panel/50 text-ink backdrop-blur-xs enabled:hover:bg-accent/15;
+  }
+
+  .input {
+    @apply w-full flex-1 rounded-md border border-line bg-field px-2.5 py-[0.45rem] text-ink;
+  }
+}

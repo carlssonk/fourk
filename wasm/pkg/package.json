@@ -1,0 +1,15 @@
+{
+  "name": "fourk-wasm",
+  "type": "module",
+  "version": "0.1.0",
+  "files": [
+    "fourk_wasm_bg.wasm",
+    "fourk_wasm.js",
+    "fourk_wasm.d.ts"
+  ],
+  "main": "fourk_wasm.js",
+  "types": "fourk_wasm.d.ts",
+  "sideEffects": [
+    "./snippets/*"
+  ]
+}

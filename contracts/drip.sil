@@ -1,0 +1,40 @@
+pragma silverscript ^0.1.0;
+
+// On-chain testnet dispenser for fourk's free mode — the faucet as a covenant.
+//
+// Stateless, so its P2SH address never changes: refill by simply sending
+// TKAS to the address (each send becomes an independent drip lane), and the
+// app claims from it permissionlessly. A claim transaction needs NO
+// signature and NO existing funds: one dispenser input, output 0 re-locks
+// the balance minus at most DRIP back to the same script, and whatever
+// remains (drip minus fee) goes wherever the claimant directs it.
+//
+// Abuse containment is consensus-side and deliberately simple:
+//   - require(this.age >= COOLDOWN): each lane drips at most once per
+//     cooldown window (sequence-lock enforced).
+//   - require(tx.inputs.length == 1): without this, spending N lanes in one
+//     transaction would satisfy every input's floor check with a single
+//     shared successor output, draining (N-1) full lanes at once.
+//
+// Endgame: once a lane's balance is no longer above DRIP, the successor
+// requirement lifts and the final claimant sweeps the remainder — otherwise
+// a shrinking tail UTXO would become storage-mass-poisoned dust locked to
+// the script forever.
+contract Drip() {
+    // ~2 minutes at 10 blocks/s.
+    int constant COOLDOWN = 1200;
+    // 10 TKAS per claim.
+    int constant DRIP = 1000000000;
+
+    entrypoint function drip() {
+        require(tx.inputs.length == 1);
+        require(this.age >= COOLDOWN);
+
+        int balance = tx.inputs[this.activeInputIndex].value;
+        if (balance > DRIP) {
+            byte[] self = tx.inputs[this.activeInputIndex].scriptPubKey;
+            require(tx.outputs[0].scriptPubKey == self);
+            require(tx.outputs[0].value >= balance - DRIP);
+        }
+    }
+}
