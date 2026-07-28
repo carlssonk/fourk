@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import * as cov from "@shared/lib/covenant";
 import { ensureFunds } from "@shared/lib/dispenser";
-import { applyMove, discOf, findWin, playerToMove } from "@shared/lib/game";
+import { applyMove, discOf, findWin, playerToMove, type State } from "@shared/lib/game";
 import { inviteLink } from "@shared/lib/invite";
 import type { Match } from "@shared/lib/match";
 import { playClaimReady, playClockExpired, playClockWarning } from "@shared/lib/sound";
@@ -21,11 +21,11 @@ import {
   startConnecting,
   updateMatch,
 } from "@shared/state";
-import { Board, PlayerPanel } from "./components";
+import { Board, PlayerPanel, ResultOverlay } from "./components";
 import { useCapClock } from "./hooks/useCapClock";
 import { useMatchWatcher } from "./hooks/useMatchWatcher";
 import { useMoveClock } from "./hooks/useMoveClock";
-import { matchView, winningCells } from "./lib";
+import { matchView, resultTone, winningCells } from "./lib";
 
 interface Props {
   match: Match;
@@ -36,6 +36,9 @@ export const Game = ({ match }: Props) => {
   const rpcReady = useAtomValue(rpcClientAtom) !== null;
   const [importVal, setImportVal] = useState("");
   const [copied, setCopied] = useState(false);
+  // "View board": the verdict card steps aside to show the final position;
+  // the banner and end-game buttons below take over.
+  const [overlayDismissed, setOverlayDismissed] = useState(false);
 
   const s = match.state;
   const view = matchView(match, getWallet().myPk);
@@ -52,10 +55,8 @@ export const Game = ({ match }: Props) => {
   const myProfile = useAtomValue(profileAtom);
   // Own seat falls back to the local profile for games created before
   // profiles existed; opponents without one get pubkey-derived identities.
-  const p1Profile =
-    match.profiles?.p1 ?? (role === "p1" && myProfile.name ? myProfile : undefined);
-  const p2Profile =
-    match.profiles?.p2 ?? (role === "p2" && myProfile.name ? myProfile : undefined);
+  const p1Profile = match.profiles?.p1 ?? (role === "p1" && myProfile.name ? myProfile : undefined);
+  const p2Profile = match.profiles?.p2 ?? (role === "p2" && myProfile.name ? myProfile : undefined);
   const playing = !open && !result;
   const p1Color = match.p1Color ?? "red";
   const p2Color = p1Color === "red" ? "blue" : "red";
@@ -95,24 +96,41 @@ export const Game = ({ match }: Props) => {
     }
   }, [secondsLeft, myTurn, iAmPlayer, result, s.moveTimeout]);
 
-  const drop = (col: number) =>
+  // The optimistic move: the disc lands the instant the column is clicked,
+  // while the transaction confirms in the background. Keyed to the game
+  // UTXO it was played on, so any fresh match state — our confirmation or a
+  // resync — makes it stale and the chain's truth takes over; a failed
+  // transaction rolls it back explicitly.
+  const [pending, setPending] = useState<{ onTxid: string; state: State } | null>(null);
+  const confirming = pending !== null && pending.onTxid === match.txid;
+  const shown = confirming ? pending.state : s;
+
+  const drop = (col: number) => {
+    const next = applyMove(s, col);
+    const witness = findWin(next.board, discOf(playerToMove(s)));
+    setPending({ onTxid: match.txid, state: next });
     runAction(async () => {
-      const { key } = getWallet();
-      const rpc = await getRpc();
-      const next = applyMove(s, col);
-      const witness = findWin(next.board, discOf(playerToMove(s)));
-      if (witness) {
-        const txid = await cov.winMatch(rpc, key, match, col, witness);
-        // End on the finished position (lighting up the winning line) — the
-        // covenant is terminal, so the watcher will never deliver it.
-        finish("You connected four — you win! 🎉", { ...match, state: next, txid });
-      } else {
-        // A move's fee comes off a wallet UTXO; refill from the dispenser
-        // if the wallet has run dry mid-game.
-        await ensureFunds(rpc, key, cov.FEE_HEADROOM);
-        updateMatch(await cov.moveMatch(rpc, key, match, col));
+      try {
+        const { key } = getWallet();
+        const rpc = await getRpc();
+        if (witness) {
+          const txid = await cov.winMatch(rpc, key, match, col, witness);
+          // End on the finished position (lighting up the winning line) — the
+          // covenant is terminal, so the watcher will never deliver it.
+          finish("You connected four — you win! 🎉", { ...match, state: next, txid });
+        } else {
+          // A move's fee comes off a wallet UTXO; refill from the dispenser
+          // if the wallet has run dry mid-game.
+          await ensureFunds(rpc, key, cov.FEE_HEADROOM);
+          updateMatch(await cov.moveMatch(rpc, key, match, col));
+        }
+      } catch (e) {
+        // The chain said no — take the disc back and surface the error.
+        setPending(null);
+        throw e;
       }
     });
+  };
 
   // The forfeit door: once the mover's clock runs out, the waiting player
   // takes the pot. The local clock is an estimate anchored one age-fetch ago,
@@ -201,60 +219,13 @@ export const Game = ({ match }: Props) => {
   const link = inviteLink(match);
 
   return (
-    <div className="mx-auto max-w-175">
-      <div className="mb-3 flex flex-wrap gap-6">
-        {!rpcReady && !result ? (
-          <span className="inline-flex items-center gap-2 text-dim">
-            <DiscLoader /> Connecting to the game…
-          </span>
-        ) : open ? (
-          <span>Waiting for your opponent to join…</span>
-        ) : result ? (
-          <span>Game over</span>
-        ) : full ? (
-          <span>Board full…</span>
-        ) : myTurn && clock.expired ? (
-          <span className="text-red">
-            <b>Your time is up</b> — your opponent can claim the win. Move now!
-          </span>
-        ) : myTurn ? (
-          <span>
-            {s.moveCount === 0 ? (
-              <>
-                <b>Your opponent joined</b> — drop a disc to start
-              </>
-            ) : (
-              <>
-                <b>Your turn</b> — drop a disc
-              </>
-            )}
-          </span>
-        ) : iAmPlayer && s.moveCount === 0 ? (
-          <span>Waiting for your opponent to start…</span>
-        ) : (
-          <span>
-            {iAmPlayer
-              ? "Opponent's turn…"
-              : `${(mover === 0 ? p1Color : p2Color) === "red" ? "Red" : "Blue"} to move`}
-          </span>
-        )}
-        {capLeft && (
-          <span
-            className="text-sm text-dim"
-            title="This game has a total time limit. If it's still unfinished when the limit hits, the pot splits evenly and both stakes return."
-          >
-            ⌛ pot splits in {capLeft} if unfinished
-          </span>
-        )}
-      </div>
-
-      {result && (
-        <div className="mb-4 rounded-lg border border-ok bg-ok/10 px-3.5 py-2.5">
-          {result}
-        </div>
-      )}
-
-      <div className="flex flex-wrap items-start justify-center gap-3">
+    // A full-viewport column (the app shell pads 1rem top and bottom): the
+    // seats and status up top, the buttons pinned at the bottom, and the
+    // board stretched across everything in between.
+    <div className="flex min-h-[calc(100dvh-2rem)] flex-col">
+      {/* The seats flank the status; on narrow screens the status drops to
+       * its own line below them. */}
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
         <PlayerPanel
           pk={s.p1}
           profile={p1Profile}
@@ -263,13 +234,57 @@ export const Game = ({ match }: Props) => {
           active={playing && !full && mover === 0}
           clock={mover === 0 ? clock.text : null}
         />
-        <Board
-          state={s}
-          interactive={myTurn && !busy}
-          winningCells={winningCells(s.board)}
-          onDrop={drop}
-          p1Color={p1Color}
-        />
+        <div className="order-3 w-full text-center sm:order-0 sm:w-auto sm:min-w-0 sm:flex-1">
+          {!rpcReady && !result ? (
+            <span className="inline-flex items-center gap-2 text-dim">
+              <DiscLoader /> Connecting to the game…
+            </span>
+          ) : open ? (
+            <span>Waiting for your opponent to join…</span>
+          ) : result ? (
+            <span>Game over</span>
+          ) : full ? (
+            <span>Board full…</span>
+          ) : confirming ? (
+            // The optimistic disc is already on the board — saying "your
+            // turn" now would invite a second click that can't go through.
+            <span className="inline-flex items-center gap-2 text-dim">
+              <DiscLoader /> Confirming your move…
+            </span>
+          ) : myTurn && clock.expired ? (
+            <span className="text-red">
+              <b>Your time is up</b> — your opponent can claim the win. Move now!
+            </span>
+          ) : myTurn ? (
+            <span>
+              {s.moveCount === 0 ? (
+                <>
+                  <b>Your opponent joined</b> — drop a disc to start
+                </>
+              ) : (
+                <>
+                  <b>Your turn</b> — drop a disc
+                </>
+              )}
+            </span>
+          ) : iAmPlayer && s.moveCount === 0 ? (
+            <span>Waiting for your opponent to start…</span>
+          ) : (
+            <span>
+              {iAmPlayer
+                ? "Opponent's turn…"
+                : `${(mover === 0 ? p1Color : p2Color) === "red" ? "Red" : "Blue"} to move`}
+            </span>
+          )}
+          {capLeft && (
+            <div
+              className="text-sm text-dim"
+              title="This game has a total time limit. If it's still unfinished when the limit hits, the pot splits evenly and both stakes return."
+            >
+              ⌛ pot splits in {capLeft} if unfinished
+            </div>
+          )}
+        </div>
         <PlayerPanel
           pk={s.p2}
           profile={p2Profile}
@@ -280,8 +295,22 @@ export const Game = ({ match }: Props) => {
         />
       </div>
 
+      {result && !overlayDismissed && (
+        <ResultOverlay
+          result={result}
+          tone={resultTone(result)}
+          busy={busy}
+          onPlayAgain={() => {
+            exitMatch(true);
+            newGame();
+          }}
+          onExit={() => exitMatch(true)}
+          onDismiss={() => setOverlayDismissed(true)}
+        />
+      )}
+
       {open && role === "p1" && !needManualImport && (
-        <div className="card mb-3 px-4 py-3">
+        <div className="card mx-auto mt-3 w-full max-w-175 px-4 py-3">
           <p className="mb-1.5 text-sm text-dim">
             Send this link to your opponent — the game starts the moment they take their seat:
           </p>
@@ -301,55 +330,8 @@ export const Game = ({ match }: Props) => {
         </div>
       )}
 
-      <div className="mb-2.5 flex flex-wrap items-center gap-2.5">
-        {result && (
-          <button
-            className="btn"
-            onClick={() => {
-              exitMatch(true);
-              newGame();
-            }}
-          >
-            Play again
-          </button>
-        )}
-        {result && (
-          <button className="btn btn-danger" onClick={() => exitMatch(true)}>
-            Back to start
-          </button>
-        )}
-        {!open && !full && !myTurn && iAmPlayer && !result && s.moveCount > 0 && clock.expired && (
-          <button className="btn" disabled={busy} onClick={claimTimeoutWin}>
-            Time's up — claim the win
-          </button>
-        )}
-        {inLobby && iAmPlayer && (
-          <button
-            className="btn btn-danger"
-            disabled={busy || withdrawGated}
-            title={
-              withdrawGated
-                ? "The covenant lets the joiner withdraw after one move clock — the wait stops join-and-run lobby griefing."
-                : undefined
-            }
-            onClick={dissolveGame}
-          >
-            {role === "p1"
-              ? "Kick opponent"
-              : withdrawGated && withdrawClock.text
-                ? `Withdraw & refund in ${withdrawClock.text}`
-                : "Withdraw & refund"}
-          </button>
-        )}
-        {!result && (
-          <button className="btn btn-danger" disabled={busy} onClick={leaveMatch}>
-            Leave match
-          </button>
-        )}
-      </div>
-
       {needManualImport && (
-        <div className="card mb-4 px-4 py-3.5">
+        <div className="card mx-auto mt-3 w-full max-w-175 px-4 py-3.5">
           <h2 className="mb-2 text-base font-semibold text-accent">
             Hmm — the game moved without us
           </h2>
@@ -379,6 +361,72 @@ export const Game = ({ match }: Props) => {
           </div>
         </div>
       )}
+
+      {/* The board owns whatever height the bars above and below leave. */}
+      <div className="relative flex min-h-0 flex-1 items-center justify-center py-3">
+        {/* Floating over the board's slack space instead of in the column
+         * flow, so appearing (after "View board") never shifts the layout. */}
+        {result && overlayDismissed && (
+          <div className="absolute top-1 left-1/2 z-10 w-max max-w-[calc(100%-1rem)] -translate-x-1/2 rounded-lg border border-ok bg-panel/80 px-3.5 py-2 text-center backdrop-blur-xs">
+            {result}
+          </div>
+        )}
+        <Board
+          state={shown}
+          interactive={myTurn && !busy && !confirming}
+          winningCells={winningCells(shown.board)}
+          onDrop={drop}
+          p1Color={p1Color}
+          nextDisc={playing && !full ? (discOf(playerToMove(shown)) as 1 | 2) : null}
+        />
+      </div>
+
+      <div className="flex flex-wrap items-center justify-center gap-2.5">
+        {result && overlayDismissed && (
+          <button
+            className="btn"
+            onClick={() => {
+              exitMatch(true);
+              newGame();
+            }}
+          >
+            Play again
+          </button>
+        )}
+        {result && overlayDismissed && (
+          <button className="btn btn-muted" onClick={() => exitMatch(true)}>
+            Back to start
+          </button>
+        )}
+        {!open && !full && !myTurn && iAmPlayer && !result && s.moveCount > 0 && clock.expired && (
+          <button className="btn" disabled={busy} onClick={claimTimeoutWin}>
+            Time's up — claim the win
+          </button>
+        )}
+        {inLobby && iAmPlayer && (
+          <button
+            className="btn btn-danger"
+            disabled={busy || withdrawGated}
+            title={
+              withdrawGated
+                ? "The covenant lets the joiner withdraw after one move clock — the wait stops join-and-run lobby griefing."
+                : undefined
+            }
+            onClick={dissolveGame}
+          >
+            {role === "p1"
+              ? "Kick opponent"
+              : withdrawGated && withdrawClock.text
+                ? `Withdraw & refund in ${withdrawClock.text}`
+                : "Withdraw & refund"}
+          </button>
+        )}
+        {!result && (
+          <button className="btn btn-muted" disabled={busy} onClick={leaveMatch}>
+            Leave match
+          </button>
+        )}
+      </div>
     </div>
   );
 };

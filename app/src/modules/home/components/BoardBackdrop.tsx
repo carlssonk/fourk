@@ -151,12 +151,17 @@ export const BoardBackdrop = () => {
       const row = heights.get(col) ?? 0;
       const cap = Math.max(0, BOUNCE_E.length - 1 - row);
       const variant = Math.max(0, cap - (Math.random() < 0.3 ? 1 : 0));
+      const drop = h - row * CELL - PAD;
+      // The rebound peaks at e²·drop, so untempered restitution sends a
+      // full-viewport faller several cells back up. Cap the rebound height
+      // at ~3 cells; short falls keep their liveliness untouched.
+      const e = Math.min(BOUNCE_E[variant]!, Math.sqrt((3 * CELL) / drop));
       discs.push({
         col,
         row,
         blue: discs.length % 2 === 1,
-        e: BOUNCE_E[variant]!,
-        drop: h - row * CELL - PAD,
+        e,
+        drop,
         start: performance.now(),
       });
       return true;

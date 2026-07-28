@@ -9,7 +9,7 @@
   --color-accent: #5aa08c;
   --color-red: #e0523f;
   --color-blue: #5b8de0;
-  --color-frame: #c8931f;
+  --color-frame: #29231c;
   --color-field: #14110e;
   --color-ok: #6fb35f;
 }
@@ -36,6 +36,38 @@
   }
 }
 
+/* The verdict overlay: the dim fades up, the card pops in with a little
+ * overshoot. */
+@keyframes overlay-fade {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes overlay-pop {
+  from {
+    opacity: 0;
+    transform: translateY(12px) scale(0.95);
+  }
+}
+/* The winning four glow in a slow pulse. */
+@keyframes win-pulse {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 3px rgba(255, 255, 255, 0.9),
+      0 0 10px 2px rgba(255, 255, 255, 0.3),
+      inset 0 1px 2px rgba(255, 255, 255, 0.18),
+      inset 0 -2px 3px rgba(0, 0, 0, 0.25);
+  }
+  50% {
+    box-shadow:
+      0 0 0 3px rgba(255, 255, 255, 0.9),
+      0 0 20px 6px rgba(255, 255, 255, 0.6),
+      inset 0 1px 2px rgba(255, 255, 255, 0.18),
+      inset 0 -2px 3px rgba(0, 0, 0, 0.25);
+  }
+}
+
 @layer components {
   /* Card surface: translucent over the page so the board backdrop shows
    * through, with a light backdrop blur for the glass read. The blur must
@@ -58,7 +90,98 @@
     @apply border border-accent bg-panel/50 text-ink backdrop-blur-xs enabled:hover:bg-accent/15;
   }
 
+  /* Quiet exits: actions that just leave the screen and can be re-entered —
+   * no danger, so no red. */
+  .btn-muted {
+    @apply border border-line bg-transparent text-dim enabled:hover:bg-white/5 enabled:hover:text-ink;
+  }
+
   .input {
     @apply w-full flex-1 rounded-md border border-line bg-field px-2.5 py-[0.45rem] text-ink;
+  }
+
+  /* The board face: a flat, neutral slab a shade above the panel tone —
+   * quiet so the discs carry the color. overflow-clip so a dropping disc
+   * emerges from behind the top edge instead of flying in over the frame. */
+  .board-frame {
+    overflow: clip;
+    border: 1px solid var(--color-line);
+    border-radius: 10px;
+    background: var(--color-frame);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.05),
+      0 10px 28px rgba(0, 0, 0, 0.4);
+  }
+
+  /* A hole punched through the board face; discs render inside it. */
+  .hole {
+    @apply rounded-full bg-field;
+    box-shadow:
+      inset 0 3px 6px rgba(0, 0, 0, 0.65),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.06);
+  }
+
+  /* The board face in front of the discs: each cell paints its own square
+   * of face with the hole cut out, z-raised above the discs — so a falling
+   * disc is only seen through the holes it passes, slotted into the board
+   * instead of sliding over it. The negative inset also covers the frame's
+   * padding ring so the disc stays hidden right up to the top edge. */
+  .cell-face {
+    position: relative;
+  }
+  .cell-face::after {
+    content: "";
+    position: absolute;
+    inset: -7px;
+    z-index: 1;
+    pointer-events: none;
+    background: radial-gradient(
+      circle at center,
+      transparent calc(var(--cell) * 0.44),
+      var(--color-frame) calc(var(--cell) * 0.44 + 1px)
+    );
+  }
+
+  /* Coin faces: flat enamel with only a whisper of relief — the stamped
+   * Kaspa ring and K (see Board) are the coin's detailing. */
+  .disc-red,
+  .disc-blue {
+    box-shadow:
+      inset 0 1px 2px rgba(255, 255, 255, 0.18),
+      inset 0 -2px 3px rgba(0, 0, 0, 0.25);
+  }
+  .disc-red {
+    background: var(--color-red);
+  }
+  .disc-blue {
+    background: var(--color-blue);
+  }
+
+  .disc-win {
+    /* The glow spills outside the hole — lift it above the cell faceplates
+     * or they'd clip it to nothing. */
+    position: relative;
+    z-index: 2;
+    animation: win-pulse 1.6s ease-in-out infinite;
+    box-shadow:
+      0 0 0 3px rgba(255, 255, 255, 0.9),
+      inset 0 1px 2px rgba(255, 255, 255, 0.18),
+      inset 0 -2px 3px rgba(0, 0, 0, 0.25);
+  }
+
+  .overlay-fade {
+    animation: overlay-fade 0.3s ease-out both;
+  }
+
+  .overlay-pop {
+    animation: overlay-pop 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .disc-win,
+    .overlay-fade,
+    .overlay-pop {
+      animation: none;
+    }
   }
 }
