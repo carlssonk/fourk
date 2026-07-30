@@ -21,9 +21,10 @@ import {
   type Rpc,
   type UtxoEntryLike,
 } from "./covenant";
-import { fromHex } from "./match";
+import { NETWORK_ID, NETWORK_TYPE, fromHex } from "./match";
 
-const DRIP_REDEEM_HEX = "b3519c6902b004b1b9be760400ca9a3ba06300c3b9bf876900c2780400ca9a3b94a26968007a7551";
+const DRIP_REDEEM_HEX =
+  "b3519c6902b004b1b9be760400ca9a3ba06300c3b9bf876900c2780400ca9a3b94a26968007a7551";
 const CLAIM_SIGSCRIPT_HEX = "28" + DRIP_REDEEM_HEX;
 
 /** Must match COOLDOWN / DRIP in contracts/drip.sil. */
@@ -39,8 +40,8 @@ function dispenserSpk() {
   return kaspa.payToScriptHashScript(fromHex(DRIP_REDEEM_HEX));
 }
 
-function dispenserAddress(networkType = "testnet"): string {
-  const addr = kaspa.addressFromScriptPublicKey(dispenserSpk(), networkType);
+function dispenserAddress(): string {
+  const addr = kaspa.addressFromScriptPublicKey(dispenserSpk(), NETWORK_TYPE);
   if (!addr) throw new Error("cannot derive dispenser address");
   return addr.toString();
 }
@@ -58,7 +59,10 @@ export async function claimDrip(rpc: Rpc, toAddress: string): Promise<string> {
   ]);
   const entries = (utxoRes.entries ?? []) as unknown as UtxoEntryLike[];
   const virtualDaa = BigInt(dagInfo.virtualDaaScore);
-  const feerate = bigMax(BigInt(Math.ceil(Number(feeRes.estimate.priorityBucket.feerate))), MIN_RELAY_FEERATE);
+  const feerate = bigMax(
+    BigInt(Math.ceil(Number(feeRes.estimate.priorityBucket.feerate))),
+    MIN_RELAY_FEERATE,
+  );
 
   const lanes = entries
     .filter((e) => {
@@ -91,7 +95,10 @@ async function claimFromLane(
   const balance = amountOf(lane);
   const outpoint = (lane.outpoint ?? lane.entry?.outpoint)!;
   const input = new kaspa.TransactionInput({
-    previousOutpoint: { transactionId: String(outpoint.transactionId), index: Number(outpoint.index) },
+    previousOutpoint: {
+      transactionId: String(outpoint.transactionId),
+      index: Number(outpoint.index),
+    },
     signatureScript: CLAIM_SIGSCRIPT_HEX,
     sequence: COOLDOWN_DAA,
     sigOpCount: 0,
@@ -109,7 +116,10 @@ async function claimFromLane(
     if (take - fee < DUST) throw new Error("DISPENSER_COOLING"); // lane too small to pay its fee
     const outputs =
       relock > 0n
-        ? [new kaspa.TransactionOutput(relock, dispenserSpk()), new kaspa.TransactionOutput(take - fee, payoutSpk)]
+        ? [
+            new kaspa.TransactionOutput(relock, dispenserSpk()),
+            new kaspa.TransactionOutput(take - fee, payoutSpk),
+          ]
         : [new kaspa.TransactionOutput(take - fee, payoutSpk)];
     return new kaspa.Transaction({
       version: 1,
@@ -123,7 +133,7 @@ async function claimFromLane(
   };
 
   const draft = build(0n);
-  const mass = BigInt(kaspa.calculateTransactionMass("testnet-10", draft as any));
+  const mass = BigInt(kaspa.calculateTransactionMass(NETWORK_ID, draft as any));
   const fee = feeMassFloor(draft, mass) * feerate;
 
   const res = await rpc.submitTransaction({ transaction: build(fee) as any, allowOrphan: false });

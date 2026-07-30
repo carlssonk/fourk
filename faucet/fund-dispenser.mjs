@@ -13,6 +13,10 @@ await init(fs.readFileSync(new URL("../vendor/kaspa-wasm/kaspa_bg.wasm", import.
 // Keep in sync with contracts/drip.sil — harness/tests/drip_tests.rs prints it.
 const DRIP_REDEEM_HEX = "b3519c6902b004b1b9be760400ca9a3ba06300c3b9bf876900c2780400ca9a3b94a26968007a7551";
 
+// Keep in sync with NETWORK_ID / NETWORK_TYPE in app/src/shared/lib/match.ts.
+const NETWORK_ID = "testnet-10";
+const NETWORK_TYPE = "testnet";
+
 const [keyFile, lanesArg, tkasArg] = process.argv.slice(2);
 if (!keyFile) {
   console.error("usage: node fund-dispenser.mjs <keyfile> [lanes=3] [tkas-per-lane=100]");
@@ -22,14 +26,14 @@ const lanes = Number(lanesArg ?? 3);
 const perLane = BigInt(Math.round(Number(tkasArg ?? 100) * 1e8));
 
 const key = new kaspa.PrivateKey(fs.readFileSync(keyFile, "utf8").trim());
-const from = key.toAddress("testnet");
+const from = key.toAddress(NETWORK_TYPE);
 const redeem = Uint8Array.from(DRIP_REDEEM_HEX.match(/../g).map((h) => parseInt(h, 16)));
-const dispenser = kaspa.addressFromScriptPublicKey(kaspa.payToScriptHashScript(redeem), "testnet");
+const dispenser = kaspa.addressFromScriptPublicKey(kaspa.payToScriptHashScript(redeem), NETWORK_TYPE);
 console.log(`dispenser address: ${dispenser.toString()}`);
 
 const rpc = process.env.KASPA_RPC_URL
-  ? new kaspa.RpcClient({ url: process.env.KASPA_RPC_URL, networkId: "testnet-10" })
-  : new kaspa.RpcClient({ resolver: new kaspa.Resolver(), networkId: "testnet-10" });
+  ? new kaspa.RpcClient({ url: process.env.KASPA_RPC_URL, networkId: NETWORK_ID })
+  : new kaspa.RpcClient({ resolver: new kaspa.Resolver(), networkId: NETWORK_ID });
 await rpc.connect();
 
 const { entries } = await rpc.getUtxosByAddresses([from.toString()]);
@@ -43,7 +47,7 @@ const { transactions } = await kaspa.createTransactions({
   outputs: Array.from({ length: lanes }, () => ({ address: dispenser, amount: perLane })),
   changeAddress: from,
   priorityFee: 5_000_000n,
-  networkId: "testnet-10",
+  networkId: NETWORK_ID,
 });
 for (const pending of transactions) {
   await pending.sign([key]);

@@ -6,7 +6,16 @@ import { applyMove, playerToMove } from "@shared/lib/game";
 import { parseInvite } from "@shared/lib/invite";
 import { loadCheckpoint, saveCheckpoint, toHex, type Match } from "@shared/lib/match";
 import { watchAddress } from "@shared/lib/watch";
-import { busyAtom, getRpc, getWallet, rpcClientAtom, runAction, updateMatch } from "@shared/state";
+import {
+  RESET_RESULT,
+  busyAtom,
+  getRpc,
+  getWallet,
+  networkResetAtom,
+  rpcClientAtom,
+  runAction,
+  updateMatch,
+} from "@shared/state";
 import type { MatchView } from "../lib";
 
 /** The stored-match schema requires a real txid — never write anything else. */
@@ -65,6 +74,10 @@ function describeEnd(spend: cov.SpendInfo | null, match: Match, myPk: string): s
 export function useMatchWatcher(match: Match, view: MatchView) {
   const rpc = useAtomValue(rpcClientAtom);
   const busy = useAtomValue(busyAtom);
+  // A detected testnet reset explains every "gone without a trace" below:
+  // the game's UTXOs never existed on this chain, so don't ask the player
+  // to paste links that can't help.
+  const chainReset = useAtomValue(networkResetAtom);
   // Seeded from the record: a reopened finished match shows its real ending.
   const [result, setResult] = useState<string | null>(match.result ?? null);
   const [needManualImport, setNeedManualImport] = useState(false);
@@ -107,6 +120,8 @@ export function useMatchWatcher(match: Match, view: MatchView) {
         const joined = low && (await cov.discoverJoin(rpc, match, low).catch(() => null));
         if (joined) {
           updateMatch(joined);
+        } else if (chainReset) {
+          finish(RESET_RESULT);
         } else if (low) {
           const spend = await cov.discoverSpend(rpc, match, low).catch(() => null);
           if (spend?.kind === "cancel") finish(describeEnd(spend, match, getWallet().myPk));
@@ -118,7 +133,7 @@ export function useMatchWatcher(match: Match, view: MatchView) {
         /* transient RPC errors: keep polling */
       }
     });
-  }, [rpc, open, result, busy, needManualImport, match]);
+  }, [rpc, open, result, busy, needManualImport, match, chainReset]);
 
   // Live phase: follow the opponent's moves; classify the ending if the game
   // UTXO disappears. Push-driven: every opponent transition spends the
@@ -140,6 +155,10 @@ export function useMatchWatcher(match: Match, view: MatchView) {
         } else {
           const low = checkpoint.current ?? loadCheckpoint(match.covenantId);
           const spend = low ? await cov.discoverSpend(rpc, match, low).catch(() => null) : null;
+          if (!spend && chainReset) {
+            finish(RESET_RESULT);
+            return;
+          }
           // A discovered winning move pinpoints the final disc — end on the
           // finished board (which also lights up the winning line), not the
           // position one move earlier. The record's txid advances with it:
@@ -159,7 +178,7 @@ export function useMatchWatcher(match: Match, view: MatchView) {
         /* transient RPC errors: keep polling */
       }
     });
-  }, [rpc, open, full, result, busy, match]);
+  }, [rpc, open, full, result, busy, match, chainReset]);
 
   // A full board settles itself: either player's client claims the draw.
   useEffect(() => {

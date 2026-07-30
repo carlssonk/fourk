@@ -51,7 +51,11 @@ export interface Match {
   p1Color?: "red" | "blue";
 }
 
+/** The one place the network is named — faucet/fund-dispenser.mjs keeps a
+ * copy (it can't import TS). A future network change starts here. */
 export const NETWORK_ID = "testnet-10";
+/** The address-encoding flavour of NETWORK_ID ("testnet-10" → "testnet"). */
+export const NETWORK_TYPE = NETWORK_ID.split("-")[0]!;
 export const SOMPI_PER_KAS = 100_000_000n;
 
 /** Human duration for a DAA block count (~10 blocks/s). */

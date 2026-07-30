@@ -4,9 +4,11 @@ import { Home } from "@modules/home";
 import { ConnectingScreen } from "@shared/components/ConnectingScreen";
 import {
   clearError,
+  clearNetworkReset,
   connectingAtom,
   currentMatchAtom,
   errorAtom,
+  networkResetAtom,
   reconnectingAtom,
 } from "@shared/state";
 
@@ -15,6 +17,7 @@ export default function App() {
   const error = useAtomValue(errorAtom);
   const connecting = useAtomValue(connectingAtom);
   const reconnecting = useAtomValue(reconnectingAtom);
+  const networkReset = useAtomValue(networkResetAtom);
 
   return (
     <div className="mx-auto max-w-270 p-4">
@@ -24,6 +27,15 @@ export default function App() {
         </div>
       )}
       <main className="mx-auto">
+        {networkReset && (
+          <div
+            className="mx-auto mb-4 max-w-175 cursor-pointer rounded-lg border border-accent bg-accent/10 px-3.5 py-2.5"
+            onClick={clearNetworkReset}
+          >
+            The test network was reset — games and balances from before it are gone. New games work
+            normally.
+          </div>
+        )}
         {error && (
           <div
             className="mx-auto mb-4 max-w-175 cursor-pointer rounded-lg border border-red bg-red/10 px-3.5 py-2.5"

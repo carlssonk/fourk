@@ -359,6 +359,11 @@ export const Game = ({ match }: Props) => {
               Catch up
             </button>
           </div>
+          {/* Always an exit: without a link this state has no other way out
+           * (e.g. the game predates a testnet reset and no link can help). */}
+          <button className="btn btn-muted mt-2.5" onClick={() => exitMatch(true)}>
+            Give up on this game
+          </button>
         </div>
       )}
 

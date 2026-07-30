@@ -22,10 +22,17 @@ import {
   type LineWitness,
   type State,
 } from "./game";
-import { NETWORK_ID, fromHex, phaseOf, toHex, type Match, type PlayerProfile } from "./match";
+import {
+  NETWORK_ID,
+  NETWORK_TYPE,
+  fromHex,
+  phaseOf,
+  toHex,
+  type Match,
+  type PlayerProfile,
+} from "./match";
 import { decodeProfileBytes, encodeProfileBytes } from "./sharecode";
 
-const NETWORK_TYPE = "testnet";
 const SUBNETWORK_ID = "00".repeat(20);
 const COVENANT_BUDGET = 12;
 const P2PK_BUDGET = 10;

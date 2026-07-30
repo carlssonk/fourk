@@ -1,6 +1,7 @@
 import { atom, getDefaultStore } from "jotai";
 import type { RpcClient } from "kaspa-wasm";
 import { connect } from "../lib/covenant";
+import { checkNetworkReset } from "./network";
 
 /** The live client once connected — subscriptions re-attach off this. */
 export const rpcClientAtom = atom<RpcClient | null>(null);
@@ -34,13 +35,19 @@ export function getRpc(): Promise<RpcClient> {
     const store = getDefaultStore();
     try {
       client.addEventListener("disconnect", () => store.set(rpcConnectedAtom, false));
-      client.addEventListener("connect", () => store.set(rpcConnectedAtom, true));
+      client.addEventListener("connect", () => {
+        store.set(rpcConnectedAtom, true);
+        // A reconnect can land on a freshly reset chain (node restarts
+        // are how resets arrive) — re-check, not just at startup.
+        checkNetworkReset(client);
+      });
     } catch {
       /* event API unavailable — indicator stays off */
     }
     // The initial connect event fired before these listeners existed.
     store.set(rpcConnectedAtom, true);
     store.set(rpcClientAtom, client);
+    checkNetworkReset(client);
     return client;
   });
   return promise;
