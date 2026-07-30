@@ -27,8 +27,10 @@ export const RESET_RESULT = "The test network was reset — this game no longer 
 const WATERMARK_KEY = `fourk.daaHighWater.${NETWORK_ID}`;
 
 /** ~28 hours of chain at 10 blocks/s — far more than any lagging public
- * node, far less than the rewind of a real reset. */
-const RESET_MARGIN = 1_000_000;
+ * node, far less than the rewind of a real reset. VITE_RESET_MARGIN shrinks
+ * it on a private local chain, where minutes of mining stand in for that
+ * day (see localnet/README.md). */
+const RESET_MARGIN = Number(import.meta.env?.VITE_RESET_MARGIN ?? 1_000_000);
 
 export function clearNetworkReset(): void {
   store.set(networkResetAtom, false);

@@ -13,9 +13,10 @@ await init(fs.readFileSync(new URL("../vendor/kaspa-wasm/kaspa_bg.wasm", import.
 // Keep in sync with contracts/drip.sil — harness/tests/drip_tests.rs prints it.
 const DRIP_REDEEM_HEX = "b3519c6902b004b1b9be760400ca9a3ba06300c3b9bf876900c2780400ca9a3b94a26968007a7551";
 
-// Keep in sync with NETWORK_ID / NETWORK_TYPE in app/src/shared/lib/match.ts.
-const NETWORK_ID = "testnet-10";
-const NETWORK_TYPE = "testnet";
+// Default keeps in sync with NETWORK_ID in app/src/shared/lib/match.ts;
+// KASPA_NETWORK_ID overrides for a private chain (see localnet/README.md).
+const NETWORK_ID = process.env.KASPA_NETWORK_ID ?? "testnet-10";
+const NETWORK_TYPE = NETWORK_ID.split("-")[0];
 
 const [keyFile, lanesArg, tkasArg] = process.argv.slice(2);
 if (!keyFile) {
@@ -37,13 +38,23 @@ const rpc = process.env.KASPA_RPC_URL
 await rpc.connect();
 
 const { entries } = await rpc.getUtxosByAddresses([from.toString()]);
-if (!entries.length) {
-  console.error(`no funds at ${from.toString()}`);
+// Freshly mined coins can't be spent until the coinbase matures, and the
+// localnet miner pays this key directly — without the filter the SDK
+// happily builds a transaction the node then rejects.
+const COINBASE_MATURITY = 1000n;
+const { virtualDaaScore } = await rpc.getBlockDagInfo();
+const spendable = entries.filter((e) => {
+  if (!(e.isCoinbase ?? e.entry?.isCoinbase)) return true;
+  const born = BigInt(e.blockDaaScore ?? e.entry?.blockDaaScore ?? 0n);
+  return BigInt(virtualDaaScore) - born >= COINBASE_MATURITY;
+});
+if (!spendable.length) {
+  console.error(`no spendable funds at ${from.toString()} (${entries.length} UTXOs still maturing)`);
   process.exit(1);
 }
 
 const { transactions } = await kaspa.createTransactions({
-  entries,
+  entries: spendable,
   outputs: Array.from({ length: lanes }, () => ({ address: dispenser, amount: perLane })),
   changeAddress: from,
   priorityFee: 5_000_000n,

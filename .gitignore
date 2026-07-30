@@ -13,5 +13,8 @@ faucet/faucet.key
 # local CLI play artifacts
 /match.json
 
+# private local chain data (disposable by design)
+localnet/.kaspad-*/
+
 # local design notes
 app/IDEAS.md
