@@ -2,8 +2,10 @@
 /* eslint-disable */
 export const memory: WebAssembly.Memory;
 export const contractInfo: () => [number, number, number, number];
-export const lockScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: bigint, i: bigint, j: bigint) => [number, number, number, number];
-export const sigScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: bigint, i: bigint, j: bigint, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number, number, number];
+export const lobbyLockScript: (a: number, b: number, c: bigint, d: bigint) => [number, number, number, number];
+export const lobbySigScript: (a: number, b: number, c: bigint, d: bigint, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+export const matchLockScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: bigint, i: bigint) => [number, number, number, number];
+export const matchSigScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: bigint, i: bigint, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => [number, number, number, number];
 export const __wbg_get_networkid_suffix: (a: number) => number;
 export const __wbg_get_networkid_type: (a: number) => number;
 export const __wbg_networkid_free: (a: number, b: number) => void;

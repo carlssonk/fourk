@@ -1,23 +1,27 @@
 /* tslint:disable */
 /* eslint-disable */
 /**
- * Compiler sanity info for the UI's about box / debugging.
+ * Full signature script for spending a lobby UTXO via `function`
+ * (join or cancel).
+ */
+export function lobbySigScript(p1: Uint8Array, move_timeout: bigint, deadline: bigint, _function: string, sig?: Uint8Array | null, pk?: Uint8Array | null): Uint8Array;
+/**
+ * Artifact sanity info for the UI's about box / debugging.
  */
 export function contractInfo(): string;
 /**
- * The redeem script for a game state — hash it (P2SH) for the state's
- * address, reveal it when spending.
+ * The redeem script for an open seat awaiting a joiner.
  */
-export function lockScript(p1: Uint8Array, p2: Uint8Array, board: Uint8Array, move_count: bigint, phase: bigint, move_timeout: bigint, deadline: bigint): Uint8Array;
+export function lobbyLockScript(p1: Uint8Array, move_timeout: bigint, deadline: bigint): Uint8Array;
 /**
- * Full signature script for spending a game UTXO via `function`.
- *
- * `sig` is the 65-byte Schnorr signature+hashtype (unused for claim_draw),
- * `pk` the joiner pubkey (join) or the dissolving player's pubkey
- * (dissolve), `ints` the integer args:
- * move -> [col], winning_move -> [col, wcol, wrow, wdir], others -> [].
+ * Full signature script for spending a match UTXO via `function`
+ * (dissolve, move, winning_move, claim_draw, claim_forfeit, sudden_death).
  */
-export function sigScript(p1: Uint8Array, p2: Uint8Array, board: Uint8Array, move_count: bigint, phase: bigint, move_timeout: bigint, deadline: bigint, _function: string, sig?: Uint8Array | null, pk?: Uint8Array | null, ints?: BigInt64Array | null): Uint8Array;
+export function matchSigScript(p1: Uint8Array, p2: Uint8Array, board: Uint8Array, move_count: bigint, move_timeout: bigint, deadline: bigint, _function: string, sig?: Uint8Array | null, pk?: Uint8Array | null, ints?: BigInt64Array | null): Uint8Array;
+/**
+ * The redeem script for a live game state.
+ */
+export function matchLockScript(p1: Uint8Array, p2: Uint8Array, board: Uint8Array, move_count: bigint, move_timeout: bigint, deadline: bigint): Uint8Array;
 /**
  * Configuration for the WASM32 bindings runtime interface.
  * @see {@link IWASM32BindingsConfig}
@@ -289,8 +293,10 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
   readonly contractInfo: () => [number, number, number, number];
-  readonly lockScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: bigint, i: bigint, j: bigint) => [number, number, number, number];
-  readonly sigScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: bigint, i: bigint, j: bigint, k: number, l: number, m: number, n: number, o: number, p: number, q: number, r: number) => [number, number, number, number];
+  readonly lobbyLockScript: (a: number, b: number, c: bigint, d: bigint) => [number, number, number, number];
+  readonly lobbySigScript: (a: number, b: number, c: bigint, d: bigint, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
+  readonly matchLockScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: bigint, i: bigint) => [number, number, number, number];
+  readonly matchSigScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: bigint, i: bigint, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => [number, number, number, number];
   readonly __wbg_get_networkid_suffix: (a: number) => number;
   readonly __wbg_get_networkid_type: (a: number) => number;
   readonly __wbg_networkid_free: (a: number, b: number) => void;

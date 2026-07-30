@@ -1,0 +1,864 @@
+{
+  "schema_version": 1,
+  "id": "5c8ed32f5f46debf699b0c568335093860417964d6eaac783354a9f369748753",
+  "generator": {
+    "name": "argentc",
+    "version": "0.1.0"
+  },
+  "app": "Fourk",
+  "dependencies": [],
+  "root": "/Users/oliver/dev/fourk/contracts/fourk.ag",
+  "modules": ["/Users/oliver/dev/fourk/contracts/fourk.ag"],
+  "argent": {
+    "templates": [
+      {
+        "id": "template/four_k_lobby",
+        "actor": "FourkLobby",
+        "symbol": "gen__four_k_lobby_template"
+      },
+      {
+        "id": "template/four_k_match",
+        "actor": "FourkMatch",
+        "symbol": "gen__four_k_match_template"
+      }
+    ],
+    "template_plan": {
+      "templates": [
+        {
+          "id": "template/four_k_lobby",
+          "actor": "FourkLobby",
+          "contract": "FourkLobby",
+          "symbol": "gen__four_k_lobby_template",
+          "sil_template_hash": "4b3210fa0d5fef5e4879a2ca4c5d2f921a14277c7d3cd8020ff2460d8edf0105",
+          "actor_type_handle": {
+            "state": "LobbyState",
+            "context_fields": ["gen__four_k_match_template"],
+            "template": {
+              "prefix_hex": "6b20000e852b386a9341808828dc15a23e60365f27e1453b4705a998bc6a728b0483",
+              "suffix_hex": "6c76009c6375b9cb519c69b900cc5279025802a2695779547987916958795879ac6976c252b9be959c6954795779827c75519658cd58797e5779827c75519658cd58797e7eaa8769012054797e012059797e012a2a0000000000000000000000000000000000000000000000000000000000000000000000000000000000007e01080058cd7e0108577958cd7e0108577958cd7e7e7e7e7e7e57797c7e56797eaa02000001aa7e01207e7c7e01877e78c38769757575757575757575516776519c6375b9cb009c6954795379ac69757575757551676a6868",
+              "hash_hex": "5bfc9734c31e2e2337971aadbde8b199168863fb0d843df67699d92ceed86628"
+            }
+          }
+        },
+        {
+          "id": "template/four_k_match",
+          "actor": "FourkMatch",
+          "contract": "FourkMatch",
+          "symbol": "gen__four_k_match_template",
+          "sil_template_hash": "000e852b386a9341808828dc15a23e60365f27e1453b4705a998bc6a728b0483",
+          "actor_type_handle": {
+            "state": "MatchState",
+            "context_fields": [],
+            "template": {
+              "prefix_hex": "6b",
+              "suffix_hex": "6c76009c6375b9cb009c695279009c69567956798757795679879b6956795579876378b16857795779ac69b9be529600c30300002058797e01ac7e876900c2789c6951c30300002057797e01ac7e876951c2789c69757575757575757575516776519c6375b9cb519c69b900cc5379012a9f6953795297577978519c63577977685a7978ac69597900a25a79579f9a69000058795c79569552799351957651937fce009e637651937b757c68755158795c79569552799351957651937fce009e637651937b757c68755258795c79569552799351957651937fce009e637651937b757c68755358795c79569552799351957651937fce009e637651937b757c68755458795c79569552799351957651937fce009e637651937b757c68755558795c79569552799351957651937fce009e637651937b757c687576569f6901015379519c63010277685b7956955279935979760053797f53797e7853795193012a7f7e5779c2b9be9c6901205e797e01205e797e012a53797e01085e79519358cd7e01085e7958cd7e01085e7958cd7e7e7e7e7e7eb976c902400594765193bc7c7eb976c97602b784937cbc7eaa02000001aa7e01207e7c7e01877e5879c3876975757575757575757575757575757575516776529c6375b9cb009c695279012a9f6952795297567978519c63567977685b7900a25c79579f9a69000057795e79569552799351957651937fce009e637651937b757c68755157795e79569552799351957651937fce009e637651937b757c68755257795e79569552799351957651937fce009e637651937b757c68755357795e79569552799351957651937fce009e637651937b757c68755457795e79569552799351957651937fce009e637651937b757c68755557795e79569552799351957651937fce009e637651937b757c687576569f69527951935d7956955279935879760053797f537951cd7e7853795193012a7f7e5d7900a25e7953a19a6951005f79519c63007b75517b75685f79529c635177685f79539c63518f77680001127978547995930112795279547995937800a25279579f9a7800a29a78569f9a6955795279569552799351957651937fce59799c697575755101127978547995930112795279547995937800a25279579f9a7800a29a78569f9a6955795279569552799351957651937fce59799c697575755201127978547995930112795279547995937800a25279579f9a7800a29a78569f9a6955795279569552799351957651937fce59799c697575755301127978547995930112795279547995937800a25279579f9a7800a29a78569f9a6955795279569552799351957651937fce59799c697575750113795879ac697575757575757575757575757575757575757575516776539c6375b9cb009c695279012a9c69b9be529600c30300002058797e01ac7e876900c2789c6951c30300002057797e01ac7e876951c2789c6975757575757575516776549c6375b9cb009c69527900a0695279012a9f6978b15579515479529794519c6355797768577978ac697575757575757575516776559c6375b9cb009c697600a06976b0b9be529600c30300002058797e01ac7e876900c2789c6951c30300002057797e01ac7e876951c2789c697575757575757551676a686868686868",
+              "hash_hex": "000e852b386a9341808828dc15a23e60365f27e1453b4705a998bc6a728b0483"
+            }
+          }
+        }
+      ],
+      "runtime_states": [
+        {
+          "contract": "FourkLobby",
+          "source": "LobbyState",
+          "field_roles": [
+            {
+              "name": "gen__four_k_match_template",
+              "role": {
+                "kind": "template",
+                "contract": "FourkMatch"
+              }
+            }
+          ]
+        }
+      ],
+      "route_tables": [],
+      "route_proofs": [],
+      "route_families": [],
+      "witness_recipes": [
+        {
+          "id": "witness/four_k_match/template_prefix_bytes",
+          "template_id": "template/four_k_match",
+          "subject": {
+            "kind": "actor",
+            "actor": "FourkMatch"
+          },
+          "param": "gen__four_k_match_prefix",
+          "purpose": {
+            "kind": "template_prefix_bytes"
+          }
+        },
+        {
+          "id": "witness/four_k_match/template_suffix_bytes",
+          "template_id": "template/four_k_match",
+          "subject": {
+            "kind": "actor",
+            "actor": "FourkMatch"
+          },
+          "param": "gen__four_k_match_suffix",
+          "purpose": {
+            "kind": "template_suffix_bytes"
+          }
+        }
+      ]
+    },
+    "interfaces": {
+      "exports": [
+        {
+          "id": "interface/actor/FourkLobby",
+          "app": "Fourk",
+          "actor": "FourkLobby",
+          "state": "LobbyState",
+          "fingerprint_hex": "7790f4809bcbf0ed5da5f1df0f8aa9a84c8388907d6ef3e161c068cd5106d16d"
+        },
+        {
+          "id": "interface/actor/FourkMatch",
+          "app": "Fourk",
+          "actor": "FourkMatch",
+          "state": "MatchState",
+          "fingerprint_hex": "a93c76c77bd591e99b446c43ff8813b48c6e0a7d9b7581db5554f7c30ba59c35"
+        }
+      ],
+      "imports": []
+    },
+    "states": [
+      {
+        "name": "LobbyState",
+        "fields": [
+          {
+            "name": "p1",
+            "type": {
+              "kind": "pubkey"
+            }
+          },
+          {
+            "name": "move_timeout",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "deadline",
+            "type": {
+              "kind": "int"
+            }
+          }
+        ]
+      },
+      {
+        "name": "MatchState",
+        "fields": [
+          {
+            "name": "p1",
+            "type": {
+              "kind": "pubkey"
+            }
+          },
+          {
+            "name": "p2",
+            "type": {
+              "kind": "pubkey"
+            }
+          },
+          {
+            "name": "board",
+            "type": {
+              "kind": "fixed_bytes",
+              "len": 42
+            }
+          },
+          {
+            "name": "move_count",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "move_timeout",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "deadline",
+            "type": {
+              "kind": "int"
+            }
+          }
+        ]
+      }
+    ],
+    "actor_enums": [],
+    "actors": [
+      {
+        "name": "FourkLobby",
+        "state": "LobbyState",
+        "abi": {
+          "actor": "FourkLobby"
+        },
+        "entries": [
+          {
+            "name": "join",
+            "kind": "leader",
+            "abi": {
+              "actor": "FourkLobby",
+              "entry": "join"
+            },
+            "route_plan": {
+              "active_input": {
+                "name": "self",
+                "actor": "FourkLobby",
+                "cov_index": 0
+              },
+              "leader_input": {
+                "name": "self",
+                "actor": "FourkLobby",
+                "cov_index": 0
+              },
+              "consumes": [],
+              "outputs": [
+                {
+                  "name": "game",
+                  "auth_index": 0,
+                  "actors": ["FourkMatch"]
+                }
+              ],
+              "witness_recipe_ids": [
+                "witness/four_k_match/template_prefix_bytes",
+                "witness/four_k_match/template_suffix_bytes"
+              ]
+            },
+            "hidden_params": [
+              {
+                "recipe_id": "witness/four_k_match/template_prefix_bytes",
+                "name": "gen__four_k_match_prefix",
+                "type": {
+                  "kind": "bytes"
+                },
+                "subject": {
+                  "kind": "actor",
+                  "actor": "FourkMatch"
+                },
+                "purpose": {
+                  "kind": "template_prefix_bytes"
+                }
+              },
+              {
+                "recipe_id": "witness/four_k_match/template_suffix_bytes",
+                "name": "gen__four_k_match_suffix",
+                "type": {
+                  "kind": "bytes"
+                },
+                "subject": {
+                  "kind": "actor",
+                  "actor": "FourkMatch"
+                },
+                "purpose": {
+                  "kind": "template_suffix_bytes"
+                }
+              }
+            ],
+            "template_selectors": [],
+            "witnesses": [
+              {
+                "recipe_id": "witness/four_k_match/template_prefix_bytes",
+                "param": "gen__four_k_match_prefix",
+                "subject": {
+                  "kind": "actor",
+                  "actor": "FourkMatch"
+                },
+                "purpose": {
+                  "kind": "template_prefix_bytes"
+                }
+              },
+              {
+                "recipe_id": "witness/four_k_match/template_suffix_bytes",
+                "param": "gen__four_k_match_suffix",
+                "subject": {
+                  "kind": "actor",
+                  "actor": "FourkMatch"
+                },
+                "purpose": {
+                  "kind": "template_suffix_bytes"
+                }
+              }
+            ],
+            "consumes": [],
+            "emits": {
+              "kind": "outputs",
+              "outputs": [
+                {
+                  "name": "game",
+                  "auth_index": 0,
+                  "actors": ["FourkMatch"]
+                }
+              ]
+            },
+            "routes": [
+              {
+                "output": "game",
+                "actor": "FourkMatch",
+                "template_id": "template/four_k_match",
+                "state_expr": "next_match"
+              }
+            ]
+          },
+          {
+            "name": "cancel",
+            "kind": "leader",
+            "abi": {
+              "actor": "FourkLobby",
+              "entry": "cancel"
+            },
+            "route_plan": {
+              "active_input": {
+                "name": "self",
+                "actor": "FourkLobby",
+                "cov_index": 0
+              },
+              "leader_input": {
+                "name": "self",
+                "actor": "FourkLobby",
+                "cov_index": 0
+              },
+              "consumes": [],
+              "outputs": [],
+              "witness_recipe_ids": []
+            },
+            "hidden_params": [],
+            "template_selectors": [],
+            "witnesses": [],
+            "consumes": [],
+            "emits": {
+              "kind": "none"
+            },
+            "routes": []
+          }
+        ]
+      },
+      {
+        "name": "FourkMatch",
+        "state": "MatchState",
+        "abi": {
+          "actor": "FourkMatch"
+        },
+        "entries": [
+          {
+            "name": "dissolve",
+            "kind": "leader",
+            "abi": {
+              "actor": "FourkMatch",
+              "entry": "dissolve"
+            },
+            "route_plan": {
+              "active_input": {
+                "name": "self",
+                "actor": "FourkMatch",
+                "cov_index": 0
+              },
+              "leader_input": {
+                "name": "self",
+                "actor": "FourkMatch",
+                "cov_index": 0
+              },
+              "consumes": [],
+              "outputs": [],
+              "witness_recipe_ids": []
+            },
+            "hidden_params": [],
+            "template_selectors": [],
+            "witnesses": [],
+            "consumes": [],
+            "emits": {
+              "kind": "none"
+            },
+            "routes": []
+          },
+          {
+            "name": "move",
+            "kind": "leader",
+            "abi": {
+              "actor": "FourkMatch",
+              "entry": "move"
+            },
+            "route_plan": {
+              "active_input": {
+                "name": "self",
+                "actor": "FourkMatch",
+                "cov_index": 0
+              },
+              "leader_input": {
+                "name": "self",
+                "actor": "FourkMatch",
+                "cov_index": 0
+              },
+              "consumes": [],
+              "outputs": [
+                {
+                  "name": "next",
+                  "auth_index": 0,
+                  "actors": ["FourkMatch"]
+                }
+              ],
+              "witness_recipe_ids": []
+            },
+            "hidden_params": [],
+            "template_selectors": [],
+            "witnesses": [],
+            "consumes": [],
+            "emits": {
+              "kind": "outputs",
+              "outputs": [
+                {
+                  "name": "next",
+                  "auth_index": 0,
+                  "actors": ["FourkMatch"]
+                }
+              ]
+            },
+            "routes": [
+              {
+                "output": "next",
+                "actor": "FourkMatch",
+                "template_id": "template/four_k_match",
+                "state_expr": "next_match"
+              }
+            ]
+          },
+          {
+            "name": "winning_move",
+            "kind": "leader",
+            "abi": {
+              "actor": "FourkMatch",
+              "entry": "winning_move"
+            },
+            "route_plan": {
+              "active_input": {
+                "name": "self",
+                "actor": "FourkMatch",
+                "cov_index": 0
+              },
+              "leader_input": {
+                "name": "self",
+                "actor": "FourkMatch",
+                "cov_index": 0
+              },
+              "consumes": [],
+              "outputs": [],
+              "witness_recipe_ids": []
+            },
+            "hidden_params": [],
+            "template_selectors": [],
+            "witnesses": [],
+            "consumes": [],
+            "emits": {
+              "kind": "none"
+            },
+            "routes": []
+          },
+          {
+            "name": "claim_draw",
+            "kind": "leader",
+            "abi": {
+              "actor": "FourkMatch",
+              "entry": "claim_draw"
+            },
+            "route_plan": {
+              "active_input": {
+                "name": "self",
+                "actor": "FourkMatch",
+                "cov_index": 0
+              },
+              "leader_input": {
+                "name": "self",
+                "actor": "FourkMatch",
+                "cov_index": 0
+              },
+              "consumes": [],
+              "outputs": [],
+              "witness_recipe_ids": []
+            },
+            "hidden_params": [],
+            "template_selectors": [],
+            "witnesses": [],
+            "consumes": [],
+            "emits": {
+              "kind": "none"
+            },
+            "routes": []
+          },
+          {
+            "name": "claim_forfeit",
+            "kind": "leader",
+            "abi": {
+              "actor": "FourkMatch",
+              "entry": "claim_forfeit"
+            },
+            "route_plan": {
+              "active_input": {
+                "name": "self",
+                "actor": "FourkMatch",
+                "cov_index": 0
+              },
+              "leader_input": {
+                "name": "self",
+                "actor": "FourkMatch",
+                "cov_index": 0
+              },
+              "consumes": [],
+              "outputs": [],
+              "witness_recipe_ids": []
+            },
+            "hidden_params": [],
+            "template_selectors": [],
+            "witnesses": [],
+            "consumes": [],
+            "emits": {
+              "kind": "none"
+            },
+            "routes": []
+          },
+          {
+            "name": "sudden_death",
+            "kind": "leader",
+            "abi": {
+              "actor": "FourkMatch",
+              "entry": "sudden_death"
+            },
+            "route_plan": {
+              "active_input": {
+                "name": "self",
+                "actor": "FourkMatch",
+                "cov_index": 0
+              },
+              "leader_input": {
+                "name": "self",
+                "actor": "FourkMatch",
+                "cov_index": 0
+              },
+              "consumes": [],
+              "outputs": [],
+              "witness_recipe_ids": []
+            },
+            "hidden_params": [],
+            "template_selectors": [],
+            "witnesses": [],
+            "consumes": [],
+            "emits": {
+              "kind": "none"
+            },
+            "routes": []
+          }
+        ]
+      }
+    ]
+  },
+  "sil_abi": {
+    "schema_version": 1,
+    "states": [
+      {
+        "name": "LobbyState",
+        "fields": [
+          {
+            "name": "p1",
+            "type": {
+              "kind": "pubkey"
+            }
+          },
+          {
+            "name": "move_timeout",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "deadline",
+            "type": {
+              "kind": "int"
+            }
+          }
+        ]
+      },
+      {
+        "name": "MatchState",
+        "fields": [
+          {
+            "name": "p1",
+            "type": {
+              "kind": "pubkey"
+            }
+          },
+          {
+            "name": "p2",
+            "type": {
+              "kind": "pubkey"
+            }
+          },
+          {
+            "name": "board",
+            "type": {
+              "kind": "fixed_bytes",
+              "len": 42
+            }
+          },
+          {
+            "name": "move_count",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "move_timeout",
+            "type": {
+              "kind": "int"
+            }
+          },
+          {
+            "name": "deadline",
+            "type": {
+              "kind": "int"
+            }
+          }
+        ]
+      }
+    ],
+    "contracts": [
+      {
+        "name": "FourkLobby",
+        "source_path": "sil/FourkLobby.sil",
+        "runtime_state": {
+          "source": "LobbyState",
+          "fields": [
+            {
+              "name": "gen__four_k_match_template",
+              "type": {
+                "kind": "fixed_bytes",
+                "len": 32
+              }
+            },
+            {
+              "name": "p1",
+              "type": {
+                "kind": "pubkey"
+              }
+            },
+            {
+              "name": "move_timeout",
+              "type": {
+                "kind": "int"
+              }
+            },
+            {
+              "name": "deadline",
+              "type": {
+                "kind": "int"
+              }
+            }
+          ]
+        },
+        "entries": [
+          {
+            "name": "join",
+            "selector": 0,
+            "params": [
+              {
+                "name": "s",
+                "type": {
+                  "kind": "sig"
+                }
+              },
+              {
+                "name": "pk",
+                "type": {
+                  "kind": "pubkey"
+                }
+              },
+              {
+                "name": "gen__four_k_match_prefix",
+                "type": {
+                  "kind": "bytes"
+                }
+              },
+              {
+                "name": "gen__four_k_match_suffix",
+                "type": {
+                  "kind": "bytes"
+                }
+              }
+            ]
+          },
+          {
+            "name": "cancel",
+            "selector": 1,
+            "params": [
+              {
+                "name": "s",
+                "type": {
+                  "kind": "sig"
+                }
+              }
+            ]
+          }
+        ],
+        "compiled": {
+          "script_hex": "6b2000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000000800000000000000000800000000000000006c76009c6375b9cb519c69b900cc5279025802a2695779547987916958795879ac6976c252b9be959c6954795779827c75519658cd58797e5779827c75519658cd58797e7eaa8769012054797e012059797e012a2a0000000000000000000000000000000000000000000000000000000000000000000000000000000000007e01080058cd7e0108577958cd7e0108577958cd7e7e7e7e7e7e57797c7e56797eaa02000001aa7e01207e7c7e01877e78c38769757575757575757575516776519c6375b9cb009c6954795379ac69757575757551676a6868",
+          "template_hash_hex": "4b3210fa0d5fef5e4879a2ca4c5d2f921a14277c7d3cd8020ff2460d8edf0105",
+          "state_span": {
+            "offset": 1,
+            "len": 84
+          }
+        }
+      },
+      {
+        "name": "FourkMatch",
+        "source_path": "sil/FourkMatch.sil",
+        "runtime_state": {
+          "source": "MatchState",
+          "fields": [
+            {
+              "name": "p1",
+              "type": {
+                "kind": "pubkey"
+              }
+            },
+            {
+              "name": "p2",
+              "type": {
+                "kind": "pubkey"
+              }
+            },
+            {
+              "name": "board",
+              "type": {
+                "kind": "fixed_bytes",
+                "len": 42
+              }
+            },
+            {
+              "name": "move_count",
+              "type": {
+                "kind": "int"
+              }
+            },
+            {
+              "name": "move_timeout",
+              "type": {
+                "kind": "int"
+              }
+            },
+            {
+              "name": "deadline",
+              "type": {
+                "kind": "int"
+              }
+            }
+          ]
+        },
+        "entries": [
+          {
+            "name": "dissolve",
+            "selector": 0,
+            "params": [
+              {
+                "name": "s",
+                "type": {
+                  "kind": "sig"
+                }
+              },
+              {
+                "name": "pk",
+                "type": {
+                  "kind": "pubkey"
+                }
+              }
+            ]
+          },
+          {
+            "name": "move",
+            "selector": 1,
+            "params": [
+              {
+                "name": "s",
+                "type": {
+                  "kind": "sig"
+                }
+              },
+              {
+                "name": "col",
+                "type": {
+                  "kind": "int"
+                }
+              }
+            ]
+          },
+          {
+            "name": "winning_move",
+            "selector": 2,
+            "params": [
+              {
+                "name": "s",
+                "type": {
+                  "kind": "sig"
+                }
+              },
+              {
+                "name": "col",
+                "type": {
+                  "kind": "int"
+                }
+              },
+              {
+                "name": "wcol",
+                "type": {
+                  "kind": "int"
+                }
+              },
+              {
+                "name": "wrow",
+                "type": {
+                  "kind": "int"
+                }
+              },
+              {
+                "name": "wdir",
+                "type": {
+                  "kind": "int"
+                }
+              }
+            ]
+          },
+          {
+            "name": "claim_draw",
+            "selector": 3,
+            "params": []
+          },
+          {
+            "name": "claim_forfeit",
+            "selector": 4,
+            "params": [
+              {
+                "name": "s",
+                "type": {
+                  "kind": "sig"
+                }
+              }
+            ]
+          },
+          {
+            "name": "sudden_death",
+            "selector": 5,
+            "params": []
+          }
+        ],
+        "compiled": {
+          "script_hex": "6b2000000000000000000000000000000000000000000000000000000000000000002000000000000000000000000000000000000000000000000000000000000000002a0000000000000000000000000000000000000000000000000000000000000000000000000000000000000800000000000000000800000000000000000800000000000000006c76009c6375b9cb009c695279009c69567956798757795679879b6956795579876378b16857795779ac69b9be529600c30300002058797e01ac7e876900c2789c6951c30300002057797e01ac7e876951c2789c69757575757575757575516776519c6375b9cb519c69b900cc5379012a9f6953795297577978519c63577977685a7978ac69597900a25a79579f9a69000058795c79569552799351957651937fce009e637651937b757c68755158795c79569552799351957651937fce009e637651937b757c68755258795c79569552799351957651937fce009e637651937b757c68755358795c79569552799351957651937fce009e637651937b757c68755458795c79569552799351957651937fce009e637651937b757c68755558795c79569552799351957651937fce009e637651937b757c687576569f6901015379519c63010277685b7956955279935979760053797f53797e7853795193012a7f7e5779c2b9be9c6901205e797e01205e797e012a53797e01085e79519358cd7e01085e7958cd7e01085e7958cd7e7e7e7e7e7eb976c902400594765193bc7c7eb976c97602b784937cbc7eaa02000001aa7e01207e7c7e01877e5879c3876975757575757575757575757575757575516776529c6375b9cb009c695279012a9f6952795297567978519c63567977685b7900a25c79579f9a69000057795e79569552799351957651937fce009e637651937b757c68755157795e79569552799351957651937fce009e637651937b757c68755257795e79569552799351957651937fce009e637651937b757c68755357795e79569552799351957651937fce009e637651937b757c68755457795e79569552799351957651937fce009e637651937b757c68755557795e79569552799351957651937fce009e637651937b757c687576569f69527951935d7956955279935879760053797f537951cd7e7853795193012a7f7e5d7900a25e7953a19a6951005f79519c63007b75517b75685f79529c635177685f79539c63518f77680001127978547995930112795279547995937800a25279579f9a7800a29a78569f9a6955795279569552799351957651937fce59799c697575755101127978547995930112795279547995937800a25279579f9a7800a29a78569f9a6955795279569552799351957651937fce59799c697575755201127978547995930112795279547995937800a25279579f9a7800a29a78569f9a6955795279569552799351957651937fce59799c697575755301127978547995930112795279547995937800a25279579f9a7800a29a78569f9a6955795279569552799351957651937fce59799c697575750113795879ac697575757575757575757575757575757575757575516776539c6375b9cb009c695279012a9c69b9be529600c30300002058797e01ac7e876900c2789c6951c30300002057797e01ac7e876951c2789c6975757575757575516776549c6375b9cb009c69527900a0695279012a9f6978b15579515479529794519c6355797768577978ac697575757575757575516776559c6375b9cb009c697600a06976b0b9be529600c30300002058797e01ac7e876900c2789c6951c30300002057797e01ac7e876951c2789c697575757575757551676a686868686868",
+          "template_hash_hex": "000e852b386a9341808828dc15a23e60365f27e1453b4705a998bc6a728b0483",
+          "state_span": {
+            "offset": 1,
+            "len": 136
+          }
+        }
+      }
+    ]
+  }
+}

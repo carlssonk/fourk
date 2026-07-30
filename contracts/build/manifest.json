@@ -1,0 +1,87 @@
+{
+  "app": "Fourk",
+  "root": "/Users/oliver/dev/fourk/contracts/fourk.ag",
+  "modules": ["/Users/oliver/dev/fourk/contracts/fourk.ag"],
+  "templates": [
+    { "actor": "FourkLobby", "symbol": "gen__four_k_lobby_template", "hash": null },
+    { "actor": "FourkMatch", "symbol": "gen__four_k_match_template", "hash": null }
+  ],
+  "actors": [
+    {
+      "name": "FourkLobby",
+      "state": "LobbyState",
+      "sil": "sil/FourkLobby.sil",
+      "entries": [
+        {
+          "name": "join",
+          "kind": "leader",
+          "emits": {
+            "kind": "outputs",
+            "outputs": [{ "name": "game", "auth_index": 0, "actors": ["FourkMatch"] }]
+          },
+          "consumes": [],
+          "routes": [{ "output": "game", "actor": "FourkMatch", "state": "next_match" }]
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "FourkMatch",
+      "state": "MatchState",
+      "sil": "sil/FourkMatch.sil",
+      "entries": [
+        {
+          "name": "dissolve",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "move",
+          "kind": "leader",
+          "emits": {
+            "kind": "outputs",
+            "outputs": [{ "name": "next", "auth_index": 0, "actors": ["FourkMatch"] }]
+          },
+          "consumes": [],
+          "routes": [{ "output": "next", "actor": "FourkMatch", "state": "next_match" }]
+        },
+        {
+          "name": "winning_move",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "claim_draw",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "claim_forfeit",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "sudden_death",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    }
+  ]
+}

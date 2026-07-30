@@ -1,5 +1,5 @@
 /**
- * Browser transaction engine for the FourK covenant, on the kaspa wasm SDK
+ * Browser transaction engine for the Fourk covenant, on the kaspa wasm SDK
  * plus fourk-wasm (state -> scripts).
  *
  * Transaction shapes and conventions:
@@ -124,23 +124,30 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
 }
 
 // --- State -> scripts / addresses -------------------------------------------
+//
+// The Argent artifact splits the old single contract into two actors: an
+// OPEN state (p2 == zero key) is a FourkLobby covenant, a LIVE state is a
+// FourkMatch covenant. phaseOf picks the actor; the State model is unchanged.
 
-function stateArgs(
-  s: State,
-): [Uint8Array, Uint8Array, Uint8Array, bigint, bigint, bigint, bigint] {
+function isOpen(s: State): boolean {
+  return phaseOf(s) === 0;
+}
+
+function matchArgs(s: State): [Uint8Array, Uint8Array, Uint8Array, bigint, bigint, bigint] {
   return [
     fromHex(s.p1),
     fromHex(s.p2),
     s.board,
     BigInt(s.moveCount),
-    BigInt(phaseOf(s)),
     BigInt(s.moveTimeout),
     BigInt(s.deadline),
   ];
 }
 
 export function lockRedeem(s: State): Uint8Array {
-  return fourk.lockScript(...stateArgs(s));
+  return isOpen(s)
+    ? fourk.lobbyLockScript(fromHex(s.p1), BigInt(s.moveTimeout), BigInt(s.deadline))
+    : fourk.matchLockScript(...matchArgs(s));
 }
 
 function gameSpk(s: State) {
@@ -153,7 +160,8 @@ export function gameAddress(s: State): string {
   return addr.toString();
 }
 
-/** Full input signature script for an entrypoint call (incl. pushed redeem). */
+/** Full input signature script for an entrypoint call (incl. pushed redeem
+ * and any compiler-generated witness args, e.g. join's template witness). */
 function entrySigScript(
   s: State,
   fn: string,
@@ -162,7 +170,11 @@ function entrySigScript(
   ints: number[],
 ): string {
   const intArgs = ints.length ? BigInt64Array.from(ints.map(BigInt)) : undefined;
-  return toHex(fourk.sigScript(...stateArgs(s), fn, sig, pk, intArgs));
+  return toHex(
+    isOpen(s)
+      ? fourk.lobbySigScript(fromHex(s.p1), BigInt(s.moveTimeout), BigInt(s.deadline), fn, sig, pk)
+      : fourk.matchSigScript(...matchArgs(s), fn, sig, pk, intArgs),
+  );
 }
 
 export function walletAddress(key: PrivateKey): string {
@@ -584,7 +596,12 @@ export async function dissolveMatch(rpc: Rpc, key: PrivateKey, match: Match): Pr
 
   const build: Build = (fee, sigs) => {
     const inputs = [
-      gameInput(match, gameUtxo, entrySigScript(match.state, "dissolve", sigs.get(0)!, pk, []), sequence),
+      gameInput(
+        match,
+        gameUtxo,
+        entrySigScript(match.state, "dissolve", sigs.get(0)!, pk, []),
+        sequence,
+      ),
       ...funding.map((f, i) => fundingInput(f, fullP2pkSigScript(sigs.get(i + 1)!))),
     ];
     const outputs = withChange(
@@ -725,10 +742,10 @@ export async function chainCheckpoint(rpc: Rpc): Promise<string> {
   return String(info.sink);
 }
 
-/** Entrypoints in ABI/selector order — must match fourk.sil declaration order. */
-const ENTRYPOINTS = [
-  "join",
-  "cancel",
+/** Entrypoints in ABI/selector order — must match fourk.ag declaration order
+ * per actor (each generated contract numbers its own selectors from 0). */
+const LOBBY_ENTRYPOINTS = ["join", "cancel"] as const;
+const MATCH_ENTRYPOINTS = [
   "dissolve",
   "move",
   "winning_move",
@@ -736,7 +753,7 @@ const ENTRYPOINTS = [
   "claim_forfeit",
   "sudden_death",
 ] as const;
-export type SpendKind = (typeof ENTRYPOINTS)[number];
+export type SpendKind = (typeof LOBBY_ENTRYPOINTS)[number] | (typeof MATCH_ENTRYPOINTS)[number];
 
 export interface SpendInfo {
   kind: SpendKind;
@@ -781,7 +798,8 @@ export async function discoverSpend(
             continue;
           const tokens = scriptTokens(String(inp.signatureScript ?? inp.signature_script ?? ""));
           const selector = tokens.length >= 2 ? tokenToSmallInt(tokens[tokens.length - 2]!) : null;
-          const kind = selector !== null ? ENTRYPOINTS[selector] : undefined;
+          const table = isOpen(match.state) ? LOBBY_ENTRYPOINTS : MATCH_ENTRYPOINTS;
+          const kind = selector !== null ? table[selector] : undefined;
           if (!kind) return null;
           const call = tokens.slice(0, Math.max(0, tokens.length - 2));
           return {

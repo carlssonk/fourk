@@ -111,6 +111,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "argent-artifact"
+version = "0.1.0"
+dependencies = [
+ "blake2b_simd",
+ "faster-hex 0.10.0",
+ "serde",
+ "serde_json",
+ "silverscript-abi",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "argent-runtime"
+version = "0.1.0"
+dependencies = [
+ "argent-artifact",
+ "blake2b_simd",
+ "kaspa-consensus-core",
+ "kaspa-txscript",
+ "kaspa-txscript-errors",
+ "silverscript-abi",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "ark-bn254"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1244,6 +1269,7 @@ checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
 name = "fourk-harness"
 version = "0.1.0"
 dependencies = [
+ "argent-runtime",
  "kaspa-consensus-core",
  "kaspa-txscript",
  "kaspa-txscript-errors",
@@ -2921,6 +2947,17 @@ name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
+name = "silverscript-abi"
+version = "0.1.0"
+dependencies = [
+ "blake2b_simd",
+ "faster-hex 0.10.0",
+ "kaspa-txscript",
+ "serde",
+ "thiserror 2.0.19",
+]
 
 [[package]]
 name = "silverscript-lang"

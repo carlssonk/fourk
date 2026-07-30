@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Test harness for the FourK covenant: compiles contracts/fourk.sil with the
+# Test harness for the Fourk covenant: compiles contracts/fourk.sil with the
 # Silverscript compiler and executes real signed transactions against the
 # rusty-kaspa script engine. Same pattern as silverscript-lang's
 # chess_apps_tests.rs. Dependency tags must match the silverscript workspace.
@@ -16,6 +16,9 @@ path = "src/lib.rs"
 
 [dev-dependencies]
 silverscript-lang = { path = "../../silverscript/silverscript-lang" }
+# Drives the Argent port (contracts/fourk.ag) through argent-runtime's
+# TxBuilder in tests/argent_tests.rs. Shares the rusty-kaspa pin above.
+argent-runtime = { path = "../../argent-lang/argent/crates/argent-runtime" }
 kaspa-consensus-core = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.0.1" }
 kaspa-txscript = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.0.1" }
 kaspa-txscript-errors = { git = "https://github.com/kaspanet/rusty-kaspa", tag = "v2.0.1" }
