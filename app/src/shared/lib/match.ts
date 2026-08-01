@@ -6,6 +6,8 @@
 
 import { z } from "zod";
 import { CELLS, MOVE_TIMEOUT_DAA, ZERO_PK, isOpen, type State } from "./game";
+import type { SimulCore } from "../modes/fourk/core";
+import { simulFromFlatJson, simulToFlatJson } from "../modes/fourk/wire";
 import {
   base64UrlToBytes,
   bytesToBase64Url,
@@ -40,6 +42,13 @@ export interface Match {
   txid: string;
   /** Current pot in sompi. */
   value: bigint;
+  /** Game mode; absent = classic alternating play. "fourk" is simultaneous
+   * commit-reveal play — consensus state (the game address derives from it),
+   * so it always travels in share codes and stored records. */
+  mode?: "fourk";
+  /** The round machine for fourk mode (round, commitments, reveals);
+   * consensus state like `mode`. Absent on classic matches. */
+  simul?: SimulCore;
   /** Whatever identities we've learned; merged as they arrive. */
   profiles?: { p1?: PlayerProfile; p2?: PlayerProfile };
   /** How the game ended, recorded the moment it was seen to finish — so a
@@ -111,6 +120,7 @@ export function matchToJson(m: Match): string {
       value: Number(m.value),
       moveTimeout: m.state.moveTimeout,
       deadline: m.state.deadline,
+      ...(m.mode === "fourk" && { mode: m.mode, ...simulToFlatJson(m.simul) }),
       ...(m.profiles && { profiles: m.profiles }),
       ...(m.p1Color && { p1Color: m.p1Color }),
       ...(m.result && { result: m.result }),
@@ -146,6 +156,13 @@ const matchJsonSchema = z.object({
   profiles: z.object({ p1: profileSchema.optional(), p2: profileSchema.optional() }).optional(),
   p1Color: z.enum(["red", "blue"]).optional(),
   result: z.string().optional(),
+  // Fourk mode (simultaneous): the round machine rides along.
+  mode: z.literal("fourk").optional(),
+  round: z.number().int().min(0).max(255).optional(),
+  commit1: hex64.optional(),
+  commit2: hex64.optional(),
+  reveal1: z.number().int().min(0).max(7).optional(),
+  reveal2: z.number().int().min(0).max(7).optional(),
 });
 
 export function matchFromJson(json: string): Match {
@@ -167,6 +184,7 @@ export function matchFromJson(json: string): Match {
     state,
     txid: raw.txid,
     value: BigInt(raw.value),
+    ...(raw.mode === "fourk" && { mode: raw.mode, simul: simulFromFlatJson(raw) }),
     ...(raw.profiles && {
       profiles: {
         ...(raw.profiles.p1 && { p1: raw.profiles.p1 }),
@@ -188,10 +206,6 @@ export function decodeShareCode(code: string): Match {
   return decodeMatchBinary(base64UrlToBytes(code.trim()));
 }
 
-/** The more advanced of two snapshots of the same match. */
-export function fresherOf(a: Match, b: Match): Match {
-  return a.state.moveCount >= b.state.moveCount ? a : b;
-}
 
 export const LIST_KEY = "fourk.matches";
 

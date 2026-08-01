@@ -20,7 +20,7 @@ import {
   type PrivateKey,
   type Rpc,
   type UtxoEntryLike,
-} from "./covenant";
+} from "./engine";
 import { NETWORK_ID, NETWORK_TYPE, fromHex } from "./match";
 
 const DRIP_REDEEM_HEX =

@@ -1,77 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import * as cov from "@shared/lib/covenant";
-import { ensureFunds } from "@shared/lib/dispenser";
-import { applyMove, playerToMove } from "@shared/lib/game";
+import { CELLS, isOpen } from "@shared/lib/game";
 import { parseInvite } from "@shared/lib/invite";
-import { loadCheckpoint, saveCheckpoint, toHex, type Match } from "@shared/lib/match";
+import { loadCheckpoint, saveCheckpoint, type Match } from "@shared/lib/match";
+import { modeOf } from "@shared/modes/registry";
 import { watchAddress } from "@shared/lib/watch";
 import {
   RESET_RESULT,
   busyAtom,
-  getRpc,
   getWallet,
   networkResetAtom,
   rpcClientAtom,
-  runAction,
   updateMatch,
 } from "@shared/state";
-import type { MatchView } from "../lib";
-
-/** The stored-match schema requires a real txid — never write anything else. */
-function isHex64(s: string): boolean {
-  return /^[0-9a-f]{64}$/.test(s);
-}
-
-/**
- * Friendly description of a discovered ending. The spend spent exactly
- * `match.txid`, so match.state is the true pre-spend state — whose turn it
- * was identifies who acted, even for doors whose sigscript carries no pubkey
- * (a winning move is the mover's; a forfeit claim is the waiting player's,
- * which may be OUR claim made from another tab or the CLI).
- */
-function describeEnd(spend: cov.SpendInfo | null, match: Match, myPk: string): string {
-  const s = match.state;
-  const moverPk = playerToMove(s) === 0 ? s.p1 : s.p2;
-  const waitingPk = playerToMove(s) === 0 ? s.p2 : s.p1;
-  switch (spend?.kind) {
-    case "winning_move":
-      return moverPk === myPk
-        ? "You connected four — you win! 🎉"
-        : "Your opponent connected four — they win this one.";
-    case "claim_forfeit":
-      return waitingPk === myPk
-        ? "Your opponent ran out of time — you win by timeout. 🎉"
-        : "The move timer ran out and your opponent claimed the win.";
-    case "claim_draw":
-      return "It's a draw — the board filled up with no winner.";
-    case "cancel":
-      return "The game was called off before anyone joined.";
-    case "sudden_death":
-      return "Time's up — the game hit its total time limit and the pot split evenly.";
-    case "dissolve": {
-      // The dissolve call pushes the dissolving player's pubkey — read it to
-      // tell a kick from a walk-out.
-      const signer = spend.pushes.find((p) => p.length === 32);
-      const by = signer ? toHex(signer) : null;
-      if (by === myPk) return "The game was dissolved — both stakes returned.";
-      if (myPk === match.state.p2 && by === match.state.p1)
-        return "Your opponent called the game off — your stake is on its way back.";
-      if (myPk === match.state.p1 && by === match.state.p2)
-        return "Your opponent left before the game began — your stake is on its way back.";
-      return "The game was dissolved before the first move — both stakes returned.";
-    }
-    default:
-      return "The game has ended.";
-  }
-}
 
 /**
  * Everything that happens to a match without the player touching the screen:
- * an opponent joining, opposing moves, endings, and the automatic draw claim
- * on a full board.
+ * an opponent joining, opposing transitions, and ending classification.
+ * (Automatic duties — reveals, claims, draw and sudden-death cranks — live
+ * in useAutopilot.)
  */
-export function useMatchWatcher(match: Match, view: MatchView) {
+export function useMatchWatcher(match: Match) {
   const rpc = useAtomValue(rpcClientAtom);
   const busy = useAtomValue(busyAtom);
   // A detected testnet reset explains every "gone without a trace" below:
@@ -82,7 +32,25 @@ export function useMatchWatcher(match: Match, view: MatchView) {
   const [result, setResult] = useState<string | null>(match.result ?? null);
   const [needManualImport, setNeedManualImport] = useState(false);
   const checkpoint = useRef<string | null>(null);
-  const drawClaimed = useRef(false);
+  // The previous tick's chain tip: any spend that triggered THIS tick
+  // happened after it, so discovery can usually scan a page or two instead
+  // of the whole range back to the persistent checkpoint. In-memory only —
+  // if a spend somehow predates it, the persistent checkpoint still covers
+  // it on the fallback pass.
+  const freshCp = useRef<string | null>(null);
+
+  /** Trace the spend of the current game UTXO: cheap fresh-floor scan first,
+   * the persistent checkpoint as the deep fallback. */
+  const discover = async (client: NonNullable<typeof rpc>, m: Match) => {
+    const fresh = freshCp.current;
+    let spend = fresh ? await cov.discoverSpend(client, m, fresh).catch(() => null) : null;
+    if (!spend) {
+      const low = checkpoint.current ?? loadCheckpoint(m.covenantId);
+      if (low && low !== fresh)
+        spend = await cov.discoverSpend(client, m, low).catch(() => null);
+    }
+    return spend;
+  };
 
   /** Show the ending and record it on the stored match in one step; `final`
    * lets callers land a last board update (e.g. the winning disc) with it. */
@@ -91,8 +59,9 @@ export function useMatchWatcher(match: Match, view: MatchView) {
     setResult(text);
   };
 
-  const { open, full, iAmPlayer } = view;
-  const myTurn = view.wantsMove && !result;
+  const open = isOpen(match.state);
+  const full = match.state.moveCount >= CELLS;
+  const myTurn = cov.isActionable(match, getWallet().myPk) && !open && !full && !result;
 
   // Open phase: watch for a join. The joiner's successor address cannot be
   // enumerated (it embeds their pubkey), so we checkpoint the chain while the
@@ -105,29 +74,31 @@ export function useMatchWatcher(match: Match, view: MatchView) {
     if (!rpc || !open || result || busy || needManualImport) return;
     // Push-driven: the node notifies us the moment the genesis UTXO is spent
     // (the join); a slow fallback poll covers missed notifications.
-    return watchAddress(rpc, cov.gameAddress(match.state), async () => {
+    return watchAddress(rpc, cov.matchAddress(match), async () => {
       try {
         const cp = await cov.chainCheckpoint(rpc);
-        const { status } = await cov.syncMatch(rpc, match);
-        if (status !== "terminated") {
-          checkpoint.current = cp;
-          saveCheckpoint(match.covenantId, cp);
-          return;
-        }
-        const low = checkpoint.current ?? loadCheckpoint(match.covenantId);
-        // discover* throws when the checkpoint is too old for the node
-        // (pruned) — treat that like no checkpoint at all.
-        const joined = low && (await cov.discoverJoin(rpc, match, low).catch(() => null));
-        if (joined) {
-          updateMatch(joined);
-        } else if (chainReset) {
-          finish(RESET_RESULT);
-        } else if (low) {
-          const spend = await cov.discoverSpend(rpc, match, low).catch(() => null);
-          if (spend?.kind === "cancel") finish(describeEnd(spend, match, getWallet().myPk));
-          else setNeedManualImport(true);
-        } else {
-          setNeedManualImport(true);
+        try {
+          const { status } = await cov.syncMatch(rpc, match);
+          if (status !== "terminated") {
+            checkpoint.current = cp;
+            saveCheckpoint(match.covenantId, cp);
+            return;
+          }
+          // discover* throws when the checkpoint is too old for the node
+          // (pruned) — treated as null inside discover().
+          const spend = await discover(rpc, match);
+          const joined = spend && (await cov.adoptSpend(rpc, match, spend).catch(() => null));
+          if (joined) {
+            updateMatch(joined);
+          } else if (chainReset) {
+            finish(RESET_RESULT);
+          } else if (spend?.kind === "cancel") {
+            finish(modeOf(match).describeEnd(spend, match, getWallet().myPk));
+          } else {
+            setNeedManualImport(true);
+          }
+        } finally {
+          freshCp.current = cp;
         }
       } catch {
         /* transient RPC errors: keep polling */
@@ -135,113 +106,57 @@ export function useMatchWatcher(match: Match, view: MatchView) {
     });
   }, [rpc, open, result, busy, needManualImport, match, chainReset]);
 
-  // Live phase: follow the opponent's moves; classify the ending if the game
-  // UTXO disappears. Push-driven: every opponent transition spends the
-  // current match UTXO, so one subscription on its address catches moves and
-  // endings alike. Watched on our own turn too: the opponent can dissolve an
-  // unstarted game out from under us, and if we idle past the move timeout
-  // they can claim the forfeit — without a watcher the board would sit on
-  // "your turn" forever after either.
+  // Live phase: follow the opponent's transitions; classify the ending if
+  // the game UTXO disappears. Push-driven: every opponent transition spends
+  // the current match UTXO, so one subscription on its address catches moves
+  // and endings alike. Watched on our own turn too: the opponent can
+  // dissolve an unstarted game out from under us, and if we idle past the
+  // clock they can claim the timeout — without a watcher the board would sit
+  // on "your turn" forever after either.
   useEffect(() => {
     if (!rpc || open || full || result || busy) return;
-    return watchAddress(rpc, cov.gameAddress(match.state), async () => {
+    return watchAddress(rpc, cov.matchAddress(match), async () => {
       try {
         const cp = await cov.chainCheckpoint(rpc);
-        const { status, match: next } = await cov.syncMatch(rpc, match);
-        if (status === "advanced") updateMatch(next);
-        else if (status === "current") {
-          checkpoint.current = cp;
-          saveCheckpoint(match.covenantId, cp);
-        } else {
-          const low = checkpoint.current ?? loadCheckpoint(match.covenantId);
-          const spend = low ? await cov.discoverSpend(rpc, match, low).catch(() => null) : null;
-          if (!spend && chainReset) {
-            finish(RESET_RESULT);
-            return;
-          }
-          // A discovered winning move pinpoints the final disc — end on the
-          // finished board (which also lights up the winning line), not the
-          // position one move earlier. The record's txid advances with it:
-          // describeEnd's attribution relies on state matching txid, so a
-          // half-updated record would misread the ending on a later reopen.
-          let final = match;
-          if (spend?.kind === "winning_move" && spend.args.length && isHex64(spend.txid)) {
-            try {
-              final = { ...match, state: applyMove(match.state, spend.args[0]!), txid: spend.txid };
-            } catch {
-              /* stale local state — keep the board we have */
+        try {
+          const { status, match: next } = await cov.syncMatch(rpc, match);
+          if (status === "advanced") updateMatch(next);
+          else if (status === "current") {
+            checkpoint.current = cp;
+            saveCheckpoint(match.covenantId, cp);
+          } else {
+            // Trace the spend and adopt whatever continuation it produced (a
+            // blind-phase successor — e.g. a fourk commit — can't be
+            // enumerated) before reading "gone" as "over".
+            const spend = await discover(rpc, match);
+            const adopted = spend && (await cov.adoptSpend(rpc, match, spend).catch(() => null));
+            if (adopted) {
+              updateMatch(adopted);
+              return;
             }
+            if (!spend && chainReset) {
+              finish(RESET_RESULT);
+              return;
+            }
+            // A continuation spend whose adoption failed — or no spend at all
+            // where the mode says continuations can hide (blind phases, index
+            // races, an in-flight block) — must never be declared an ending.
+            // Skip the tick; the watcher retries.
+            const mode = modeOf(match);
+            if (mode.classifySpend(spend) === "continuation") return;
+            finish(
+              mode.describeEnd(spend, match, getWallet().myPk),
+              mode.finalSnapshot(spend, match),
+            );
           }
-          finish(describeEnd(spend, match, getWallet().myPk), final);
+        } finally {
+          freshCp.current = cp;
         }
       } catch {
         /* transient RPC errors: keep polling */
       }
     });
   }, [rpc, open, full, result, busy, match, chainReset]);
-
-  // A full board settles itself: either player's client claims the draw.
-  useEffect(() => {
-    if (!full || result || busy || !iAmPlayer || drawClaimed.current) return;
-    drawClaimed.current = true;
-    runAction(async () => {
-      const { key } = getWallet();
-      const client = await getRpc();
-      try {
-        await ensureFunds(client, key, cov.FEE_HEADROOM);
-        await cov.drawMatch(client, key, match);
-        finish("It's a draw — the board filled up with no winner.");
-      } catch (e) {
-        // Most likely the opponent's client claimed it first.
-        const { status } = await cov.syncMatch(client, match);
-        if (status === "terminated") finish("It's a draw — the board filled up with no winner.");
-        else throw e;
-      }
-    });
-  }, [full, result, busy, iAmPlayer, match]);
-
-  // A capped game settles itself once the chain passes its deadline: either
-  // player's client cranks the permissionless split and both stakes return.
-  const suddenDone = useRef(false);
-  const deadline = match.state.deadline;
-  useEffect(() => {
-    if (!rpc || open || result || busy || !iAmPlayer || !deadline || suddenDone.current) return;
-    let stop = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const claim = () => {
-      if (stop || suddenDone.current) return;
-      suddenDone.current = true;
-      runAction(async () => {
-        const { key } = getWallet();
-        const client = await getRpc();
-        try {
-          await ensureFunds(client, key, cov.FEE_HEADROOM);
-          await cov.suddenDeathMatch(client, key, match);
-          finish("Time's up — the game hit its total time limit and the pot split evenly.");
-        } catch (e) {
-          // Most likely the opponent's client cranked it first.
-          const { status } = await cov.syncMatch(client, match);
-          if (status === "terminated")
-            finish("Time's up — the game hit its total time limit and the pot split evenly.");
-          else throw e;
-        }
-      });
-    };
-    Promise.resolve(rpc.getBlockDagInfo())
-      .then((info: any) => {
-        if (stop) return;
-        const msLeft = (deadline - Number(info.virtualDaaScore)) * 100;
-        // Past-deadline claims fire now; far-future ones are re-armed by the
-        // next mount (setTimeout caps at ~24.8 days anyway).
-        if (msLeft <= 0) claim();
-        else if (msLeft < 2_147_000_000) timer = setTimeout(claim, msLeft + 2000);
-      })
-      .catch(() => {});
-    return () => {
-      stop = true;
-      if (timer) clearTimeout(timer);
-    };
-  }, [rpc, open, result, busy, iAmPlayer, deadline, match]);
 
   /** Catch up from a pasted invite link (call inside `runAction`). */
   const importMatch = (text: string) => {

@@ -265,7 +265,512 @@ actor FourkMatch owns MatchState {
     }
 }
 
+// ---------------------------------------------------------------------------
+// fourk mode: simultaneous Connect Four by commit-reveal. Port of
+// ../src/simul/rules.ts — every require() here corresponds to a req() there.
+//
+// A round is: both players commit blake2b(colByte || salt32) in either order
+// (commit), both reveal in either order (reveal, then resolve), and the
+// second reveal drops BOTH discs in one transition. Colliding picks stack
+// with the round's priority player (round % 2, 0 = p1) underneath; on a
+// column's last free slot the non-priority disc vanishes. A commitment to an
+// already-full column can never be revealed — its owner loses through
+// claim_timeout.
+//
+// Because two discs land at once, the resolver need not be the winner, so
+// win claims are separate doors keyed to the LINE's owner (the witness's
+// first cell names the color): claim_win pays that owner, claim_split — the
+// double win — splits permissionlessly. Timeouts are two doors: one-sided
+// lateness pays the compliant player (claim_timeout); symmetric silence
+// splits (split_timeout).
+
+state SimulLobbyState {
+    pubkey p1;
+    int move_timeout;
+    int deadline;
+}
+
+state SimulMatchState {
+    pubkey p1;
+    pubkey p2;
+    byte[42] board;
+    // Completed rounds. Collision priority = round % 2 (0 -> p1).
+    int round;
+    // blake2b(colByte || salt32) per player; all-zeros = no commitment. The
+    // first reveal zeroes the revealer's slot, so the round sub-phase is
+    // always derivable from slot contents alone.
+    byte[32] commit1;
+    byte[32] commit2;
+    // 0 = not revealed this round, else revealed column + 1. At most one is
+    // ever set in a stored state: the second reveal resolves in-transition.
+    int reveal1;
+    int reveal2;
+    int move_timeout;
+    int deadline;
+}
+
+// The engine caps OpNum2Bin at 8-byte targets, so wide zero constants must
+// be hex literals (same trap as the empty board).
+fn zero32() -> byte[32] {
+    return byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
+}
+
+actor FourkSimulLobby owns SimulLobbyState {
+    // Identical to classic join, but the successor is a pristine simul match.
+    entry join(sig s, pubkey pk) emits game: FourkSimul {
+        require(move_timeout >= MIN_MOVE_TIMEOUT);
+        require(pk != p1);
+        require(checkSig(s, pk));
+
+        SimulMatchState next_match = {
+            p1: p1,
+            p2: pk,
+            board: byte[42](0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000),
+            round: 0,
+            commit1: zero32(),
+            commit2: zero32(),
+            reveal1: 0,
+            reveal2: 0,
+            move_timeout: move_timeout,
+            deadline: deadline,
+        };
+
+        require(game.value == 2 * self.value);
+        become game <- FourkSimul(next_match);
+    }
+
+    // Identical to classic cancel.
+    entry cancel(sig s) emits none {
+        require(checkSig(s, p1));
+    }
+}
+
+actor FourkSimul owns SimulMatchState {
+    // Either player unwinds a match nothing has happened in: no completed
+    // round AND no commitment on the table (a lone commitment is a one-sided
+    // obligation — that's claim_timeout's business). Same anti-grief shape
+    // as classic: p2's exit waits out one clock, p1's kick is instant.
+    entry dissolve(sig s, pubkey pk) emits none {
+        require(round == 0);
+        require(commit1 == zero32() && commit2 == zero32());
+        require(reveal1 == 0 && reveal2 == 0);
+        require(pk == p1 || pk == p2);
+        if (pk == p2) {
+            require(this.age >= move_timeout);
+        }
+        require(checkSig(s, pk));
+
+        int half = self.value / 2;
+        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
+        require(tx.outputs[0].value == half);
+        require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
+        require(tx.outputs[1].value == half);
+    }
+
+    // Stake a sealed column pick. Each player owns one slot and a reveal is
+    // only ever compared against the caller's OWN slot, so copying the
+    // opponent's visible hash is just a blind collision bet. Refused on a
+    // full board (claim_draw's business) and once any reveal is on the table.
+    entry commit(sig s, pubkey pk, byte[32] h) emits next: FourkSimul {
+        int full = 1;
+        for (c, 0, COLS, COLS) {
+            if (OpBin2Num(board[c * ROWS + ROWS - 1]) == 0) {
+                full = 0;
+            }
+        }
+        require(full == 0);
+        require(reveal1 == 0 && reveal2 == 0);
+        require(pk == p1 || pk == p2);
+        require(h != zero32());
+
+        byte[32] next_c1 = commit1;
+        byte[32] next_c2 = commit2;
+        if (pk == p1) {
+            require(commit1 == zero32());
+            next_c1 = h;
+        }
+        if (pk != p1) {
+            require(commit2 == zero32());
+            next_c2 = h;
+        }
+
+        SimulMatchState next_match = {
+            p1: p1,
+            p2: p2,
+            board: board,
+            round: round,
+            commit1: next_c1,
+            commit2: next_c2,
+            reveal1: 0,
+            reveal2: 0,
+            move_timeout: move_timeout,
+            deadline: deadline,
+        };
+
+        require(next.value == self.value);
+        require(checkSig(s, pk));
+        become next <- FourkSimul(next_match);
+    }
+
+    // First reveal of the round: prove the sealed pick. Column legality (in
+    // range, not full on the PRE-ROUND board — public when the commitment
+    // was made) is enforced here, not at commit. The revealer's commitment
+    // slot is zeroed so every stored state has one unambiguous sub-phase.
+    entry reveal(sig s, pubkey pk, int col, byte[32] salt) emits next: FourkSimul {
+        require(reveal1 == 0 && reveal2 == 0);
+        require(commit1 != zero32() && commit2 != zero32());
+        require(pk == p1 || pk == p2);
+
+        byte[32] my_commit = commit1;
+        if (pk == p2) {
+            my_commit = commit2;
+        }
+        require(col >= 0 && col < COLS);
+        require(blake2b(byte[1](byte[1](col)) + salt) == my_commit);
+
+        int h = 0;
+        for (i, 0, ROWS, ROWS) {
+            if (OpBin2Num(board[col * ROWS + i]) != 0) {
+                h = i + 1;
+            }
+        }
+        require(h < ROWS);
+
+        byte[32] next_c1 = commit1;
+        byte[32] next_c2 = commit2;
+        int next_r1 = 0;
+        int next_r2 = 0;
+        if (pk == p1) {
+            next_c1 = zero32();
+            next_r1 = col + 1;
+        }
+        if (pk != p1) {
+            next_c2 = zero32();
+            next_r2 = col + 1;
+        }
+
+        SimulMatchState next_match = {
+            p1: p1,
+            p2: p2,
+            board: board,
+            round: round,
+            commit1: next_c1,
+            commit2: next_c2,
+            reveal1: next_r1,
+            reveal2: next_r2,
+            move_timeout: move_timeout,
+            deadline: deadline,
+        };
+
+        require(next.value == self.value);
+        require(checkSig(s, pk));
+        become next <- FourkSimul(next_match);
+    }
+
+    // Second reveal: prove the pick and drop BOTH discs. The successor is
+    // fully determined (the opponent's column is on the table), so this
+    // transition clears all round slots and bumps the round. Wins created
+    // here are claimed through claim_win / claim_split — the game state
+    // itself just continues, exactly as classic lets a win sit unclaimed.
+    entry resolve(sig s, pubkey pk, int col, byte[32] salt) emits next: FourkSimul {
+        require(pk == p1 || pk == p2);
+
+        int me = 0;
+        if (pk == p2) {
+            me = 1;
+        }
+        int my_reveal = reveal1;
+        int their_reveal = reveal2;
+        byte[32] my_commit = commit1;
+        if (me == 1) {
+            my_reveal = reveal2;
+            their_reveal = reveal1;
+            my_commit = commit2;
+        }
+        require(my_reveal == 0);
+        require(their_reveal != 0);
+        require(my_commit != zero32());
+
+        require(col >= 0 && col < COLS);
+        require(blake2b(byte[1](byte[1](col)) + salt) == my_commit);
+
+        // The opponent's column, revealed first; its height passed the
+        // reveal gate and the board has not changed since.
+        int a = their_reveal - 1;
+        int ha = 0;
+        for (i, 0, ROWS, ROWS) {
+            if (OpBin2Num(board[a * ROWS + i]) != 0) {
+                ha = i + 1;
+            }
+        }
+        require(ha < ROWS);
+
+        int my_disc = me + 1;
+        int their_disc = 2 - me;
+
+        byte[] prev = byte[](board);
+        byte[42] next_board = board;
+        if (col == a) {
+            // Collision: the round's priority player lands underneath; on
+            // the column's last slot the other disc vanishes.
+            int lower_disc = round % 2 + 1;
+            int upper_disc = 2 - round % 2;
+            int idx = a * ROWS + ha;
+            if (ha + 1 < ROWS) {
+                next_board = byte[42](prev.slice(0, idx) + byte[1](byte[1](lower_disc)) + byte[1](byte[1](upper_disc)) + prev.slice(idx + 2, CELLS));
+            }
+            if (ha + 1 >= ROWS) {
+                next_board = byte[42](prev.slice(0, idx) + byte[1](byte[1](lower_disc)) + prev.slice(idx + 1, CELLS));
+            }
+        }
+        if (col != a) {
+            int hb = 0;
+            for (i, 0, ROWS, ROWS) {
+                if (OpBin2Num(board[col * ROWS + i]) != 0) {
+                    hb = i + 1;
+                }
+            }
+            require(hb < ROWS);
+
+            int lo = a * ROWS + ha;
+            int lo_disc = their_disc;
+            int hi = col * ROWS + hb;
+            int hi_disc = my_disc;
+            if (hi < lo) {
+                lo = col * ROWS + hb;
+                lo_disc = my_disc;
+                hi = a * ROWS + ha;
+                hi_disc = their_disc;
+            }
+            next_board = byte[42](prev.slice(0, lo) + byte[1](byte[1](lo_disc)) + prev.slice(lo + 1, hi) + byte[1](byte[1](hi_disc)) + prev.slice(hi + 1, CELLS));
+        }
+
+        SimulMatchState next_match = {
+            p1: p1,
+            p2: p2,
+            board: next_board,
+            round: round + 1,
+            commit1: zero32(),
+            commit2: zero32(),
+            reveal1: 0,
+            reveal2: 0,
+            move_timeout: move_timeout,
+            deadline: deadline,
+        };
+
+        require(next.value == self.value);
+        require(checkSig(s, pk));
+        become next <- FourkSimul(next_match);
+    }
+
+    // Terminal door 1: point at four-in-a-row on the CURRENT board. No disc
+    // is played — resolution already landed it — and the witness's first
+    // cell names the color, whose owner must sign: the resolver of a round
+    // need not be its winner. Signed by the pot's sole owner, so funds go
+    // wherever they direct.
+    entry claim_win(sig s, int wcol, int wrow, int wdir) emits none {
+        require(wcol >= 0 && wcol < COLS && wrow >= 0 && wrow < ROWS);
+        int disc_num = OpBin2Num(board[wcol * ROWS + wrow]);
+        require(disc_num == 1 || disc_num == 2);
+
+        // Direction table: 0 = E, 1 = N, 2 = NE, 3 = SE.
+        require(wdir >= 0 && wdir <= 3);
+        int dc = 1;
+        int dr = 0;
+        if (wdir == 1) {
+            dc = 0;
+            dr = 1;
+        }
+        if (wdir == 2) {
+            dr = 1;
+        }
+        if (wdir == 3) {
+            dr = -1;
+        }
+        for (k, 0, 4, 4) {
+            int c = wcol + k * dc;
+            int r = wrow + k * dr;
+            require(c >= 0 && c < COLS && r >= 0 && r < ROWS);
+            require(OpBin2Num(board[c * ROWS + r]) == disc_num);
+        }
+
+        pubkey owner_pk = p1;
+        if (disc_num == 2) {
+            owner_pk = p2;
+        }
+        require(checkSig(s, owner_pk));
+    }
+
+    // Terminal door 2: the double win — one round completed a line for BOTH
+    // colors, so the pot splits. Two witnesses in fixed color order (w1 for
+    // p1's discs, w2 for p2's); permissionless, payouts pinned. DOCUMENTED
+    // EDGE: the covenant cannot prove a line's ABSENCE without the board
+    // scan this design avoids, so a double-win owner racing claim_win with
+    // only their own line is accepted, like classic's unclaimed-win-lost-
+    // to-draw. Honest clients always submit the correct door immediately.
+    entry claim_split(int w1col, int w1row, int w1dir, int w2col, int w2row, int w2dir) emits none {
+        require(w1dir >= 0 && w1dir <= 3);
+        int dc1 = 1;
+        int dr1 = 0;
+        if (w1dir == 1) {
+            dc1 = 0;
+            dr1 = 1;
+        }
+        if (w1dir == 2) {
+            dr1 = 1;
+        }
+        if (w1dir == 3) {
+            dr1 = -1;
+        }
+        for (k, 0, 4, 4) {
+            int c = w1col + k * dc1;
+            int r = w1row + k * dr1;
+            require(c >= 0 && c < COLS && r >= 0 && r < ROWS);
+            require(OpBin2Num(board[c * ROWS + r]) == 1);
+        }
+
+        require(w2dir >= 0 && w2dir <= 3);
+        int dc2 = 1;
+        int dr2 = 0;
+        if (w2dir == 1) {
+            dc2 = 0;
+            dr2 = 1;
+        }
+        if (w2dir == 2) {
+            dr2 = 1;
+        }
+        if (w2dir == 3) {
+            dr2 = -1;
+        }
+        for (k, 0, 4, 4) {
+            int c = w2col + k * dc2;
+            int r = w2row + k * dr2;
+            require(c >= 0 && c < COLS && r >= 0 && r < ROWS);
+            require(OpBin2Num(board[c * ROWS + r]) == 2);
+        }
+
+        int half = self.value / 2;
+        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
+        require(tx.outputs[0].value == half);
+        require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
+        require(tx.outputs[1].value == half);
+    }
+
+    // Terminal door 3: board full, pot splits, permissionless. Keys on the
+    // board itself — simul has no move count, and vanished collision discs
+    // make disc totals nonlinear — but the board still fills monotonically.
+    // Commits are refused on a full board, so no obligation is pending here.
+    entry claim_draw() emits none {
+        int full = 1;
+        for (c, 0, COLS, COLS) {
+            if (OpBin2Num(board[c * ROWS + ROWS - 1]) == 0) {
+                full = 0;
+            }
+        }
+        require(full == 1);
+
+        int half = self.value / 2;
+        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
+        require(tx.outputs[0].value == half);
+        require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
+        require(tx.outputs[1].value == half);
+    }
+
+    // Terminal door 4: the opponent is late on a ONE-SIDED obligation and
+    // the compliant player takes the pot. One-sided means: a reveal on the
+    // table (the revealer is owed a resolve — this punishes both the
+    // peek-then-stall griefer and the unrevealable full-column commitment),
+    // or no reveals and exactly one commitment. Symmetric silence is
+    // nobody's fault — that's split_timeout.
+    entry claim_timeout(sig s) emits none {
+        int full = 1;
+        for (c, 0, COLS, COLS) {
+            if (OpBin2Num(board[c * ROWS + ROWS - 1]) == 0) {
+                full = 0;
+            }
+        }
+        require(full == 0);
+        require(this.age >= move_timeout);
+
+        pubkey claimant = p1;
+        int one_sided = 0;
+        if (reveal2 != 0) {
+            claimant = p2;
+            one_sided = 1;
+        }
+        if (reveal1 != 0) {
+            claimant = p1;
+            one_sided = 1;
+        }
+        if (one_sided == 0) {
+            int c1 = 0;
+            if (commit1 != zero32()) {
+                c1 = 1;
+            }
+            int c2 = 0;
+            if (commit2 != zero32()) {
+                c2 = 1;
+            }
+            require(c1 + c2 == 1);
+            if (c2 == 1) {
+                claimant = p2;
+            }
+        }
+        require(checkSig(s, claimant));
+    }
+
+    // Terminal door 5: symmetric stall — neither committed, or both sealed
+    // and neither revealed — past the clock. Nobody is more at fault than
+    // the other, so the pot splits, permissionless. (A mutual reveal
+    // standoff cannot exist: reveals are one-sided by construction.)
+    entry split_timeout() emits none {
+        require(reveal1 == 0 && reveal2 == 0);
+        int c1 = 0;
+        if (commit1 != zero32()) {
+            c1 = 1;
+        }
+        int c2 = 0;
+        if (commit2 != zero32()) {
+            c2 = 1;
+        }
+        require(c1 == c2);
+        require(this.age >= move_timeout);
+
+        int half = self.value / 2;
+        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
+        require(tx.outputs[0].value == half);
+        require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
+        require(tx.outputs[1].value == half);
+    }
+
+    // Terminal door 6: identical to classic sudden death — the game
+    // outlived its creation-time cap, even split, permissionless, legal in
+    // any live state.
+    entry sudden_death() emits none {
+        require(deadline > 0);
+        require(tx.time >= deadline);
+
+        int half = self.value / 2;
+        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
+        require(tx.outputs[0].value == half);
+        require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
+        require(tx.outputs[1].value == half);
+    }
+}
+
 app Fourk {
     actor FourkLobby;
     actor FourkMatch;
+    actor FourkSimulLobby;
+    actor FourkSimul;
 }

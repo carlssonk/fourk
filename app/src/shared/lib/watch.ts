@@ -52,7 +52,13 @@ export function watchAddress(
     }, fallbackMs);
   };
 
-  const onNotification = () => void runTick();
+  const onNotification = () => {
+    void runTick();
+    // A notification can beat the UTXO index by a beat; one short echo tick
+    // catches what the eager one missed instead of waiting out the fallback
+    // poll. Collapsed by the dirty flag if a tick is still running.
+    setTimeout(() => void runTick(), 800);
+  };
   const onConnect = () => {
     // server-side subscription state died with the old socket
     Promise.resolve(rpc.subscribeUtxosChanged([address])).catch(() => {});

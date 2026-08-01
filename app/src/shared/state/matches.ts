@@ -1,8 +1,16 @@
 import { atom, getDefaultStore } from "jotai";
 import { knownMatchFromUrl, pendingInviteFromUrl, writeUrlHash } from "../lib/invite";
-import { LIST_KEY, fresherOf, loadMatches, saveMatches, type Match } from "../lib/match";
+import { LIST_KEY, loadMatches, saveMatches, type Match } from "../lib/match";
+import { fresherOf, onMatchesPruned } from "../modes/registry";
 
 const store = getDefaultStore();
+
+/** Persist the list and let every mode GC its per-match local state
+ * (fourk prunes commitment salts) against the surviving ids. */
+function persistMatches(list: Match[]): void {
+  saveMatches(list);
+  onMatchesPruned(list.map((m) => m.covenantId));
+}
 
 function upsert(list: Match[], m: Match): Match[] {
   return [m, ...list.filter((x) => x.covenantId !== m.covenantId)];
@@ -15,7 +23,7 @@ function upsert(list: Match[], m: Match): Match[] {
 const initialCurrent = knownMatchFromUrl();
 // If the URL delivered a fresher state than we had stored, persist it.
 const initialMatches = initialCurrent ? upsert(loadMatches(), initialCurrent) : loadMatches();
-if (initialCurrent) saveMatches(initialMatches);
+if (initialCurrent) persistMatches(initialMatches);
 
 const matchesBase = atom(initialMatches);
 
@@ -24,7 +32,7 @@ export const matchesAtom = atom(
   (get) => get(matchesBase),
   (_get, set, list: Match[]) => {
     set(matchesBase, list);
-    saveMatches(list);
+    persistMatches(list);
   },
 );
 

@@ -3,6 +3,8 @@ import { genesToCode, randomGenes } from "../lib/avatar";
 import type { MatchTiming } from "../lib/covenant";
 import { MIN_MOVE_TIMEOUT_DAA, MOVE_TIMEOUT_DAA } from "../lib/game";
 import { trimName, type PlayerProfile } from "../lib/match";
+import { parseModeKey } from "../modes/registry";
+import type { GameModeKey } from "../modes/types";
 
 const KEY = "fourk.profile";
 const store = getDefaultStore();
@@ -50,6 +52,25 @@ export function saveHostColor(c: "red" | "blue"): void {
   localStorage.setItem(COLOR_KEY, c);
 }
 
+// --- Game mode (host-side setting) --------------------------------------------
+
+const MODE_KEY = "fourk.gamemode";
+
+export type GameMode = GameModeKey;
+
+/** The mode hosted games open in — any registered mode; the registry's
+ * default (the signature fourk mode) when unset or unrecognized. */
+export const gameModeAtom = atom<GameModeKey>(parseModeKey(localStorage.getItem(MODE_KEY)));
+
+export function getGameMode(): GameModeKey {
+  return store.get(gameModeAtom);
+}
+
+export function saveGameMode(mode: GameModeKey): void {
+  store.set(gameModeAtom, mode);
+  localStorage.setItem(MODE_KEY, mode);
+}
+
 // --- Match timing (host-side settings, remembered per player) ----------------
 
 const TIMEOUT_KEY = "fourk.movetimeout";
@@ -94,4 +115,6 @@ window.addEventListener("storage", (ev) => {
   else if (ev.key === TIMEOUT_KEY)
     store.set(moveTimeoutAtom, loadDaa(TIMEOUT_KEY, MOVE_TIMEOUT_DAA, MIN_MOVE_TIMEOUT_DAA));
   else if (ev.key === CAP_KEY) store.set(gameCapAtom, loadDaa(CAP_KEY, 0));
+  else if (ev.key === MODE_KEY)
+    store.set(gameModeAtom, parseModeKey(localStorage.getItem(MODE_KEY)));
 });

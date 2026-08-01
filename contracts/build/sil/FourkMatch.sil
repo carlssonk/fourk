@@ -23,6 +23,30 @@ contract FourkMatch(
         int move_timeout;
         int deadline;
     }
+    struct SimulLobbyState {
+        // :: user declared fields
+        pubkey p1;
+        int move_timeout;
+        int deadline;
+    }
+    struct SimulMatchState {
+        // :: user declared fields
+        pubkey p1;
+        pubkey p2;
+        byte[42] board;
+        int round;
+        byte[32] commit1;
+        byte[32] commit2;
+        int reveal1;
+        int reveal2;
+        int move_timeout;
+        int deadline;
+    }
+
+    // :: shared helper functions
+    function zero32() : byte[32] {
+        return byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
+    }
 
     // :: route templates
 

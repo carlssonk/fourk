@@ -214,6 +214,91 @@ export function lobbySigScript(p1, move_timeout, deadline, _function, sig, pk) {
 }
 
 /**
+ * The redeem script for an open fourk-mode seat awaiting a joiner.
+ * @param {Uint8Array} p1
+ * @param {bigint} move_timeout
+ * @param {bigint} deadline
+ * @returns {Uint8Array}
+ */
+export function simulLobbyLockScript(p1, move_timeout, deadline) {
+    const ptr0 = passArray8ToWasm0(p1, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ret = wasm.simulLobbyLockScript(ptr0, len0, move_timeout, deadline);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v2;
+}
+
+let cachedBigUint64ArrayMemory0 = null;
+
+function getBigUint64ArrayMemory0() {
+    if (cachedBigUint64ArrayMemory0 === null || cachedBigUint64ArrayMemory0.byteLength === 0) {
+        cachedBigUint64ArrayMemory0 = new BigUint64Array(wasm.memory.buffer);
+    }
+    return cachedBigUint64ArrayMemory0;
+}
+
+function passArray64ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 8, 8) >>> 0;
+    getBigUint64ArrayMemory0().set(arg, ptr / 8);
+    WASM_VECTOR_LEN = arg.length;
+    return ptr;
+}
+/**
+ * Full signature script for spending a fourk-mode match UTXO via `function`
+ * (dissolve, commit, reveal, resolve, claim_win, claim_split, claim_draw,
+ * claim_timeout, split_timeout, sudden_death).
+ * @param {Uint8Array} p1
+ * @param {Uint8Array} p2
+ * @param {Uint8Array} board
+ * @param {bigint} round
+ * @param {Uint8Array} commit1
+ * @param {Uint8Array} commit2
+ * @param {bigint} reveal1
+ * @param {bigint} reveal2
+ * @param {bigint} move_timeout
+ * @param {bigint} deadline
+ * @param {string} _function
+ * @param {Uint8Array | null} [sig]
+ * @param {Uint8Array | null} [pk]
+ * @param {Uint8Array | null} [blob]
+ * @param {BigInt64Array | null} [ints]
+ * @returns {Uint8Array}
+ */
+export function simulMatchSigScript(p1, p2, board, round, commit1, commit2, reveal1, reveal2, move_timeout, deadline, _function, sig, pk, blob, ints) {
+    const ptr0 = passArray8ToWasm0(p1, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(p2, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray8ToWasm0(board, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArray8ToWasm0(commit1, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArray8ToWasm0(commit2, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ptr5 = passStringToWasm0(_function, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len5 = WASM_VECTOR_LEN;
+    var ptr6 = isLikeNone(sig) ? 0 : passArray8ToWasm0(sig, wasm.__wbindgen_malloc);
+    var len6 = WASM_VECTOR_LEN;
+    var ptr7 = isLikeNone(pk) ? 0 : passArray8ToWasm0(pk, wasm.__wbindgen_malloc);
+    var len7 = WASM_VECTOR_LEN;
+    var ptr8 = isLikeNone(blob) ? 0 : passArray8ToWasm0(blob, wasm.__wbindgen_malloc);
+    var len8 = WASM_VECTOR_LEN;
+    var ptr9 = isLikeNone(ints) ? 0 : passArray64ToWasm0(ints, wasm.__wbindgen_malloc);
+    var len9 = WASM_VECTOR_LEN;
+    const ret = wasm.simulMatchSigScript(ptr0, len0, ptr1, len1, ptr2, len2, round, ptr3, len3, ptr4, len4, reveal1, reveal2, move_timeout, deadline, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, ptr9, len9);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v11 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v11;
+}
+
+/**
  * Artifact sanity info for the UI's about box / debugging.
  * @returns {string}
  */
@@ -255,21 +340,6 @@ export function lobbyLockScript(p1, move_timeout, deadline) {
     return v2;
 }
 
-let cachedBigUint64ArrayMemory0 = null;
-
-function getBigUint64ArrayMemory0() {
-    if (cachedBigUint64ArrayMemory0 === null || cachedBigUint64ArrayMemory0.byteLength === 0) {
-        cachedBigUint64ArrayMemory0 = new BigUint64Array(wasm.memory.buffer);
-    }
-    return cachedBigUint64ArrayMemory0;
-}
-
-function passArray64ToWasm0(arg, malloc) {
-    const ptr = malloc(arg.length * 8, 8) >>> 0;
-    getBigUint64ArrayMemory0().set(arg, ptr / 8);
-    WASM_VECTOR_LEN = arg.length;
-    return ptr;
-}
 /**
  * Full signature script for spending a match UTXO via `function`
  * (dissolve, move, winning_move, claim_draw, claim_forfeit, sudden_death).
@@ -307,6 +377,69 @@ export function matchSigScript(p1, p2, board, move_count, move_timeout, deadline
     var v8 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
     return v8;
+}
+
+/**
+ * Full signature script for spending a fourk-mode lobby UTXO via `function`
+ * (join or cancel).
+ * @param {Uint8Array} p1
+ * @param {bigint} move_timeout
+ * @param {bigint} deadline
+ * @param {string} _function
+ * @param {Uint8Array | null} [sig]
+ * @param {Uint8Array | null} [pk]
+ * @returns {Uint8Array}
+ */
+export function simulLobbySigScript(p1, move_timeout, deadline, _function, sig, pk) {
+    const ptr0 = passArray8ToWasm0(p1, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passStringToWasm0(_function, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const len1 = WASM_VECTOR_LEN;
+    var ptr2 = isLikeNone(sig) ? 0 : passArray8ToWasm0(sig, wasm.__wbindgen_malloc);
+    var len2 = WASM_VECTOR_LEN;
+    var ptr3 = isLikeNone(pk) ? 0 : passArray8ToWasm0(pk, wasm.__wbindgen_malloc);
+    var len3 = WASM_VECTOR_LEN;
+    const ret = wasm.simulLobbySigScript(ptr0, len0, move_timeout, deadline, ptr1, len1, ptr2, len2, ptr3, len3);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v5 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v5;
+}
+
+/**
+ * The redeem script for a live fourk-mode game state.
+ * @param {Uint8Array} p1
+ * @param {Uint8Array} p2
+ * @param {Uint8Array} board
+ * @param {bigint} round
+ * @param {Uint8Array} commit1
+ * @param {Uint8Array} commit2
+ * @param {bigint} reveal1
+ * @param {bigint} reveal2
+ * @param {bigint} move_timeout
+ * @param {bigint} deadline
+ * @returns {Uint8Array}
+ */
+export function simulMatchLockScript(p1, p2, board, round, commit1, commit2, reveal1, reveal2, move_timeout, deadline) {
+    const ptr0 = passArray8ToWasm0(p1, wasm.__wbindgen_malloc);
+    const len0 = WASM_VECTOR_LEN;
+    const ptr1 = passArray8ToWasm0(p2, wasm.__wbindgen_malloc);
+    const len1 = WASM_VECTOR_LEN;
+    const ptr2 = passArray8ToWasm0(board, wasm.__wbindgen_malloc);
+    const len2 = WASM_VECTOR_LEN;
+    const ptr3 = passArray8ToWasm0(commit1, wasm.__wbindgen_malloc);
+    const len3 = WASM_VECTOR_LEN;
+    const ptr4 = passArray8ToWasm0(commit2, wasm.__wbindgen_malloc);
+    const len4 = WASM_VECTOR_LEN;
+    const ret = wasm.simulMatchLockScript(ptr0, len0, ptr1, len1, ptr2, len2, round, ptr3, len3, ptr4, len4, reveal1, reveal2, move_timeout, deadline);
+    if (ret[3]) {
+        throw takeFromExternrefTable0(ret[2]);
+    }
+    var v6 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+    return v6;
 }
 
 /**

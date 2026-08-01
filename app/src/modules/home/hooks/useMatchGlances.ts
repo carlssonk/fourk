@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import * as cov from "@shared/lib/covenant";
 import { finishedLongAgo, phaseOf, type Match } from "@shared/lib/match";
+import { modeOf } from "@shared/modes/registry";
 import { getRpc, getWallet, matchesAtom, removeMatch, updateMatch } from "@shared/state";
 
 /** At-a-glance state of a stored match, from a cheap sync on the home screen. */
@@ -9,12 +10,13 @@ export type MatchGlance = "waiting" | "your-turn" | "their-turn" | "finished" | 
 
 function glanceOf(status: cov.SyncStatus, prev: Match, next: Match, myPk: string): MatchGlance {
   if (status === "terminated") {
-    // An open game's successor can't be enumerated from here (the joiner's
-    // pubkey is unknown) — opening the game runs discovery.
-    return phaseOf(prev.state) === 0 ? "changed" : "finished";
+    // Some successors can't be enumerated from here: a join embeds the
+    // joiner's unknown pubkey, a fourk-mode commit the opponent's unknown
+    // hash. Opening the game runs discovery.
+    return modeOf(prev).canEnumerate(prev) ? "finished" : "changed";
   }
   if (phaseOf(next.state) === 0) return "waiting";
-  return cov.isMyTurn(next, myPk) ? "your-turn" : "their-turn";
+  return cov.isActionable(next, myPk) ? "your-turn" : "their-turn";
 }
 
 /**

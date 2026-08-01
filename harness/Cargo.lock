@@ -1270,6 +1270,7 @@ name = "fourk-harness"
 version = "0.1.0"
 dependencies = [
  "argent-runtime",
+ "blake2b_simd",
  "kaspa-consensus-core",
  "kaspa-txscript",
  "kaspa-txscript-errors",

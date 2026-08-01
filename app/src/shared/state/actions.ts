@@ -3,9 +3,10 @@ import * as cov from "../lib/covenant";
 import { ensureFunds } from "../lib/dispenser";
 import { friendlyError } from "../lib/errors";
 import { ZERO_PK } from "../lib/game";
-import { SOMPI_PER_KAS, fresherOf, saveCheckpoint, type Match } from "../lib/match";
+import { SOMPI_PER_KAS, saveCheckpoint, type Match } from "../lib/match";
+import { fresherOf } from "../modes/registry";
 import { clearInvite, matchesAtom, openMatch } from "./matches";
-import { getHostColor, getMatchTiming, getProfile } from "./profile";
+import { getGameMode, getHostColor, getMatchTiming, getProfile } from "./profile";
 import { getRpc } from "./rpc";
 import { getWallet } from "./wallet";
 
@@ -78,7 +79,7 @@ export async function createGame(): Promise<void> {
   // is long gone by then (the watcher persists fresher checkpoints while
   // it runs, this is the floor).
   const preOpen = await cov.chainCheckpoint(rpc);
-  const match = await cov.openMatch(rpc, key, FREE_STAKE, getMatchTiming());
+  const match = await cov.openMatch(rpc, key, FREE_STAKE, getMatchTiming(), getGameMode());
   saveCheckpoint(match.covenantId, preOpen);
   const me = getProfile();
   // My identity and colour choice travel to the opponent inside the link.
@@ -114,8 +115,14 @@ export const takeSeat = (invite: Match): Promise<void> =>
       await ensureFunds(rpc, key, invite.value + FEE_MARGIN);
       advanceConnecting();
       try {
+        // Checkpoint from before the join: the host may act the moment they
+        // see us arrive, and without a stored checkpoint the joiner's
+        // watcher could never trace that spend (it would just sit stuck).
+        const preJoin = await cov.chainCheckpoint(rpc);
         // My profile rides the join tx's payload so P1 learns who sat down.
-        openMatch(await cov.joinMatch(rpc, key, invite, getProfile()));
+        const joined = await cov.joinMatch(rpc, key, invite, getProfile());
+        saveCheckpoint(joined.covenantId, preJoin);
+        openMatch(joined);
       } catch (e) {
         // The genesis UTXO being gone has one meaning here: the seat is no
         // longer up for grabs. Say that, not "sync first".

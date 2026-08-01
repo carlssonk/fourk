@@ -34,6 +34,8 @@ function roundTrip(m: Match): Match {
 }
 
 function expectEqual(a: Match, b: Match) {
+  expect(b.mode).toEqual(a.mode);
+  expect(b.simul).toEqual(a.simul);
   expect(b.network).toBe(a.network);
   expect(b.covenantId).toBe(a.covenantId);
   expect(b.txid).toBe(a.txid);
@@ -175,10 +177,96 @@ describe("profiles in share codes", () => {
 
   test("unknown extension flags throw instead of decoding garbage", () => {
     const good = encodeMatchBinary({ ...match({}), profiles: { p1: alice } });
-    // The extension flags byte directly follows the v0 payload.
+    // The extension flags byte directly follows the v0 payload; bits 5-7 are
+    // the remaining reserved escape hatch (bit 4 became the mode section).
     const pfIndex = encodeMatchBinary(match({})).length;
-    const bad = Uint8Array.from(good.map((x, i) => (i === pfIndex ? x | 0x10 : x)));
+    const bad = Uint8Array.from(good.map((x, i) => (i === pfIndex ? x | 0x20 : x)));
     expect(() => decodeMatchBinary(bad)).toThrow("unknown share-code format version");
+  });
+});
+
+describe("fourk mode in share codes", () => {
+  const ZERO_HASH = "00".repeat(32);
+  const H1 = "a1".repeat(32);
+  const H2 = "b2".repeat(32);
+  const zeroCore = { round: 0, commit1: ZERO_HASH, commit2: ZERO_HASH, reveal1: 0, reveal2: 0 };
+
+  test("an open fourk lobby round-trips with its mode", () => {
+    const m: Match = { ...match({}), mode: "fourk", simul: zeroCore };
+    expectEqual(m, roundTrip(m));
+  });
+
+  test("between rounds: mode + round number, no slots", () => {
+    const board = new Uint8Array(CELLS);
+    board[0] = 1;
+    board[6] = 2;
+    const m: Match = {
+      ...match({ p2: P2, board, moveCount: 2 }),
+      mode: "fourk",
+      simul: { ...zeroCore, round: 1 },
+    };
+    expectEqual(m, roundTrip(m));
+  });
+
+  test("mid-round slots travel: commitments and a reveal", () => {
+    const bothCommitted: Match = {
+      ...match({ p2: P2 }),
+      mode: "fourk",
+      simul: { ...zeroCore, commit1: H1, commit2: H2 },
+    };
+    expectEqual(bothCommitted, roundTrip(bothCommitted));
+
+    // After the first reveal: the revealer's commitment is zeroed.
+    const halfRevealed: Match = {
+      ...match({ p2: P2 }),
+      mode: "fourk",
+      simul: { ...zeroCore, round: 3, commit2: H2, reveal1: 4 },
+    };
+    expectEqual(halfRevealed, roundTrip(halfRevealed));
+  });
+
+  test("mode composes with profiles, colour, and timing", () => {
+    const m: Match = {
+      ...match({ p2: P2, moveTimeout: 3000, deadline: 12_345 }),
+      mode: "fourk",
+      simul: { ...zeroCore, commit1: H1 },
+      profiles: { p1: { name: "Alice", avatar: "0123456789abcdef" } },
+      p1Color: "blue" as const,
+    };
+    expectEqual(m, roundTrip(m));
+  });
+
+  test("classic codes are byte-identical to before the mode existed", () => {
+    // No extension at all for a default classic match.
+    expect(encodeMatchBinary(match({ p2: P2 }))[0]! & 0x80).toBe(0);
+  });
+
+  test("an open lobby claiming round state is rejected", () => {
+    const m: Match = {
+      ...match({}),
+      mode: "fourk",
+      simul: { ...zeroCore, commit1: H1 },
+    };
+    expect(() => roundTrip(m)).toThrow("open match with round state");
+  });
+
+  test("both reveals set is rejected (unrepresentable in a stored state)", () => {
+    const m: Match = {
+      ...match({ p2: P2 }),
+      mode: "fourk",
+      simul: { ...zeroCore, reveal1: 3, reveal2: 5 },
+    };
+    expect(() => roundTrip(m)).toThrow("bad reveal");
+  });
+
+  test("unknown mode byte and slot-mask bits are rejected", () => {
+    const good = encodeMatchBinary({ ...match({ p2: P2 }), mode: "fourk", simul: zeroCore });
+    // Mode section trails the code: [modeByte, roundVarint(0), slotMask(0)].
+    const modeAt = good.length - 3;
+    const badMode = Uint8Array.from(good.map((x, i) => (i === modeAt ? 2 : x)));
+    expect(() => decodeMatchBinary(badMode)).toThrow("unknown game mode");
+    const badMask = Uint8Array.from(good.map((x, i) => (i === good.length - 1 ? 0x40 : x)));
+    expect(() => decodeMatchBinary(badMask)).toThrow("bad slot mask");
   });
 });
 

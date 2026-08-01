@@ -25,6 +25,8 @@ export {
 } from "./matches";
 export {
   gameCapAtom,
+  gameModeAtom,
+  getGameMode,
   getHostColor,
   getMatchTiming,
   getProfile,
@@ -32,9 +34,11 @@ export {
   moveTimeoutAtom,
   profileAtom,
   saveGameCap,
+  saveGameMode,
   saveHostColor,
   saveMoveTimeout,
   saveProfile,
+  type GameMode,
 } from "./profile";
 export { RESET_RESULT, clearNetworkReset, networkResetAtom } from "./network";
 export { getRpc, reconnectingAtom, rpcClientAtom } from "./rpc";

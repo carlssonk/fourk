@@ -1,16 +1,19 @@
 import { useAtomValue } from "jotai";
 import { Avatar } from "@shared/components/Avatar";
 import { fmtDaaDuration, fmtKas } from "@shared/lib/match";
+import { MODES, MODE_LIST, modeOf } from "@shared/modes/registry";
 import {
   busyAtom,
   clearInvite,
   gameCapAtom,
+  gameModeAtom,
   hostColorAtom,
   matchesAtom,
   moveTimeoutAtom,
   newGame,
   pendingInviteAtom,
   saveGameCap,
+  saveGameMode,
   saveHostColor,
   saveMoveTimeout,
   showMatch,
@@ -56,11 +59,13 @@ export const Home = () => {
   const hostColor = useAtomValue(hostColorAtom);
   const moveTimeout = useAtomValue(moveTimeoutAtom);
   const gameCap = useAtomValue(gameCapAtom);
+  const gameMode = useAtomValue(gameModeAtom);
   const glances = useMatchGlances();
 
   if (pendingInvite) {
     const host = pendingInvite.profiles?.p1;
     const myColor = pendingInvite.p1Color === "blue" ? "red" : "blue";
+    const inviteMeta = modeOf(pendingInvite).meta;
     return (
       <div className="pt-12 pb-8 text-center">
         <BoardBackdrop />
@@ -69,12 +74,12 @@ export const Home = () => {
           {host?.name ? `${host.name} invited you to a game!` : "You've been invited to a game!"}
         </h2>
         <p className="text-sm text-dim">
-          Connect four discs in a row to win — you play{" "}
+          {inviteMeta.inviteBlurb}
           <b className={myColor === "red" ? "text-red" : "text-blue"}>{myColor} ●</b>.
         </p>
         <p className="mt-1 text-xs text-dim">
           {fmtKas(pendingInvite.state.stake)} KAS stake each (free mode funds yours) ·{" "}
-          {fmtDaaDuration(pendingInvite.state.moveTimeout)} per move
+          {fmtDaaDuration(pendingInvite.state.moveTimeout)} per {inviteMeta.moveNoun}
           {pendingInvite.state.deadline > 0 && " · total game time capped"}
         </p>
         <PlayerSetup actionLabel="Join" busy={busy} onSubmit={() => takeSeat(pendingInvite)} />
@@ -98,14 +103,20 @@ export const Home = () => {
             busy={busy}
             onSubmit={newGame}
             modes={
-              /* Placeholder picker: only Classic exists today; the disabled
-               * chip previews the planned mode. */
               <div className="mt-4 border-t border-line pt-4 text-sm">
                 <div className="mb-1 text-dim">Game mode</div>
                 <div className="flex flex-wrap gap-1.5">
-                  <Chip on>Classic</Chip>
-                  <Chip disabled>Simultaneous</Chip>
+                  {MODE_LIST.map((m) => (
+                    <Chip
+                      key={m.meta.key}
+                      on={gameMode === m.meta.key}
+                      onClick={() => saveGameMode(m.meta.key)}
+                    >
+                      {m.meta.label}
+                    </Chip>
+                  ))}
                 </div>
+                <p className="mt-1.5 text-xs text-dim">{MODES[gameMode].meta.blurb}</p>
               </div>
             }
           >

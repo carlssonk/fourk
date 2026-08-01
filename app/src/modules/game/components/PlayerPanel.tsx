@@ -13,6 +13,9 @@ interface Props {
   /** Countdown until they forfeit, shown while active (null in the lobby —
    * the covenant runs no clock before the first disc). */
   clock: string | null;
+  /** Fourk mode: this seat's disc lands underneath if both players pick the
+   * same column this round (priority alternates every round). */
+  collisionPriority?: boolean;
 }
 
 /**
@@ -22,15 +25,31 @@ interface Props {
  * face (genes derived from their pubkey) and a pseudonym; an empty seat
  * gets a placeholder.
  */
-export const PlayerPanel = ({ pk, profile, color, isMe, active, clock }: Props) => {
+export const PlayerPanel = ({
+  pk,
+  profile,
+  color,
+  isMe,
+  active,
+  clock,
+  collisionPriority = false,
+}: Props) => {
   const open = pk === ZERO_PK;
   const name = open ? "Open seat" : profile?.name || `anon-${pk.slice(0, 4)}`;
   const urgent = clock !== null && parseInt(clock, 10) < 5;
 
   return (
     <div
-      className={`card flex w-40 shrink-0 items-center gap-2.5 px-3 py-2 ${active ? "border-accent" : ""}`}
+      className={`card relative flex w-40 shrink-0 items-center gap-2.5 px-3 py-2 ${active ? "border-accent" : ""}`}
     >
+      {collisionPriority && (
+        <span
+          title={`If both players pick the same column this round, ${isMe ? "your" : `${name}'s`} disc lands underneath. Priority alternates every round.`}
+          className="absolute -top-2 right-2 cursor-help rounded-sm border border-line bg-panel px-1 text-[10px] leading-4 font-semibold text-accent"
+        >
+          ▼ 1st
+        </span>
+      )}
       {open ? (
         <div className="flex size-11 shrink-0 items-center justify-center rounded-full border border-dashed border-line text-lg text-dim">
           ?

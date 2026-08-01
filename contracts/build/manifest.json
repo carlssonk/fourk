@@ -1,10 +1,14 @@
 {
   "app": "Fourk",
-  "root": "/Users/oliver/dev/fourk/contracts/fourk.ag",
-  "modules": ["/Users/oliver/dev/fourk/contracts/fourk.ag"],
+  "root": "contracts/fourk.ag",
+  "modules": [
+    "contracts/fourk.ag"
+  ],
   "templates": [
-    { "actor": "FourkLobby", "symbol": "gen__four_k_lobby_template", "hash": null },
-    { "actor": "FourkMatch", "symbol": "gen__four_k_match_template", "hash": null }
+    { "actor": "FourkLobby", "symbol": "gen__fourk_lobby_template", "hash": null },
+    { "actor": "FourkMatch", "symbol": "gen__fourk_match_template", "hash": null },
+    { "actor": "FourkSimulLobby", "symbol": "gen__fourk_simul_lobby_template", "hash": null },
+    { "actor": "FourkSimul", "symbol": "gen__fourk_simul_template", "hash": null }
   ],
   "actors": [
     {
@@ -15,10 +19,7 @@
         {
           "name": "join",
           "kind": "leader",
-          "emits": {
-            "kind": "outputs",
-            "outputs": [{ "name": "game", "auth_index": 0, "actors": ["FourkMatch"] }]
-          },
+          "emits": { "kind": "outputs", "outputs": [{ "name": "game", "auth_index": 0, "actors": ["FourkMatch"] }] },
           "consumes": [],
           "routes": [{ "output": "game", "actor": "FourkMatch", "state": "next_match" }]
         },
@@ -46,10 +47,7 @@
         {
           "name": "move",
           "kind": "leader",
-          "emits": {
-            "kind": "outputs",
-            "outputs": [{ "name": "next", "auth_index": 0, "actors": ["FourkMatch"] }]
-          },
+          "emits": { "kind": "outputs", "outputs": [{ "name": "next", "auth_index": 0, "actors": ["FourkMatch"] }] },
           "consumes": [],
           "routes": [{ "output": "next", "actor": "FourkMatch", "state": "next_match" }]
         },
@@ -69,6 +67,104 @@
         },
         {
           "name": "claim_forfeit",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "sudden_death",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "FourkSimulLobby",
+      "state": "SimulLobbyState",
+      "sil": "sil/FourkSimulLobby.sil",
+      "entries": [
+        {
+          "name": "join",
+          "kind": "leader",
+          "emits": { "kind": "outputs", "outputs": [{ "name": "game", "auth_index": 0, "actors": ["FourkSimul"] }] },
+          "consumes": [],
+          "routes": [{ "output": "game", "actor": "FourkSimul", "state": "next_match" }]
+        },
+        {
+          "name": "cancel",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        }
+      ]
+    },
+    {
+      "name": "FourkSimul",
+      "state": "SimulMatchState",
+      "sil": "sil/FourkSimul.sil",
+      "entries": [
+        {
+          "name": "dissolve",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "commit",
+          "kind": "leader",
+          "emits": { "kind": "outputs", "outputs": [{ "name": "next", "auth_index": 0, "actors": ["FourkSimul"] }] },
+          "consumes": [],
+          "routes": [{ "output": "next", "actor": "FourkSimul", "state": "next_match" }]
+        },
+        {
+          "name": "reveal",
+          "kind": "leader",
+          "emits": { "kind": "outputs", "outputs": [{ "name": "next", "auth_index": 0, "actors": ["FourkSimul"] }] },
+          "consumes": [],
+          "routes": [{ "output": "next", "actor": "FourkSimul", "state": "next_match" }]
+        },
+        {
+          "name": "resolve",
+          "kind": "leader",
+          "emits": { "kind": "outputs", "outputs": [{ "name": "next", "auth_index": 0, "actors": ["FourkSimul"] }] },
+          "consumes": [],
+          "routes": [{ "output": "next", "actor": "FourkSimul", "state": "next_match" }]
+        },
+        {
+          "name": "claim_win",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "claim_split",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "claim_draw",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "claim_timeout",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "split_timeout",
           "kind": "leader",
           "emits": { "kind": "none" },
           "consumes": [],

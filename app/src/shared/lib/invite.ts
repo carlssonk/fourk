@@ -3,7 +3,8 @@
  * code (#g=...). These helpers read and write that fragment outside of React.
  */
 
-import { decodeShareCode, encodeShareCode, fresherOf, loadMatches, type Match } from "./match";
+import { decodeShareCode, encodeShareCode, loadMatches, type Match } from "./match";
+import { fresherOf } from "../modes/registry";
 
 /** Pull an invite out of a pasted link/code or a URL fragment. */
 export function parseInvite(raw: string): Match | null {

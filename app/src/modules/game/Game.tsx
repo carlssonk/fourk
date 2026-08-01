@@ -2,9 +2,11 @@ import { useEffect, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import * as cov from "@shared/lib/covenant";
 import { ensureFunds } from "@shared/lib/dispenser";
-import { applyMove, discOf, findWin, playerToMove, type State } from "@shared/lib/game";
+import { CELLS, isOpen } from "@shared/lib/game";
 import { inviteLink } from "@shared/lib/invite";
 import type { Match } from "@shared/lib/match";
+import { modeOf } from "@shared/modes/registry";
+import type { StatusDescriptor } from "@shared/modes/types";
 import { playClaimReady, playClockExpired, playClockWarning } from "@shared/lib/sound";
 import { DiscLoader } from "@shared/components/DiscLoader";
 import {
@@ -22,14 +24,29 @@ import {
   updateMatch,
 } from "@shared/state";
 import { Board, PlayerPanel, ResultOverlay } from "./components";
+import { useAutopilot } from "./hooks/useAutopilot";
 import { useCapClock } from "./hooks/useCapClock";
 import { useMatchWatcher } from "./hooks/useMatchWatcher";
 import { useMoveClock } from "./hooks/useMoveClock";
-import { matchView, resultTone, winningCells } from "./lib";
+import { resultTone, winningCells } from "./lib";
 
 interface Props {
   match: Match;
 }
+
+/** Render a mode's status descriptor: bold segments, tone, spinner. */
+const Status = ({ status }: { status: StatusDescriptor }) => {
+  const body = status.segments.map((seg, i) =>
+    seg.bold ? <b key={i}>{seg.text}</b> : <span key={i}>{seg.text}</span>,
+  );
+  if (status.spinner)
+    return (
+      <span className="inline-flex items-center gap-2 text-dim">
+        <DiscLoader /> {body}
+      </span>
+    );
+  return <span className={status.tone === "danger" ? "text-red" : undefined}>{body}</span>;
+};
 
 export const Game = ({ match }: Props) => {
   const busy = useAtomValue(busyAtom);
@@ -41,13 +58,19 @@ export const Game = ({ match }: Props) => {
   const [overlayDismissed, setOverlayDismissed] = useState(false);
 
   const s = match.state;
-  const view = matchView(match, getWallet().myPk);
-  const { open, full, role, iAmPlayer, mover } = view;
-  const { result, finish, myTurn, needManualImport, importMatch } = useMatchWatcher(match, view);
+  const mode = modeOf(match);
+  const myPk = getWallet().myPk;
+  const role = cov.myRole(match, myPk);
+  const iAmPlayer = role !== "spectator";
+  const open = isOpen(s);
+  const full = s.moveCount >= CELLS;
+  const { result, finish, myTurn, needManualImport, importMatch } = useMatchWatcher(match);
 
-  // The move clock only runs once the game has begun — an unmoved game has
-  // no forfeit deadline by contract (it's dissolvable instead).
-  const clock = useMoveClock(match, !open && !full && !result && s.moveCount > 0);
+  // The obligation clock only runs once something is staked on it — an
+  // untouched game has no forfeit deadline by contract (it's dissolvable
+  // instead); the mode says when that is (classic: first disc; fourk: the
+  // round's first commitment).
+  const clock = useMoveClock(match, !open && !full && !result && mode.roundStarted(match));
   // The whole-game limit only bites once joined (sudden_death requires a
   // live match) — surface it so a silent 50/50 split never blindsides
   // someone nursing a winning position.
@@ -57,17 +80,35 @@ export const Game = ({ match }: Props) => {
   // profiles existed; opponents without one get pubkey-derived identities.
   const p1Profile = match.profiles?.p1 ?? (role === "p1" && myProfile.name ? myProfile : undefined);
   const p2Profile = match.profiles?.p2 ?? (role === "p2" && myProfile.name ? myProfile : undefined);
-  const playing = !open && !result;
   const p1Color = match.p1Color ?? "red";
   const p2Color = p1Color === "red" ? "blue" : "red";
 
-  // Joined but no disc dropped yet: the pre-game lobby, where either player
+  // Joined but nothing staked yet: the pre-game lobby, where either player
   // may still unwind the match on-chain and both stakes come back.
-  const inLobby = !open && s.moveCount === 0 && !result;
+  const inLobby = mode.inLobby(match) && !result;
   // The joiner's exit is covenant-gated on one move clock (anti-grief) —
   // the same age math as the forfeit clock, counting from the join.
   const withdrawClock = useMoveClock(match, inLobby && role === "p2");
   const withdrawGated = role === "p2" && !withdrawClock.expired;
+
+  // ONE optimistic record for both modes: the column just clicked, keyed to
+  // the game UTXO it was played on — any fresh match state (our confirmation
+  // or a resync) makes it stale and the chain's truth takes over; a failed
+  // transaction rolls it back explicitly. Classic recomputes the optimistic
+  // board from it; fourk shows it as the sealed pick.
+  const [pending, setPending] = useState<{ onTxid: string; col: number } | null>(null);
+  const pendingCol = pending !== null && pending.onTxid === match.txid ? pending.col : null;
+
+  const view = mode.view(match, {
+    myPk,
+    role,
+    clockExpired: clock.expired,
+    busy,
+    pendingCol,
+    result,
+  });
+
+  useAutopilot(match, mode, { result, busy, finish });
 
   // Clock sounds, one of each per game UTXO: a nudge when your own time
   // runs low, an alarm when it runs out, a chime when the opponent's does
@@ -96,45 +137,32 @@ export const Game = ({ match }: Props) => {
     }
   }, [secondsLeft, myTurn, iAmPlayer, result, s.moveTimeout]);
 
-  // The optimistic move: the disc lands the instant the column is clicked,
-  // while the transaction confirms in the background. Keyed to the game
-  // UTXO it was played on, so any fresh match state — our confirmation or a
-  // resync — makes it stale and the chain's truth takes over; a failed
-  // transaction rolls it back explicitly.
-  const [pending, setPending] = useState<{ onTxid: string; state: State } | null>(null);
-  const confirming = pending !== null && pending.onTxid === match.txid;
-  const shown = confirming ? pending.state : s;
-
   const drop = (col: number) => {
-    const next = applyMove(s, col);
-    const witness = findWin(next.board, discOf(playerToMove(s)));
-    setPending({ onTxid: match.txid, state: next });
+    setPending({ onTxid: match.txid, col });
     runAction(async () => {
       try {
         const { key } = getWallet();
         const rpc = await getRpc();
-        if (witness) {
-          const txid = await cov.winMatch(rpc, key, match, col, witness);
-          // End on the finished position (lighting up the winning line) — the
-          // covenant is terminal, so the watcher will never deliver it.
-          finish("You connected four — you win! 🎉", { ...match, state: next, txid });
+        const outcome = await mode.actions.drop(rpc, key, match, col);
+        if (outcome.kind === "ended") {
+          // End on the finished position (lighting up the winning line) —
+          // the covenant is terminal, so the watcher will never deliver it.
+          finish(outcome.message, outcome.match);
         } else {
-          // A move's fee comes off a wallet UTXO; refill from the dispenser
-          // if the wallet has run dry mid-game.
-          await ensureFunds(rpc, key, cov.FEE_HEADROOM);
-          updateMatch(await cov.moveMatch(rpc, key, match, col));
+          updateMatch(outcome.match);
         }
       } catch (e) {
-        // The chain said no — take the disc back and surface the error.
+        // The chain said no — take the pick back and surface the error.
         setPending(null);
         throw e;
       }
     });
   };
 
-  // The forfeit door: once the mover's clock runs out, the waiting player
-  // takes the pot. The local clock is an estimate anchored one age-fetch ago,
-  // so re-check the age on-chain and translate "too early" into minutes.
+  // The timeout door: once the opponent's clock runs out, the compliant
+  // player takes the pot. The local clock is an estimate anchored one
+  // age-fetch ago, so re-check the age on-chain and translate "too early"
+  // into minutes.
   const claimTimeoutWin = () =>
     runAction(async () => {
       const { key } = getWallet();
@@ -147,7 +175,7 @@ export const Game = ({ match }: Props) => {
         );
       }
       try {
-        await cov.forfeitMatch(rpc, key, match);
+        await mode.actions.claimTimeout(rpc, key, match);
         finish("Your opponent ran out of time — you win by timeout. 🎉");
       } catch (e) {
         // The opponent may have moved (or another claim landed) at the last
@@ -217,6 +245,7 @@ export const Game = ({ match }: Props) => {
   };
 
   const link = inviteLink(match);
+  const shown = view.board.shownState;
 
   return (
     // A full-viewport column (the app shell pads 1rem top and bottom): the
@@ -231,8 +260,9 @@ export const Game = ({ match }: Props) => {
           profile={p1Profile}
           color={p1Color}
           isMe={role === "p1"}
-          active={playing && !full && mover === 0}
-          clock={mover === 0 ? clock.text : null}
+          active={view.seats[0].active}
+          clock={view.seats[0].showClock ? clock.text : null}
+          collisionPriority={view.seats[0].collisionPriority}
         />
         <div className="order-3 w-full text-center sm:order-0 sm:w-auto sm:min-w-0 sm:flex-1">
           {!rpcReady && !result ? (
@@ -245,36 +275,8 @@ export const Game = ({ match }: Props) => {
             <span>Game over</span>
           ) : full ? (
             <span>Board full…</span>
-          ) : confirming ? (
-            // The optimistic disc is already on the board — saying "your
-            // turn" now would invite a second click that can't go through.
-            <span className="inline-flex items-center gap-2 text-dim">
-              <DiscLoader /> Confirming your move…
-            </span>
-          ) : myTurn && clock.expired ? (
-            <span className="text-red">
-              <b>Your time is up</b> — your opponent can claim the win. Move now!
-            </span>
-          ) : myTurn ? (
-            <span>
-              {s.moveCount === 0 ? (
-                <>
-                  <b>Your opponent joined</b> — drop a disc to start
-                </>
-              ) : (
-                <>
-                  <b>Your turn</b> — drop a disc
-                </>
-              )}
-            </span>
-          ) : iAmPlayer && s.moveCount === 0 ? (
-            <span>Waiting for your opponent to start…</span>
           ) : (
-            <span>
-              {iAmPlayer
-                ? "Opponent's turn…"
-                : `${(mover === 0 ? p1Color : p2Color) === "red" ? "Red" : "Blue"} to move`}
-            </span>
+            <Status status={view.status} />
           )}
           {capLeft && (
             <div
@@ -290,8 +292,9 @@ export const Game = ({ match }: Props) => {
           profile={p2Profile}
           color={p2Color}
           isMe={role === "p2"}
-          active={playing && !full && mover === 1}
-          clock={mover === 1 ? clock.text : null}
+          active={view.seats[1].active}
+          clock={view.seats[1].showClock ? clock.text : null}
+          collisionPriority={view.seats[1].collisionPriority}
         />
       </div>
 
@@ -378,11 +381,14 @@ export const Game = ({ match }: Props) => {
         )}
         <Board
           state={shown}
-          interactive={myTurn && !busy && !confirming}
+          interactive={view.board.interactive}
           winningCells={winningCells(shown.board)}
           onDrop={drop}
           p1Color={p1Color}
-          nextDisc={playing && !full ? (discOf(playerToMove(shown)) as 1 | 2) : null}
+          nextDisc={view.board.nextDisc}
+          {...(view.board.priorityDisc && { priorityDisc: view.board.priorityDisc })}
+          {...(view.board.ghostDisc && { ghostDisc: view.board.ghostDisc })}
+          myPick={view.board.myPick}
         />
       </div>
 
@@ -403,7 +409,7 @@ export const Game = ({ match }: Props) => {
             Back to start
           </button>
         )}
-        {!open && !full && !myTurn && iAmPlayer && !result && s.moveCount > 0 && clock.expired && (
+        {view.canClaimTimeout && (
           <button className="btn" disabled={busy} onClick={claimTimeoutWin}>
             Time's up — claim the win
           </button>

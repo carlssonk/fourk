@@ -32,9 +32,11 @@ Three layers, one rulebook:
   operational task free mode has).
 
 ```
-npm test                        # TS reference: adversarial + property tests (90)
+npm test                        # TS reference: adversarial + property tests
 npm run typecheck
-cd harness && cargo test        # compiled covenant vs the real engine (55)
+cd harness && cargo test        # compiled covenant vs the real engine
+# live e2e vs a local chain (start localnet/run-node.sh + mine.mjs first):
+SIMNET_E2E=1 VITE_NETWORK_ID=simnet npx vitest run app/e2e/simul-live.test.ts
 ```
 
 The harness needs the sibling [silverscript](https://github.com/kaspanet/silverscript)
@@ -86,6 +88,70 @@ Key decisions (and why):
   contiguous 6-byte slice, so the gravity/height check is a short unrolled scan.
   No bitboards: bitwise ops are covenant-gated in Silverscript and the witness
   design makes them unnecessary.
+
+## App architecture: game modes
+
+The app is organized around a per-mode module architecture
+(`app/src/shared/modes/`): each rule set implements one `GameMode` interface
+— script/address derivation, selector tables, successor enumeration, spend
+re-derivation, progress/turn semantics, a React-free view-model (status,
+seats, board props), automatic duties (autopilot actions), player actions,
+and ending vocabulary. `lib/engine.ts` is the mode-free transaction engine
+(the four door shapes: genesis, continuation, signed terminal, pinned
+split); `lib/covenant.ts` is the thin app-facing facade; `modes/registry.ts`
+is the only module that knows all modes. Adding a mode = a new folder +
+a registry entry + its wire-format arms (share-code mode byte + JSON
+fields in `modes/wire.ts` / the codecs).
+
+## Fourk mode — simultaneous play (the default)
+
+The signature mode, and the default for new games ("classic" alternating
+play stays selectable): each round both players seal a column pick as
+`blake2b(colByte || salt32)`, then both reveal, and the second reveal drops
+BOTH discs in one transition. Same-column picks stack, with the round's
+priority player (`round % 2`, 0 = p1) underneath — on a column's last free
+slot the non-priority disc vanishes. A commitment to an already-full column
+can never be revealed; its owner loses through the timeout door.
+
+Reference in `src/simul/` (state + rules, same pure-function contract);
+covenant as a second Argent actor pair in `contracts/fourk.ag` —
+`FourkSimulLobby` (join/cancel) and `FourkSimul`, whose doors are, in
+selector order: `dissolve`, `commit`, `reveal`, `resolve`, `claim_win`,
+`claim_split`, `claim_draw`, `claim_timeout`, `split_timeout`,
+`sudden_death`. The classic actors are untouched (verified: identical
+compiled script bytes), so live classic games are unaffected.
+
+Design notes, mirroring the classic decisions:
+
+- **Sub-phase is derived, never stored.** One commitment slot per player
+  (all-zeros = none) and one reveal slot (0 = none, else column + 1); the
+  first reveal zeroes the revealer's commitment slot, so slot contents alone
+  name the phase. The second reveal never stores — it resolves in-transition.
+- **The resolver need not be the winner**, so win claims are separate doors
+  keyed to the LINE's owner: the witness's first cell names the color, whose
+  key must sign `claim_win`. `claim_split` — both colors completed a line in
+  one round — splits permissionlessly with two witnesses. DOCUMENTED EDGE:
+  the covenant cannot prove a line's absence (no board scan, by design), so
+  a double-win owner racing `claim_win` with only their own line is accepted,
+  like classic's unclaimed-win-lost-to-draw; honest clients auto-submit the
+  correct door immediately.
+- **Two timeout doors.** One-sided lateness (a lone committer or lone
+  revealer waiting on the opponent) pays the compliant player the pot
+  (`claim_timeout` — this is also what punishes peek-then-stall and the
+  unrevealable full-column commitment); symmetric silence splits it
+  (`split_timeout`, permissionless). Same `this.age` clock as classic.
+- **The salt lives in the browser** (`localStorage`, written before the
+  commit broadcast). It is secret, so it cannot ride the share code: a pick
+  sealed in one browser cannot be revealed from another — the timeout doors
+  settle that, and the UI warns.
+- **Sync**: reveal- and resolve-phase successors are enumerable (≤14 / ≤7
+  addresses); a commit successor embeds the opponent's unpredictable hash
+  and gets the join treatment — trace the spending tx, lift the pushes,
+  verify the derived address holds the covenant UTXO.
+- **Compute budget**: fourk-mode covenant inputs declare budget 20 (classic
+  12) — every continuation rebuilds and hashes the ~4.3 KB `FourkSimul`
+  successor template in-script (~131k script units measured live for join;
+  budget 12 caps at 129,999).
 
 ## TS reference ↔ covenant mapping
 
@@ -196,4 +262,11 @@ entrypoints.
   moves confirmed; fee floor fixed after a live rejection)
 - [x] React UI: client-side covenant compilation (fourk-wasm), tx build/sign
   in browser, lobby/board/watcher
+- [x] Fourk mode (simultaneous commit-reveal play, the default): reference in
+  `src/simul/`, `FourkSimulLobby`/`FourkSimul` actors, harness suite, wasm
+  bindings, share-code mode section, salt store, round UI; verified live on
+  a local simnet chain through join, collision rounds, `claim_win`,
+  `claim_timeout`, and a classic regression game
+  (`app/e2e/simul-live.test.ts` — the compute-budget bump to 20 came out of
+  a live rejection there)
 - [ ] Live browser-vs-browser game on testnet-10 through every terminal path.

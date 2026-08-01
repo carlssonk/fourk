@@ -1,48 +1,11 @@
-import * as cov from "@shared/lib/covenant";
-import {
-  CELLS,
-  DIRS,
-  cellIndex,
-  findWin,
-  isOpen,
-  playerToMove,
-  type LineWitness,
-} from "@shared/lib/game";
-import type { Match } from "@shared/lib/match";
-
-export interface MatchView {
-  open: boolean;
-  full: boolean;
-  role: "p1" | "p2" | "spectator";
-  iAmPlayer: boolean;
-  /** Player index (0/1) whose turn it is. */
-  mover: number;
-  /** It's my move — before accounting for a finished result. */
-  wantsMove: boolean;
-}
-
-/** Everything the game screen derives from the raw match. */
-export function matchView(match: Match, myPk: string): MatchView {
-  const s = match.state;
-  const open = isOpen(s);
-  const full = s.moveCount >= CELLS;
-  const role = cov.myRole(match, myPk);
-  return {
-    open,
-    full,
-    role,
-    iAmPlayer: role !== "spectator",
-    mover: playerToMove(s),
-    wantsMove: !open && !full && cov.isMyTurn(match, myPk),
-  };
-}
+import { DIRS, cellIndex, findWin, type LineWitness } from "@shared/lib/game";
 
 export type ResultTone = "win" | "loss" | "neutral";
 
 /** Classify an ending message for the verdict card. The strings come from
- * describeEnd and the finish() calls: a personal victory always says
- * "you win", a defeat mentions a win that isn't ours, and everything else
- * (draws, splits, dissolves, cancels) is nobody's victory. */
+ * the modes' describeEnd and the finish() calls: a personal victory always
+ * says "you win", a defeat mentions a win that isn't ours, and everything
+ * else (draws, splits, dissolves, cancels) is nobody's victory. */
 export function resultTone(result: string): ResultTone {
   if (result.includes("you win")) return "win";
   if (result.includes("win")) return "loss";

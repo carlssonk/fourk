@@ -8,10 +8,15 @@
  *                (bit7 marks the v1 extension section appended after
  *                moveCount: its own flags byte — bit0 p1 profile, bit1 p2
  *                profile, bit2 p1 plays blue, bit3 timing stored (varint
- *                moveTimeout + varint deadline; absent = the defaults) —
- *                keeps bits 4-7 free as the next escape hatch. Timing is
- *                consensus state: the game address derives from it, so a
- *                non-default clock MUST travel in the code.)
+ *                moveTimeout + varint deadline; absent = the defaults),
+ *                bit4 game-mode section — keeps bits 5-7 free as the next
+ *                escape hatch. Timing is consensus state: the game address
+ *                derives from it, so a non-default clock MUST travel in the
+ *                code. So is everything in the mode section: mode byte
+ *                (1 = fourk/simultaneous), varint round, a slot bitmask
+ *                (bit0/1 commitment 1/2 present, bit2/3 reveal 1/2 present),
+ *                then each present commitment (32 bytes) and each present
+ *                reveal (1 byte, column + 1).)
  *   covenantId   32 bytes
  *   txid         32 bytes
  *   p1           32 bytes
@@ -32,6 +37,16 @@
  */
 
 import { CELLS, MOVE_TIMEOUT_DAA, ZERO_PK, type State } from "./game";
+import { ZERO_HASH, type SimulCore } from "../modes/fourk/core";
+import { pushModeSection, takeModeSection } from "../modes/wire";
+import {
+  pushHex32,
+  pushVarint,
+  readVarint,
+  takeByte,
+  takeHex32,
+  takeSmallInt,
+} from "./bytes";
 import { trimName, type Match, type PlayerProfile } from "./match";
 
 const NETWORKS = ["mainnet", "testnet-10", "testnet-11", "devnet", "simnet"];
@@ -52,7 +67,8 @@ export function encodeMatchBinary(m: Match): Uint8Array {
   const p2Prof = p2Joined ? m.profiles?.p2 : undefined;
   const p1Blue = m.p1Color === "blue";
   const timingStored = s.moveTimeout !== MOVE_TIMEOUT_DAA || s.deadline !== 0;
-  const hasExtension = !!(p1Prof || p2Prof) || p1Blue || timingStored;
+  const modeStored = m.mode === "fourk";
+  const hasExtension = !!(p1Prof || p2Prof) || p1Blue || timingStored || modeStored;
 
   let flags = network;
   if (p2Joined) flags |= 0x10;
@@ -81,13 +97,20 @@ export function encodeMatchBinary(m: Match): Uint8Array {
   if (valueStored) pushVarint(out, m.value);
   if (moveStored) pushVarint(out, BigInt(s.moveCount));
   if (hasExtension) {
-    out.push((p1Prof ? 1 : 0) | (p2Prof ? 2 : 0) | (p1Blue ? 4 : 0) | (timingStored ? 8 : 0));
+    out.push(
+      (p1Prof ? 1 : 0) |
+        (p2Prof ? 2 : 0) |
+        (p1Blue ? 4 : 0) |
+        (timingStored ? 8 : 0) |
+        (modeStored ? 16 : 0),
+    );
     if (p1Prof) pushProfile(out, p1Prof);
     if (p2Prof) pushProfile(out, p2Prof);
     if (timingStored) {
       pushVarint(out, BigInt(s.moveTimeout));
       pushVarint(out, BigInt(s.deadline));
     }
+    if (modeStored) pushModeSection(out, "fourk", m.simul);
   }
   return Uint8Array.from(out);
 }
@@ -127,9 +150,10 @@ export function decodeMatchBinary(buf: Uint8Array): Match {
   let p1Blue = false;
   let moveTimeout = MOVE_TIMEOUT_DAA;
   let deadline = 0;
+  let simul: SimulCore | undefined;
   if (flags & 0x80) {
     const pf = takeByte(buf, i);
-    if (pf & 0xf0) throw new Error("unknown share-code format version");
+    if (pf & 0xe0) throw new Error("unknown share-code format version");
     p1Blue = !!(pf & 4);
     if (pf & 3) {
       profiles = {};
@@ -141,12 +165,23 @@ export function decodeMatchBinary(buf: Uint8Array): Match {
       deadline = takeSmallInt(buf, i, Number.MAX_SAFE_INTEGER, "deadline");
       if (moveTimeout === 0) throw new Error("zero move timeout in share code");
     }
+    if (pf & 16) simul = takeModeSection(buf, i).simul;
   }
   if (i.p !== buf.length) throw new Error("trailing bytes in share code");
 
   // Share codes are untrusted input (links pasted by strangers) — hold them
   // to the same invariants the JSON schema enforces on the legacy path.
   if (p2Joined && p2 === ZERO_PK) throw new Error("joined match with zero p2 in share code");
+  if (
+    simul &&
+    !p2Joined &&
+    (simul.round !== 0 ||
+      simul.commit1 !== ZERO_HASH ||
+      simul.commit2 !== ZERO_HASH ||
+      simul.reveal1 !== 0 ||
+      simul.reveal2 !== 0)
+  )
+    throw new Error("open match with round state in share code");
 
   const state: State = { board, moveCount, p1, p2, stake, moveTimeout, deadline };
   return {
@@ -155,6 +190,7 @@ export function decodeMatchBinary(buf: Uint8Array): Match {
     txid,
     value,
     state,
+    ...(simul && { mode: "fourk" as const, simul }),
     ...(profiles && { profiles }),
     ...(p1Blue && { p1Color: "blue" as const }),
   };
@@ -208,53 +244,6 @@ function takeProfile(buf: Uint8Array, i: { p: number }): PlayerProfile {
 
 function countDiscs(board: Uint8Array): number {
   return board.reduce((n, c) => n + (c !== 0 ? 1 : 0), 0);
-}
-
-function pushHex32(out: number[], hex: string, label: string): void {
-  if (!/^[0-9a-f]{64}$/.test(hex)) throw new Error(`bad ${label} in match`);
-  for (let i = 0; i < 64; i += 2) out.push(parseInt(hex.slice(i, i + 2), 16));
-}
-
-function takeHex32(buf: Uint8Array, i: { p: number }): string {
-  if (i.p + 32 > buf.length) throw new Error("truncated share code");
-  let hex = "";
-  for (let k = 0; k < 32; k++) hex += buf[i.p + k]!.toString(16).padStart(2, "0");
-  i.p += 32;
-  return hex;
-}
-
-function takeByte(buf: Uint8Array, i: { p: number }): number {
-  if (i.p >= buf.length) throw new Error("truncated share code");
-  return buf[i.p++]!;
-}
-
-/** Read a varint that must fit a plain number and stay within `max`. */
-function takeSmallInt(buf: Uint8Array, i: { p: number }, max: number, label: string): number {
-  const v = readVarint(buf, i);
-  if (v > BigInt(max)) throw new Error(`bad ${label} in share code`);
-  return Number(v);
-}
-
-function pushVarint(out: number[], val: bigint): void {
-  if (val < 0n) throw new Error("negative varint");
-  let v = val;
-  while (v > 0x7fn) {
-    out.push(Number(v & 0x7fn) | 0x80);
-    v >>= 7n;
-  }
-  out.push(Number(v));
-}
-
-function readVarint(buf: Uint8Array, i: { p: number }): bigint {
-  let v = 0n;
-  let shift = 0n;
-  for (;;) {
-    const b = takeByte(buf, i);
-    v |= BigInt(b & 0x7f) << shift;
-    if (!(b & 0x80)) return v;
-    shift += 7n;
-    if (shift > 63n) throw new Error("varint too long");
-  }
 }
 
 // --- base64url (environment-pure: no btoa/atob) ------------------------------
