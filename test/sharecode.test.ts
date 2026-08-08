@@ -13,8 +13,11 @@ import {
   MAX_MOVE_TIMEOUT_DAA,
   MIN_MOVE_TIMEOUT_DAA,
   ZERO_PK,
+  applyMove,
+  legalColumns,
   type State,
 } from "../app/src/shared/lib/game";
+import { game as joinedGame } from "./helpers";
 
 const P1 = "11".repeat(32);
 const P2 = "22".repeat(32);
@@ -95,15 +98,25 @@ describe("binary share codes", () => {
     expect(() => roundTrip(m)).toThrow("move count does not match the board");
   });
 
-  test("random states round-trip (property)", () => {
+  test("every state the rulebook itself can reach round-trips (property)", () => {
+    // The generator IS the rulebook: legal moves from a joined genesis, so
+    // the codec is pinned to exactly the states that can exist on-chain —
+    // unreachable boards (floating discs, miscounted moves) are rejected by
+    // validateReachableState instead of round-tripping.
     fc.assert(
       fc.property(
-        fc.array(fc.integer({ min: 0, max: 2 }), { minLength: CELLS, maxLength: CELLS }),
+        fc.array(fc.nat(6), { maxLength: CELLS }),
         fc.boolean(),
         fc.bigInt({ min: 1n, max: 1_000_000_000_000n }),
-        (cells, joined, stake) => {
-          const board = Uint8Array.from(cells);
-          const m = match({ p2: joined ? P2 : ZERO_PK, board, moveCount: cells.filter((c) => c !== 0).length, stake });
+        (seeds, open, stake) => {
+          let s = joinedGame();
+          if (!open)
+            for (const seed of seeds) {
+              const cols = legalColumns(s);
+              if (!cols.length) break;
+              s = applyMove(s, cols[seed % cols.length]!);
+            }
+          const m = open ? match({ stake }) : match({ ...s, stake });
           expectEqual(m, roundTrip(m));
         },
       ),
@@ -355,9 +368,9 @@ describe("share-code hardening", () => {
   test("out-of-range timing is rejected: trap clock, hostage clock, clock-flipping deadline", () => {
     // The covenant's join gates, applied at the decoder.
     const zero = match({ p2: P2, moveTimeout: 0 }); // forces the timing extension
-    expect(() => roundTrip(zero)).toThrow("bad move timeout");
+    expect(() => roundTrip(zero)).toThrow("move timeout below minimum");
     const trap = match({ p2: P2, moveTimeout: MIN_MOVE_TIMEOUT_DAA - 1 });
-    expect(() => roundTrip(trap)).toThrow("bad move timeout");
+    expect(() => roundTrip(trap)).toThrow("move timeout below minimum");
     const hostage = match({ p2: P2, moveTimeout: MAX_MOVE_TIMEOUT_DAA + 1 });
     expect(() => roundTrip(hostage)).toThrow("bad move timeout");
     const flipped = match({ p2: P2, deadline: DEADLINE_LIMIT });

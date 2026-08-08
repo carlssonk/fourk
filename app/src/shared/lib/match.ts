@@ -5,7 +5,14 @@
  */
 
 import { z } from "zod";
-import { CELLS, MOVE_TIMEOUT_DAA, ZERO_PK, isOpen, type State } from "./game";
+import {
+  CELLS,
+  MOVE_TIMEOUT_DAA,
+  ZERO_PK,
+  isOpen,
+  validateReachableState,
+  type State,
+} from "./game";
 import type { SimulCore } from "../modes/fourk/core";
 import { simulFromFlatJson, simulToFlatJson } from "../modes/fourk/wire";
 import {
@@ -221,6 +228,9 @@ export function matchFromJson(json: string): Match {
     deadline: raw.deadline ?? 0,
   };
   if (raw.phase === 0 && state.p2 !== ZERO_PK) throw new Error("bad match file: open with p2 set");
+  // Stored records are untrusted (localStorage, legacy share codes) — the
+  // rulebook's reachability invariants apply here too, from their one home.
+  validateReachableState(state);
   return {
     network: raw.network,
     covenantId: raw.covenantId,

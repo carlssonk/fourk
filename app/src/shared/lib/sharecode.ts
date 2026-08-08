@@ -40,9 +40,9 @@ import {
   CELLS,
   DEADLINE_LIMIT,
   MAX_MOVE_TIMEOUT_DAA,
-  MIN_MOVE_TIMEOUT_DAA,
   MOVE_TIMEOUT_DAA,
   ZERO_PK,
+  validateReachableState,
   type State,
 } from "./game";
 import { ZERO_HASH, type SimulCore } from "../modes/fourk/core";
@@ -144,19 +144,16 @@ export function decodeMatchBinary(buf: Uint8Array): Match {
   }
 
   const stake = readVarint(buf, i);
-  // The derivations are covenant-enforced invariants (join doubles the pot
-  // exactly, moves preserve it, moveCount tracks the disc count in every
-  // mode), so a code whose stored fields diverge from them describes a match
-  // that cannot exist on-chain — and the stored value is what the join flow
-  // DEBITS, so an inflated one is a "the number you agreed to is not the
-  // number we spend" attack. Reject divergence outright.
+  // The pot derivation is a covenant-enforced invariant (join doubles it
+  // exactly, moves preserve it), so a code whose stored value diverges
+  // describes a match that cannot exist on-chain — and the stored value is
+  // what the join flow DEBITS, so an inflated one is a "the number you
+  // agreed to is not the number we spend" attack. Reject divergence outright.
+  // (Board/moveCount divergence is validateReachableState's job, below.)
   const derivedValue = p2Joined ? stake * 2n : stake;
   const value = valueStored ? readVarint(buf, i) : derivedValue;
   if (value !== derivedValue) throw new Error("value does not match the stake in share code");
-  const derivedMoves = countDiscs(board);
-  const moveCount = moveStored ? takeSmallInt(buf, i, CELLS, "move count") : derivedMoves;
-  if (moveCount !== derivedMoves)
-    throw new Error("move count does not match the board in share code");
+  const moveCount = moveStored ? takeSmallInt(buf, i, CELLS, "move count") : countDiscs(board);
 
   let profiles: Match["profiles"];
   let p1Blue = false;
@@ -173,14 +170,10 @@ export function decodeMatchBinary(buf: Uint8Array): Match {
       if (pf & 2) profiles.p2 = takeProfile(buf, i);
     }
     if (pf & 8) {
-      // The covenant's own join gates, applied at the door: a clock below
-      // the floor is a trap, above the ceiling a hostage lock, and a
-      // deadline at/past the consensus lock-time threshold flips from DAA
-      // score to unix-ms. (Whether the deadline has already PASSED needs
-      // the chain's clock — the seat-taking flow checks that.)
+      // Parse-level bounds; the covenant's join gates re-check the full
+      // ranges in validateReachableState below.
       moveTimeout = takeSmallInt(buf, i, MAX_MOVE_TIMEOUT_DAA, "move timeout");
       deadline = takeSmallInt(buf, i, DEADLINE_LIMIT - 1, "deadline");
-      if (moveTimeout < MIN_MOVE_TIMEOUT_DAA) throw new Error("bad move timeout in share code");
     }
     if (pf & 16) simul = takeModeSection(buf, i).simul;
   }
@@ -201,6 +194,9 @@ export function decodeMatchBinary(buf: Uint8Array): Match {
     throw new Error("open match with round state in share code");
 
   const state: State = { board, moveCount, p1, p2, stake, moveTimeout, deadline };
+  // Share codes are untrusted input — hold the state to the rulebook's own
+  // reachability invariants, in their one home.
+  validateReachableState(state);
   return {
     network,
     covenantId,

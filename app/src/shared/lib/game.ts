@@ -20,6 +20,7 @@ import {
   isOpen,
   playerToMove,
   pubkeyOf,
+  validateReachableState,
   type State,
 } from "../../../../src/state";
 import { DIRS, move, verifyLine, type LineWitness } from "../../../../src/rules";
@@ -38,6 +39,7 @@ export {
   heightOf,
   isOpen,
   playerToMove,
+  validateReachableState,
   DIRS,
 };
 export type { State, LineWitness };

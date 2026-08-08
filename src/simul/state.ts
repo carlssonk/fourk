@@ -29,6 +29,7 @@ import {
   ZERO_PK,
   cellIndex,
   isPubKey,
+  validateTimingGates,
 } from "../state.js";
 
 /** 32-byte "no commitment" sentinel, lowercase hex (like ZERO_PK). */
@@ -150,9 +151,71 @@ export function isBoardFull(board: Uint8Array): boolean {
   return true;
 }
 
+// --- Reachability ------------------------------------------------------------
+
+const isCommitmentHex = (h: string): boolean => /^[0-9a-f]{64}$/.test(h);
+
+/**
+ * The simul counterpart of validateReachableState (../state.ts): the
+ * invariants every state reachable from a legal genesis satisfies, called by
+ * every decoder of untrusted simul state.
+ */
+export function validateReachableSimulState(s: SimulState): void {
+  if (!isPubKey(s.p1) || s.p1 === ZERO_PK) throw new Error("invalid p1 pubkey");
+  if (s.p2 !== ZERO_PK && (!isPubKey(s.p2) || s.p2 === s.p1)) throw new Error("invalid p2 pubkey");
+  if (s.board.length !== CELLS) throw new Error("bad board length");
+  for (let c = 0; c < COLS; c++) {
+    let aboveTop = false;
+    for (let r = 0; r < ROWS; r++) {
+      const cell = s.board[cellIndex(c, r)]!;
+      if (cell !== EMPTY && cell !== P1_DISC && cell !== P2_DISC)
+        throw new Error("bad cell value");
+      if (cell === EMPTY) aboveTop = true;
+      else if (aboveTop) throw new Error("floating disc");
+    }
+  }
+  if (!Number.isInteger(s.round) || s.round < 0) throw new Error("bad round");
+  if (!isCommitmentHex(s.commit1) || !isCommitmentHex(s.commit2))
+    throw new Error("bad commitment");
+  if (!Number.isInteger(s.reveal1) || s.reveal1 < 0 || s.reveal1 > COLS)
+    throw new Error("bad reveal value");
+  if (!Number.isInteger(s.reveal2) || s.reveal2 < 0 || s.reveal2 > COLS)
+    throw new Error("bad reveal value");
+  // The second reveal resolves in the same transition — a stored state never
+  // holds two, and a reveal has always zeroed its own commitment slot.
+  if (s.reveal1 !== 0 && s.reveal2 !== 0) throw new Error("two reveals in stored state");
+  if (s.reveal1 !== 0 && s.commit1 !== ZERO_HASH) throw new Error("reveal with live commitment");
+  if (s.reveal2 !== 0 && s.commit2 !== ZERO_HASH) throw new Error("reveal with live commitment");
+  if (s.pendingWin !== 0 && s.pendingWin !== 1 && s.pendingWin !== 2)
+    throw new Error("bad pending win value");
+  // claimWin zeroes the round slots — the game is over except for the contest.
+  if (
+    s.pendingWin !== 0 &&
+    (s.commit1 !== ZERO_HASH || s.commit2 !== ZERO_HASH || s.reveal1 !== 0 || s.reveal2 !== 0)
+  )
+    throw new Error("pending win with round slots");
+  if (isSimulOpen(s)) {
+    // Nothing can have happened before a join.
+    if (
+      s.round !== 0 ||
+      s.commit1 !== ZERO_HASH ||
+      s.commit2 !== ZERO_HASH ||
+      s.reveal1 !== 0 ||
+      s.reveal2 !== 0 ||
+      s.pendingWin !== 0
+    )
+      throw new Error("open match with round state");
+    for (const cell of s.board) if (cell !== EMPTY) throw new Error("open match with discs");
+  }
+  if (s.stake <= 0n) throw new Error("stake must be positive");
+  validateTimingGates(s.moveTimeout, s.deadline);
+}
+
 // --- Canonical serialization -------------------------------------------------
 //
-// Fixed layout, one valid encoding per state, mirroring ../state.ts.
+// Fixed layout, one valid encoding per state, mirroring ../state.ts — like it
+// a contract-layout mirror for the harness, not the app's wire format (the
+// share code's mode section and match.json carry simul state in the app).
 // Layout: board[42] | round u8 | p1[32] | p2[32] | commit1[32] | commit2[32]
 //       | reveal1 u8 | reveal2 u8 | pendingWin u8 | stake u64le
 //       | moveTimeout u32le | deadline u64le.
@@ -179,30 +242,23 @@ export function encodeSimulState(s: SimulState): Uint8Array {
 
 export function decodeSimulState(buf: Uint8Array): SimulState {
   if (buf.length !== SIMUL_STATE_BYTES) throw new Error("bad state length");
-  const board = buf.slice(0, CELLS);
-  for (const b of board) {
-    if (b !== EMPTY && b !== P1_DISC && b !== P2_DISC) throw new Error("bad cell value");
-  }
-  const reveal1 = buf[CELLS + 129]!;
-  const reveal2 = buf[CELLS + 130]!;
-  if (reveal1 > COLS || reveal2 > COLS) throw new Error("bad reveal value");
-  const pendingWin = buf[CELLS + 131]!;
-  if (pendingWin > 2) throw new Error("bad pending win value");
   const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-  return {
-    board,
+  const s: SimulState = {
+    board: buf.slice(0, CELLS),
     round: buf[CELLS]!,
     p1: bytesToHex(buf.slice(CELLS + 1, CELLS + 33)),
     p2: bytesToHex(buf.slice(CELLS + 33, CELLS + 65)),
     commit1: bytesToHex(buf.slice(CELLS + 65, CELLS + 97)),
     commit2: bytesToHex(buf.slice(CELLS + 97, CELLS + 129)),
-    reveal1,
-    reveal2,
-    pendingWin,
+    reveal1: buf[CELLS + 129]!,
+    reveal2: buf[CELLS + 130]!,
+    pendingWin: buf[CELLS + 131]!,
     stake: view.getBigUint64(CELLS + 132, true),
     moveTimeout: view.getUint32(CELLS + 140, true),
     deadline: Number(view.getBigUint64(CELLS + 144, true)),
   };
+  validateReachableSimulState(s);
+  return s;
 }
 
 function hexToBytes(hex: string): Uint8Array {

@@ -136,11 +136,64 @@ export function pot(s: State): bigint {
   return isOpen(s) ? s.stake : 2n * s.stake;
 }
 
+// --- Reachability ------------------------------------------------------------
+
+/**
+ * The join-time genesis gates on timing, shared by every decoder: a clock
+ * below the floor is a trap, above the ceiling a hostage lock, and a deadline
+ * at/past the consensus lock-time threshold flips from DAA score to unix-ms.
+ * A zero deadline is tolerated for records from before deadlines were
+ * mandatory. (Whether a deadline has already PASSED needs the chain's clock —
+ * that check lives at the seat-taking flow.)
+ */
+export function validateTimingGates(moveTimeout: number, deadline: number): void {
+  if (!Number.isInteger(moveTimeout) || moveTimeout < MIN_MOVE_TIMEOUT_DAA)
+    throw new Error("move timeout below minimum");
+  if (moveTimeout > MAX_MOVE_TIMEOUT_DAA) throw new Error("move timeout above maximum");
+  if (!Number.isInteger(deadline) || deadline < 0 || deadline >= DEADLINE_LIMIT)
+    throw new Error("bad deadline");
+}
+
+/**
+ * The invariants every state reachable from a legal genesis satisfies — the
+ * one home for them: every decoder of untrusted state (the canonical codec
+ * below, the share code, match.json) calls this instead of re-deriving its
+ * own subset. Mode-agnostic: both rule sets keep moveCount equal to the
+ * number of discs on the board (classic never removes a disc; fourk keeps
+ * the count in step at resolution, including the vanish edge).
+ */
+export function validateReachableState(s: State): void {
+  if (!isPubKey(s.p1) || s.p1 === ZERO_PK) throw new Error("invalid p1 pubkey");
+  if (s.p2 !== ZERO_PK && (!isPubKey(s.p2) || s.p2 === s.p1)) throw new Error("invalid p2 pubkey");
+  if (s.board.length !== CELLS) throw new Error("bad board length");
+  let discs = 0;
+  for (let c = 0; c < COLS; c++) {
+    let aboveTop = false;
+    for (let r = 0; r < ROWS; r++) {
+      const cell = s.board[cellIndex(c, r)]!;
+      if (cell !== EMPTY && cell !== P1_DISC && cell !== P2_DISC)
+        throw new Error("bad cell value");
+      if (cell === EMPTY) aboveTop = true;
+      else if (aboveTop) throw new Error("floating disc");
+      else discs++;
+    }
+  }
+  if (!Number.isInteger(s.moveCount) || s.moveCount !== discs)
+    throw new Error("move count does not match the board");
+  if (isOpen(s) && s.moveCount !== 0) throw new Error("open match with discs on the board");
+  if (s.stake <= 0n) throw new Error("stake must be positive");
+  validateTimingGates(s.moveTimeout, s.deadline);
+}
+
 // --- Canonical serialization -------------------------------------------------
 //
-// Fixed layout, one valid encoding per state — the same guarantee the
-// Silverscript compiler gives by splicing fixed-size fields into the redeem
-// script. Layout: board[42] | moveCount u8 | p1[32] | p2[32] | stake u64le
+// Fixed layout, one valid encoding per state — a byte-level MIRROR of the
+// contract's state (the Silverscript compiler splices these fixed-size fields
+// into the redeem-script preimage), kept for the harness and for eyeballing
+// layouts. It is NOT the app's wire format: invite links travel as the
+// compact share code and stored matches as match.json (app/src/shared/lib),
+// all of which enforce the same reachability through validateReachableState.
+// Layout: board[42] | moveCount u8 | p1[32] | p2[32] | stake u64le
 //               | moveTimeout u32le | deadline u64le.
 
 export const STATE_BYTES = CELLS + 1 + 32 + 32 + 8 + 4 + 8; // 127
@@ -160,13 +213,9 @@ export function encodeState(s: State): Uint8Array {
 
 export function decodeState(buf: Uint8Array): State {
   if (buf.length !== STATE_BYTES) throw new Error("bad state length");
-  const board = buf.slice(0, CELLS);
-  for (const b of board) {
-    if (b !== EMPTY && b !== P1_DISC && b !== P2_DISC) throw new Error("bad cell value");
-  }
   const view = new DataView(buf.buffer, buf.byteOffset);
-  return {
-    board,
+  const s: State = {
+    board: buf.slice(0, CELLS),
     moveCount: buf[CELLS]!,
     p1: bytesToHex(buf.slice(CELLS + 1, CELLS + 33)),
     p2: bytesToHex(buf.slice(CELLS + 33, CELLS + 65)),
@@ -174,6 +223,8 @@ export function decodeState(buf: Uint8Array): State {
     moveTimeout: view.getUint32(CELLS + 73, true),
     deadline: Number(view.getBigUint64(CELLS + 77, true)),
   };
+  validateReachableState(s);
+  return s;
 }
 
 function hexToBytes(hex: string): Uint8Array {
