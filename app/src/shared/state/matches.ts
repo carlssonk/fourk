@@ -16,16 +16,7 @@ function upsert(list: Match[], m: Match): Match[] {
   return [m, ...list.filter((x) => x.covenantId !== m.covenantId)];
 }
 
-// The home screen is the hub: a bare root URL always lands there. A #g= link
-// to a game we already track reopens that game directly (this is what makes a
-// mid-game refresh seamless); a link to an unknown game becomes a pending
-// invite. All read once at startup, outside React.
-const initialCurrent = knownMatchFromUrl();
-// If the URL delivered a fresher state than we had stored, persist it.
-const initialMatches = initialCurrent ? upsert(loadMatches(), initialCurrent) : loadMatches();
-if (initialCurrent) persistMatches(initialMatches);
-
-const matchesBase = atom(initialMatches);
+const matchesBase = atom<Match[]>([]);
 
 /** All stored matches, most recently touched first. Writes persist. */
 export const matchesAtom = atom(
@@ -37,10 +28,10 @@ export const matchesAtom = atom(
 );
 
 /** The match on screen, or null on the hub. */
-export const currentMatchAtom = atom<Match | null>(initialCurrent);
+export const currentMatchAtom = atom<Match | null>(null);
 
 /** An invite from the URL for a game we don't track yet. */
-export const pendingInviteAtom = atom<Match | null>(pendingInviteFromUrl());
+export const pendingInviteAtom = atom<Match | null>(null);
 
 /** Upsert into the stored list; the on-screen game follows if it's the same
  * one. Profiles, colour and a recorded result are merged, never dropped: a
@@ -104,56 +95,77 @@ export function clearInvite(): void {
   store.set(pendingInviteAtom, null);
 }
 
-// Mirror what's on screen into the URL fragment: the address bar is always a
-// valid share link, and a refresh or bookmark reopens the same view. An
-// invite stays in the URL until it's taken or declined, so refreshing
-// mid-prompt re-offers it.
-const shownAtom = atom((get) => get(pendingInviteAtom) ?? get(currentMatchAtom));
-writeUrlHash(store.get(shownAtom));
-store.sub(shownAtom, () => writeUrlHash(store.get(shownAtom)));
+/**
+ * Startup wiring (called once from initStateLayer, before first render):
+ * read the stored list and the URL, then keep both mirrored.
+ *
+ * The home screen is the hub: a bare root URL always lands there. A #g= link
+ * to a game we already track reopens that game directly (this is what makes
+ * a mid-game refresh seamless); a link to an unknown game becomes a pending
+ * invite.
+ */
+export function initMatches(): void {
+  const initialCurrent = knownMatchFromUrl();
+  // If the URL delivered a fresher state than we had stored, persist it.
+  const initialMatches = initialCurrent ? upsert(loadMatches(), initialCurrent) : loadMatches();
+  store.set(matchesBase, initialMatches);
+  if (initialCurrent) {
+    persistMatches(initialMatches);
+    store.set(currentMatchAtom, initialCurrent);
+  }
+  store.set(pendingInviteAtom, pendingInviteFromUrl());
 
-// Cross-tab: another tab's saves land here via storage events (which only
-// fire in OTHER tabs, and only when the value actually changed — no echo
-// loop as long as we adopt without re-saving, hence matchesBase, not
-// matchesAtom). The on-screen game follows when the other tab has a fresher
-// take on it; a match removed elsewhere stays on screen until the player
-// leaves it themselves.
-window.addEventListener("storage", (ev) => {
-  if (ev.key !== LIST_KEY) return;
-  const list = loadMatches();
-  store.set(matchesBase, list);
-  const cur = store.get(currentMatchAtom);
-  if (!cur) return;
-  const updated = list.find((m) => m.covenantId === cur.covenantId);
-  // fresherOf prefers its first argument on equal moveCount, so a
-  // result/profile recorded by the other tab wins over our stale copy.
-  if (updated) store.set(currentMatchAtom, fresherOf(updated, cur));
-});
+  // Mirror what's on screen into the URL fragment: the address bar is always
+  // a valid share link, and a refresh or bookmark reopens the same view. An
+  // invite stays in the URL until it's taken or declined, so refreshing
+  // mid-prompt re-offers it.
+  const shownAtom = atom((get) => get(pendingInviteAtom) ?? get(currentMatchAtom));
+  writeUrlHash(store.get(shownAtom));
+  store.sub(shownAtom, () => writeUrlHash(store.get(shownAtom)));
 
-// And the reverse: pasting a #g= link into the address bar of an already-open
-// page is a same-document navigation — no reload, only a hashchange. Route it
-// exactly like a fresh load: a known game reopens (at whichever state is
-// fresher, so pasting a link for the on-screen game doubles as a catch-up
-// import), an unknown one becomes a pending invite, and a cleared hash
-// returns to the hub. The mirror above writes via replaceState, which never
-// fires this event — no feedback loop.
-window.addEventListener("hashchange", () => {
-  const known = knownMatchFromUrl();
-  if (known) {
-    store.set(pendingInviteAtom, null);
-    openMatch(known);
-    return;
-  }
-  const invite = pendingInviteFromUrl();
-  if (invite) {
-    store.set(currentMatchAtom, null);
-    store.set(pendingInviteAtom, invite);
-    return;
-  }
-  // A hash that parses to nothing: an emptied fragment means "back to the
-  // hub"; garbage is ignored and the next state change rewrites the URL.
-  if (!window.location.hash) {
-    store.set(pendingInviteAtom, null);
-    store.set(currentMatchAtom, null);
-  }
-});
+  // Cross-tab: another tab's saves land here via storage events (which only
+  // fire in OTHER tabs, and only when the value actually changed — no echo
+  // loop as long as we adopt without re-saving, hence matchesBase, not
+  // matchesAtom). The on-screen game follows when the other tab has a fresher
+  // take on it; a match removed elsewhere stays on screen until the player
+  // leaves it themselves.
+  window.addEventListener("storage", (ev) => {
+    if (ev.key !== LIST_KEY) return;
+    const list = loadMatches();
+    store.set(matchesBase, list);
+    const cur = store.get(currentMatchAtom);
+    if (!cur) return;
+    const updated = list.find((m) => m.covenantId === cur.covenantId);
+    // fresherOf prefers its first argument on equal moveCount, so a
+    // result/profile recorded by the other tab wins over our stale copy.
+    if (updated) store.set(currentMatchAtom, fresherOf(updated, cur));
+  });
+
+  // And the reverse: pasting a #g= link into the address bar of an already-
+  // open page is a same-document navigation — no reload, only a hashchange.
+  // Route it exactly like a fresh load: a known game reopens (at whichever
+  // state is fresher, so pasting a link for the on-screen game doubles as a
+  // catch-up import), an unknown one becomes a pending invite, and a cleared
+  // hash returns to the hub. The mirror above writes via replaceState, which
+  // never fires this event — no feedback loop.
+  window.addEventListener("hashchange", () => {
+    const known = knownMatchFromUrl();
+    if (known) {
+      store.set(pendingInviteAtom, null);
+      openMatch(known);
+      return;
+    }
+    const invite = pendingInviteFromUrl();
+    if (invite) {
+      store.set(currentMatchAtom, null);
+      store.set(pendingInviteAtom, invite);
+      return;
+    }
+    // A hash that parses to nothing: an emptied fragment means "back to the
+    // hub"; garbage is ignored and the next state change rewrites the URL.
+    if (!window.location.hash) {
+      store.set(pendingInviteAtom, null);
+      store.set(currentMatchAtom, null);
+    }
+  });
+}

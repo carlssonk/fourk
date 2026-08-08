@@ -1,23 +1,12 @@
 import { atom, getDefaultStore } from "jotai";
-import * as cov from "../lib/covenant";
-import { ensureFunds } from "../lib/dispenser";
 import { friendlyError } from "../lib/errors";
 import { ZERO_PK } from "../lib/game";
 import { FREE_STAKE, SOMPI_PER_KAS, isStaked, saveCheckpoint, type Match } from "../lib/match";
 import { fresherOf } from "../modes/registry";
 import { refreshBalance } from "./balance";
+import { realDeps, type Deps } from "./deps";
 import { clearInvite, matchesAtom, openMatch } from "./matches";
 import { getDiscColor, getGameMode, getMatchTiming, getProfile, getStake } from "./profile";
-import { getRpc } from "./rpc";
-import {
-  adoptAccount,
-  assertStorageWritable,
-  hasOwnedAccount,
-  matchWallet,
-  ownedWallet,
-  phraseWallet,
-  signingWallet,
-} from "./wallet";
 
 /** Fee buffer reserved alongside a stake — covers a whole game's worth of
  * transaction fees. The account panel's Max also holds this back while any
@@ -77,10 +66,10 @@ export async function runAction(action: () => Promise<void>): Promise<void> {
 
 /** The body of newGame, bare so other actions can chain into it (e.g. a
  * kick flows straight into hosting a fresh game). Call inside `runAction`. */
-export async function createGame(): Promise<void> {
+export async function createGame(deps: Deps = realDeps): Promise<void> {
   // A remembered stake means nothing without an account to pay it from —
   // a guest always hosts free, whatever the setting says.
-  const stakeSetting = hasOwnedAccount() ? getStake() : 0n;
+  const stakeSetting = deps.account.hasOwnedAccount() ? getStake() : 0n;
   const staked = stakeSetting > 0n;
   const stake = staked ? stakeSetting : FREE_STAKE;
   startConnecting("Creating your game", [
@@ -91,17 +80,17 @@ export async function createGame(): Promise<void> {
   // Free games are seated by the invisible guest key and paid for by the
   // dispenser; staked games are seated by the player's own account. The two
   // pots of money never meet.
-  const { key } = signingWallet({ staked });
-  const rpc = await getRpc();
+  const { key } = deps.account.signingWallet({ staked });
+  await deps.chain.connect();
   advanceConnecting();
-  await ensureFunds(rpc, key, stake + FEE_MARGIN, { staked });
+  await deps.chain.ensureFunds(key, stake + FEE_MARGIN, { staked });
   advanceConnecting();
   // Checkpoint the chain from before the open: a join spends the genesis
   // UTXO, and scanning blocks forward from here finds it even if this tab
   // is long gone by then (the watcher persists fresher checkpoints while
   // it runs, this is the floor).
-  const preOpen = await cov.chainCheckpoint(rpc);
-  const match = await cov.openMatch(rpc, key, stake, getMatchTiming(), getGameMode());
+  const preOpen = await deps.chain.chainCheckpoint();
+  const match = await deps.chain.openMatch(key, stake, getMatchTiming(), getGameMode());
   saveCheckpoint(match.covenantId, preOpen);
   const me = getProfile();
   // My identity and disc colour travel to the opponent inside the link;
@@ -130,20 +119,19 @@ const SWEEP_FLOOR = SOMPI_PER_KAS / 20n;
  *
  * Returns false if it's already the active account (no reload).
  */
-export async function switchAccount(phrase: string): Promise<boolean> {
-  const outgoing = ownedWallet();
-  const incoming = phraseWallet(phrase);
+export async function switchAccount(phrase: string, deps: Deps = realDeps): Promise<boolean> {
+  const outgoing = deps.account.ownedWallet();
+  const incoming = deps.account.phraseWallet(phrase);
   if (outgoing?.myPk === incoming.myPk) return false;
   // If this browser can't persist the new account, find out BEFORE the
   // balance moves toward it — a sweep followed by a failed save would leave
   // the funds on a phrase the app immediately forgot it was adopting.
-  assertStorageWritable();
+  deps.account.assertStorageWritable();
   if (outgoing) {
-    const rpc = await getRpc();
-    const balance = await cov.walletBalance(rpc, cov.walletAddress(outgoing.key));
+    const balance = await deps.chain.walletBalance(outgoing.key);
     if (balance >= SWEEP_FLOOR) {
       try {
-        await cov.sendTo(rpc, outgoing.key, cov.walletAddress(incoming.key), "all");
+        await deps.chain.sendTo(outgoing.key, incoming.key, "all");
       } catch (e) {
         // A throw here does NOT mean the sweep didn't land — a dropped
         // socket can eat the response after the node accepted the tx. Ask
@@ -153,7 +141,7 @@ export async function switchAccount(phrase: string): Promise<boolean> {
         for (let attempt = 0; attempt < 3 && after === null; attempt++) {
           await new Promise((r) => setTimeout(r, 1500));
           try {
-            after = await cov.walletBalance(rpc, cov.walletAddress(outgoing.key));
+            after = await deps.chain.walletBalance(outgoing.key);
           } catch {
             /* still unreachable — try again */
           }
@@ -165,11 +153,11 @@ export async function switchAccount(phrase: string): Promise<boolean> {
       }
     }
   }
-  return adoptAccount(phrase); // reloads
+  return deps.account.adoptAccount(phrase); // reloads
 }
 
 /** Sit down at an invite — or reopen a known game, or spectate. */
-export const takeSeat = (invite: Match): Promise<void> =>
+export const takeSeat = (invite: Match, deps: Deps = realDeps): Promise<void> =>
   runAction(async () => {
     clearInvite();
     const known = store.get(matchesAtom).find((m) => m.covenantId === invite.covenantId);
@@ -183,31 +171,31 @@ export const takeSeat = (invite: Match): Promise<void> =>
     // we know we're joining: a guest opening a staked link is a spectator,
     // and asking for an owned account there would throw at them.
     const seatOpen = invite.state.p2 === ZERO_PK;
-    const iAmHost = seatOpen && matchWallet(invite)?.myPk === invite.state.p1;
+    const iAmHost = seatOpen && deps.account.matchWallet(invite)?.myPk === invite.state.p1;
     if (seatOpen && !iAmHost) {
       const staked = isStaked(invite);
-      const { key } = signingWallet({ staked });
+      const { key } = deps.account.signingWallet({ staked });
       startConnecting("Joining the game", [
         "Connecting to the Kaspa network",
         staked ? "Placing your stake" : "Topping up your stake",
         "Taking your seat on-chain",
       ]);
-      const rpc = await getRpc();
+      await deps.chain.connect();
       // A deadline the chain has already passed (or nearly so) is a trap —
       // the host could sudden-death the pot back out from under us — and the
       // covenant cannot check it (script proves time passed, never time
       // remaining). Refuse before any funds move.
-      await cov.assertJoinableDeadline(rpc, invite);
+      await deps.chain.assertJoinableDeadline(invite);
       advanceConnecting();
-      await ensureFunds(rpc, key, invite.value + FEE_MARGIN, { staked });
+      await deps.chain.ensureFunds(key, invite.value + FEE_MARGIN, { staked });
       advanceConnecting();
       try {
         // Checkpoint from before the join: the host may act the moment they
         // see us arrive, and without a stored checkpoint the joiner's
         // watcher could never trace that spend (it would just sit stuck).
-        const preJoin = await cov.chainCheckpoint(rpc);
+        const preJoin = await deps.chain.chainCheckpoint();
         // My profile rides the join tx's payload so P1 learns who sat down.
-        const joined = await cov.joinMatch(rpc, key, invite, getProfile());
+        const joined = await deps.chain.joinMatch(key, invite, getProfile());
         saveCheckpoint(joined.covenantId, preJoin);
         openMatch(joined);
       } catch (e) {

@@ -2,7 +2,7 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { ErrorBoundary } from "@shared/components/ErrorBoundary";
 import { initSdk } from "@shared/lib/sdk";
-import { initRpc, reportError } from "@shared/state";
+import { initStateLayer, reportError } from "@shared/state";
 import App from "./App";
 import "@fontsource-variable/baloo-2";
 import "./styles.css";
@@ -13,7 +13,7 @@ window.addEventListener("unhandledrejection", (ev) => reportError(ev.reason));
 
 initSdk()
   .then(() => {
-    initRpc();
+    initStateLayer();
     root.render(
       <React.StrictMode>
         <ErrorBoundary>

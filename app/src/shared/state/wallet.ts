@@ -250,8 +250,11 @@ export function adoptAccount(phrase: string): boolean {
   return true;
 }
 
-// Cross-tab: another tab changed accounts; this tab's singletons and
-// watchers all hold the old keys — reload to adopt them.
-window.addEventListener("storage", (ev) => {
-  if (ev.key === ACCOUNT_STORAGE) location.reload();
-});
+/** Cross-tab (called once from initStateLayer): another tab changed
+ * accounts; this tab's singletons and watchers all hold the old keys —
+ * reload to adopt them. */
+export function wireAccountCrossTab(): void {
+  window.addEventListener("storage", (ev) => {
+    if (ev.key === ACCOUNT_STORAGE) location.reload();
+  });
+}

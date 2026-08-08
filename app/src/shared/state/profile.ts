@@ -9,9 +9,19 @@ import type { GameModeKey } from "../modes/types";
 const KEY = "fourk.profile";
 const store = getDefaultStore();
 
+/** localStorage that reads null where storage is unavailable (node tests,
+ * lockdown browsers) — every atom below starts at its default there. */
+function readItem(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
 function load(): PlayerProfile {
   try {
-    const raw = JSON.parse(localStorage.getItem(KEY) ?? "");
+    const raw = JSON.parse(readItem(KEY) ?? "");
     if (typeof raw.name === "string" && /^[0-9a-f]{16}$/.test(raw.avatar)) {
       return { name: trimName(raw.name), avatar: raw.avatar };
     }
@@ -44,7 +54,7 @@ const COLOR_KEY = "fourk.p1color";
  * preference wins. Pure paint either way: on-chain discs are only 1
  * (creator) and 2 (joiner), and the host moves first regardless. */
 function loadDiscColor(): "red" | "blue" {
-  return localStorage.getItem(COLOR_KEY) === "red" ? "red" : "blue";
+  return readItem(COLOR_KEY) === "red" ? "red" : "blue";
 }
 
 export const discColorAtom = atom<"red" | "blue">(loadDiscColor());
@@ -66,7 +76,7 @@ export type GameMode = GameModeKey;
 
 /** The mode hosted games open in — any registered mode; the registry's
  * default (the signature fourk mode) when unset or unrecognized. */
-export const gameModeAtom = atom<GameModeKey>(parseModeKey(localStorage.getItem(MODE_KEY)));
+export const gameModeAtom = atom<GameModeKey>(parseModeKey(readItem(MODE_KEY)));
 
 export function getGameMode(): GameModeKey {
   return store.get(gameModeAtom);
@@ -83,7 +93,7 @@ const STAKE_KEY = "fourk.stake";
 
 function loadStake(): bigint {
   try {
-    const v = BigInt(localStorage.getItem(STAKE_KEY) ?? "0");
+    const v = BigInt(readItem(STAKE_KEY) ?? "0");
     return v > 0n ? v : 0n;
   } catch {
     return 0n;
@@ -110,7 +120,7 @@ export function saveStake(sompi: bigint): void {
 const TIMEOUT_KEY = "fourk.movetimeout";
 
 function loadDaa(key: string, fallback: number, min = 0, max = Number.MAX_SAFE_INTEGER): number {
-  const raw = localStorage.getItem(key);
+  const raw = readItem(key);
   const n = raw === null ? NaN : Number(raw);
   return Number.isInteger(n) && n >= min && n <= max ? n : fallback;
 }
@@ -143,17 +153,19 @@ export function getMatchTiming(): MatchTiming {
   return { moveTimeout, totalCap: Math.max(MIN_TOTAL_CAP_DAA, TOTAL_CAP_CLOCKS * moveTimeout) };
 }
 
-// Cross-tab: adopt identity/settings saved from another tab (storage events
-// only fire in other tabs, so re-loading here can't echo).
-window.addEventListener("storage", (ev) => {
-  if (ev.key === KEY) store.set(profileAtom, load());
-  else if (ev.key === COLOR_KEY) store.set(discColorAtom, loadDiscColor());
-  else if (ev.key === TIMEOUT_KEY)
-    store.set(
-      moveTimeoutAtom,
-      loadDaa(TIMEOUT_KEY, MOVE_TIMEOUT_DAA, MIN_MOVE_TIMEOUT_DAA, MAX_MOVE_TIMEOUT_DAA),
-    );
-  else if (ev.key === STAKE_KEY) store.set(stakeAtom, loadStake());
-  else if (ev.key === MODE_KEY)
-    store.set(gameModeAtom, parseModeKey(localStorage.getItem(MODE_KEY)));
-});
+/** Cross-tab (called once from initStateLayer): adopt identity/settings
+ * saved from another tab (storage events only fire in other tabs, so
+ * re-loading here can't echo). */
+export function wireProfileCrossTab(): void {
+  window.addEventListener("storage", (ev) => {
+    if (ev.key === KEY) store.set(profileAtom, load());
+    else if (ev.key === COLOR_KEY) store.set(discColorAtom, loadDiscColor());
+    else if (ev.key === TIMEOUT_KEY)
+      store.set(
+        moveTimeoutAtom,
+        loadDaa(TIMEOUT_KEY, MOVE_TIMEOUT_DAA, MIN_MOVE_TIMEOUT_DAA, MAX_MOVE_TIMEOUT_DAA),
+      );
+    else if (ev.key === STAKE_KEY) store.set(stakeAtom, loadStake());
+    else if (ev.key === MODE_KEY) store.set(gameModeAtom, parseModeKey(readItem(MODE_KEY)));
+  });
+}

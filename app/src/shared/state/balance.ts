@@ -41,16 +41,17 @@ export async function refreshBalance(): Promise<void> {
   }
 }
 
-// --- Wiring ------------------------------------------------------------------
+// --- Wiring (called once from initStateLayer) --------------------------------
 
 /** Slow enough to be free, fast enough that a deposit shows up while the
- * player is still looking at the screen. Both calls below no-op for guests
- * and before the rpc exists. */
+ * player is still looking at the screen. Every trigger below no-ops for
+ * guests and before the rpc exists. */
 const POLL_MS = 10_000;
 
-setInterval(() => void refreshBalance(), POLL_MS);
-window.addEventListener("focus", () => void refreshBalance());
-
-// First connection (and any reconnect that swaps the client): show a number
-// straight away rather than waiting out a poll.
-store.sub(rpcClientAtom, () => void refreshBalance());
+export function startBalancePolling(): void {
+  setInterval(() => void refreshBalance(), POLL_MS);
+  window.addEventListener("focus", () => void refreshBalance());
+  // First connection (and any reconnect that swaps the client): show a number
+  // straight away rather than waiting out a poll.
+  store.sub(rpcClientAtom, () => void refreshBalance());
+}
