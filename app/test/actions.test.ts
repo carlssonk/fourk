@@ -199,9 +199,13 @@ describe("createGame", () => {
     const signingWallet = vi.fn(() => walletOf("guest", GUEST_PK));
     await createGame(deps(chain, fakeAccount({ hasOwnedAccount: () => false, signingWallet })));
     expect(signingWallet).toHaveBeenCalledWith({ staked: false });
-    expect(chain.ensureFunds).toHaveBeenCalledWith(expect.anything(), FREE_STAKE + SOMPI_PER_KAS / 2n, {
-      staked: false,
-    });
+    expect(chain.ensureFunds).toHaveBeenCalledWith(
+      expect.anything(),
+      FREE_STAKE + SOMPI_PER_KAS / 2n,
+      {
+        staked: false,
+      },
+    );
     expect(chain.openMatch).toHaveBeenCalledWith(
       expect.anything(),
       FREE_STAKE,
@@ -217,9 +221,13 @@ describe("createGame", () => {
     const signingWallet = vi.fn(() => walletOf("owned", OWNED_PK));
     await createGame(deps(chain, fakeAccount({ signingWallet })));
     expect(signingWallet).toHaveBeenCalledWith({ staked: true });
-    expect(chain.ensureFunds).toHaveBeenCalledWith(expect.anything(), 5n * SOMPI_PER_KAS + SOMPI_PER_KAS / 2n, {
-      staked: true,
-    });
+    expect(chain.ensureFunds).toHaveBeenCalledWith(
+      expect.anything(),
+      5n * SOMPI_PER_KAS + SOMPI_PER_KAS / 2n,
+      {
+        staked: true,
+      },
+    );
     expect(chain.openMatch).toHaveBeenCalledWith(
       expect.anything(),
       5n * SOMPI_PER_KAS,

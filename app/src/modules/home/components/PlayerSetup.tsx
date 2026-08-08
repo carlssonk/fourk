@@ -104,25 +104,34 @@ export const PlayerSetup = ({
               {/* Your colour, beside your name: identity, not a match
                * setting — the opponent always takes the other one. */}
               {pickDiscColor && (
-                <>
-                  <div className="flex shrink-0 gap-1">
+                <div
+                  role="group"
+                  aria-label="your disc color"
+                  className="flex shrink-0 flex-col items-center gap-0.5"
+                >
+                  <div className="flex gap-1.5">
                     {(["blue", "red"] as const).map((c) => (
                       <button
                         key={c}
                         type="button"
-                        title={`your discs are ${c}`}
+                        title={discColor === c ? `your discs are ${c}` : `switch to ${c} discs`}
                         aria-label={`play as ${c}`}
                         aria-pressed={discColor === c}
                         onClick={() => saveDiscColor(c)}
                         className={`size-6 cursor-pointer rounded-full border-2 ${
                           c === "red" ? "bg-red" : "bg-blue"
-                        } ${discColor === c ? "border-ink" : "border-transparent opacity-40"}`}
+                        } ${
+                          discColor === c
+                            ? "border-ink ring-2 ring-ink/35"
+                            : "border-transparent opacity-45 hover:opacity-80"
+                        }`}
                       >
                         <KaspaStamp />
                       </button>
                     ))}
                   </div>
-                </>
+                  <span className="text-[10px] leading-none text-dim">your color</span>
+                </div>
               )}
             </div>
             <div className="grid grid-cols-2 gap-1.5">
@@ -173,8 +182,9 @@ export const PlayerSetup = ({
           </button>
         )}
         <button
-          className={`btn ${headlineLabel ? "btn-ghost" : ""} px-8 py-2.5 text-lg`}
+          className={`btn ${headlineLabel ? "btn-ghost" : ""} ${noName ? "btn-inert" : ""} px-8 py-2.5 text-lg`}
           disabled={busy}
+          aria-disabled={noName || undefined}
           onClick={() => {
             if (noName) {
               setNudged(true);

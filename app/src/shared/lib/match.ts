@@ -115,8 +115,10 @@ export const STAKE_PRESETS = [0n, 1n, 5n, 25n].map((k) => k * SOMPI_PER_KAS);
 export function fmtDaaDuration(daa: number): string {
   const mins = Math.round(daa / 600);
   if (mins < 60) return `${mins} min`;
-  const hours = mins / 60;
-  if (hours < 48) return Number.isInteger(hours) ? `${hours} h` : `${hours.toFixed(1)} h`;
+  // Round to a tenth BEFORE deciding it's whole: a cap a few blocks shy of
+  // 24 h must read "24 h", not "24.0 h".
+  const hours = Math.round(mins / 6) / 10;
+  if (hours < 48) return `${hours} h`;
   return `${Math.round(hours / 24)} d`;
 }
 

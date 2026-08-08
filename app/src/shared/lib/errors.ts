@@ -30,12 +30,18 @@ export function friendlyError(message: string): string {
     return "This browser isn't saving data (private mode?), so an account can't survive here — nothing was changed. Try a regular window.";
   if (message.includes("cannot cover") || message.includes("no UTXOs"))
     return "Your balance can't quite cover that right now — free games top themselves up in a minute; staked games need added funds.";
-  if (
+  if (isStaleMatchError(message))
+    return "That move crossed with another update — the board has refreshed, try again.";
+  return message;
+}
+
+/** The action was built on a game UTXO that no longer exists — it raced
+ * another transition (usually the opponent's, landing mid-click). */
+export function isStaleMatchError(message: string): boolean {
+  return (
     message.includes("orphan") ||
     message.includes("already spent") ||
     message.includes("missing outpoint") ||
     message.includes("game UTXO not found")
-  )
-    return "That move crossed with another update — the board has refreshed, try again.";
-  return message;
+  );
 }

@@ -42,12 +42,14 @@ export const PlayerPanel = ({
     <div
       className={`card relative flex w-40 shrink-0 items-center gap-2.5 px-3 py-2 ${active ? "border-accent" : ""}`}
     >
+      {/* Hung off the bottom edge: above the card it collides with the
+       * account chip in the shell header. */}
       {collisionPriority && (
         <span
           title={`If both players pick the same column this round, ${isMe ? "your" : `${name}'s`} disc lands underneath. Priority alternates every round.`}
-          className="absolute -top-2 right-2 cursor-help rounded-sm border border-line bg-panel px-1 text-[10px] leading-4 font-semibold text-accent"
+          className="absolute right-2 -bottom-2 cursor-help rounded-sm border border-line bg-panel px-1 text-[10px] leading-4 font-semibold text-accent"
         >
-          ▼ 1st
+          ▼ lands 1st
         </span>
       )}
       {open ? (
@@ -59,7 +61,15 @@ export const PlayerPanel = ({
       )}
       <div className="min-w-0 text-left">
         <div className={`truncate text-sm font-semibold ${open ? "text-dim" : ""}`} title={name}>
-          <span className={color === "red" ? "text-red" : "text-blue"}>●</span> {name}
+          {/* No dot on an empty seat — nobody owns the colour yet, and the
+           * dot's width is what ellipsized "Open seat". */}
+          {open ? (
+            name
+          ) : (
+            <>
+              <span className={color === "red" ? "text-red" : "text-blue"}>●</span> {name}
+            </>
+          )}
         </div>
         <div
           className={`h-5 font-mono text-sm ${

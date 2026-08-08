@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import * as cov from "@shared/lib/covenant";
 import { ensureFunds } from "@shared/lib/dispenser";
-import { CELLS, isOpen } from "@shared/lib/game";
+import { CELLS, ROWS, heightOf, isOpen } from "@shared/lib/game";
+import { isStaleMatchError } from "@shared/lib/errors";
 import { inviteLink } from "@shared/lib/invite";
 import { fmtKas, isStaked, type Match } from "@shared/lib/match";
 import { modeOf } from "@shared/modes/registry";
@@ -94,10 +95,14 @@ export const Game = ({ match }: Props) => {
   // Joined but nothing staked yet: the pre-game lobby, where either player
   // may still unwind the match on-chain and both stakes come back.
   const inLobby = mode.inLobby(match) && !result;
-  // The joiner's exit is covenant-gated on one move clock (anti-grief) —
-  // the same age math as the forfeit clock, counting from the join.
-  const withdrawClock = useMoveClock(match, inLobby && role === "p2");
-  const withdrawGated = role === "p2" && !withdrawClock.expired;
+  // One move clock from the join gates both lobby exits: the joiner's
+  // withdrawal is covenant-gated (anti-grief; the same age math as the
+  // forfeit clock), and the host's kick waits out the same clock in the UI —
+  // a red "Kick opponent" the second someone sits down reads as an accusation
+  // nobody has earned yet.
+  const lobbyClock = useMoveClock(match, inLobby && iAmPlayer);
+  const withdrawGated = role === "p2" && !lobbyClock.expired;
+  const kickHidden = role === "p1" && !lobbyClock.expired;
 
   // ONE optimistic record for both modes: the column just clicked, keyed to
   // the game UTXO it was played on — any fresh match state (our confirmation
@@ -153,24 +158,53 @@ export const Game = ({ match }: Props) => {
     return seat.key;
   };
 
+  /** Submit a drop against a specific match state, routing the outcome. */
+  const submitDrop = async (m: Match, col: number) => {
+    const key = seatKey();
+    const rpc = await getRpc();
+    const outcome = await mode.actions.drop(rpc, key, m, col);
+    if (outcome.kind === "ended") {
+      // End on the finished position (lighting up the winning line) —
+      // the covenant is terminal, so the watcher will never deliver it.
+      finish(outcome.message, outcome.match);
+    } else {
+      updateMatch(outcome.match);
+    }
+  };
+
   const drop = (col: number) => {
     setPending({ onTxid: match.txid, col });
     runAction(async () => {
       try {
-        const key = seatKey();
-        const rpc = await getRpc();
-        const outcome = await mode.actions.drop(rpc, key, match, col);
-        if (outcome.kind === "ended") {
-          // End on the finished position (lighting up the winning line) —
-          // the covenant is terminal, so the watcher will never deliver it.
-          finish(outcome.message, outcome.match);
-        } else {
-          updateMatch(outcome.match);
-        }
+        await submitDrop(match, col);
       } catch (e) {
-        // The chain said no — take the pick back and surface the error.
-        setPending(null);
-        throw e;
+        // A stale-UTXO rejection means the pick raced another transition
+        // (usually the opponent's, landing mid-click). The pick itself is
+        // still what the player wants: resync and replay it against the
+        // fresh state, and only hand the click back if it no longer fits
+        // there (column full, game over, not our move anymore).
+        if (!isStaleMatchError(String((e as Error)?.message ?? e))) {
+          setPending(null);
+          throw e;
+        }
+        const { status, match: next } = await cov.syncMatch(await getRpc(), match);
+        if (status === "advanced") updateMatch(next);
+        const replayable =
+          status === "advanced" &&
+          cov.isActionable(next, myPk) &&
+          heightOf(next.state.board, col) < ROWS;
+        if (!replayable) {
+          setPending(null);
+          throw e;
+        }
+        setPending({ onTxid: next.txid, col });
+        try {
+          await submitDrop(next, col);
+        } catch (e2) {
+          // The chain said no twice — take the pick back and surface it.
+          setPending(null);
+          throw e2;
+        }
       }
     });
   };
@@ -329,12 +363,20 @@ export const Game = ({ match }: Props) => {
                 : `Pot: ${fmtKas(match.value)} KAS — winner takes it`}
             </div>
           )}
+          {/* "Pot" is stake vocabulary — a free game's cap just ends the
+           * game, and the invite page already says it that way. */}
           {capLeft && (
             <div
               className="text-sm text-dim"
-              title="This game has a total time limit. If it's still unfinished when the limit hits, the pot splits evenly and both stakes return."
+              title={
+                staked
+                  ? "This game has a total time limit. If it's still unfinished when the limit hits, the pot splits evenly and both stakes return."
+                  : "This game has a total time limit. If it's still unfinished when the limit hits, it ends as a draw."
+              }
             >
-              ⌛ pot splits in {capLeft} if unfinished
+              {capLeft === "any moment"
+                ? `⌛ ${staked ? "the pot splits" : "the game ends"} any moment now`
+                : `⌛ ${staked ? "pot splits" : "game ends"} in ${capLeft} if unfinished`}
             </div>
           )}
         </div>
@@ -422,8 +464,18 @@ export const Game = ({ match }: Props) => {
         </div>
       )}
 
-      {/* The board owns whatever height the bars above and below leave. */}
-      <div className="relative flex min-h-0 flex-1 items-center justify-center py-3">
+      {/* The board owns whatever height the bars above and below leave: a
+       * size container, so the board sizes itself off the real slack (cqh —
+       * invite card, error banner and all) instead of guessing reserves off
+       * the viewport. items-start keeps a width-bound (phone) board snug
+       * under the status bar rather than adrift in the middle of the slack.
+       * h-80 + grow (NOT flex-1): a basis-0 item in a min-height column
+       * grows on screen but resolves cqh to 0, so the board would collapse
+       * to its floor size — an explicit base height keeps cq resolution
+       * live, doubles as the floor (size containment means the board can't
+       * push the column taller; from the floor up the page just scrolls),
+       * and shrink-0 stops tight viewports from squeezing it below that. */}
+      <div className="relative flex h-80 shrink-0 grow items-start justify-center py-3 [container-type:size]">
         {/* Floating over the board's slack space instead of in the column
          * flow, so appearing (after "View board") never shifts the layout. */}
         {result && overlayDismissed && (
@@ -467,21 +519,23 @@ export const Game = ({ match }: Props) => {
             Time's up — claim the win
           </button>
         )}
-        {inLobby && iAmPlayer && (
+        {inLobby && iAmPlayer && !kickHidden && (
           <button
             className="btn btn-danger"
             disabled={busy || withdrawGated}
             title={
-              withdrawGated
-                ? "The covenant lets the joiner withdraw after one move clock — the wait stops join-and-run lobby griefing."
-                : undefined
+              role === "p1"
+                ? "Your opponent joined but hasn't moved for a whole move clock. Kicking clears their seat and gets you a fresh invite link."
+                : withdrawGated
+                  ? "The covenant lets the joiner withdraw after one move clock — the wait stops join-and-run lobby griefing."
+                  : undefined
             }
             onClick={() => void dissolveGame()}
           >
             {role === "p1"
               ? "Kick opponent"
-              : withdrawGated && withdrawClock.text
-                ? `Withdraw & refund in ${withdrawClock.text}`
+              : withdrawGated && lobbyClock.text
+                ? `Withdraw & refund in ${lobbyClock.text}`
                 : "Withdraw & refund"}
           </button>
         )}

@@ -202,6 +202,18 @@
     color: color-mix(in srgb, var(--color-dim) 60%, var(--color-bg));
   }
 
+  /* Looks like nothing to press, still listens: a submit that can't go
+   * through yet (no username) wears the disabled slab, but stays clickable
+   * so the click can steer focus to what's missing instead of submitting. */
+  .btn-inert,
+  .btn-inert:enabled:hover,
+  .btn-inert:enabled:active {
+    cursor: default;
+    border-color: color-mix(in srgb, var(--color-line) 55%, var(--color-bg));
+    background: color-mix(in srgb, var(--color-frame) 70%, var(--color-bg));
+    color: color-mix(in srgb, var(--color-dim) 60%, var(--color-bg));
+  }
+
   /* Fields are a flat tint of the surface they sit on, marked out by a
    * hairline rather than by depth — which also means they read the same on
    * the home card and on a dialog's darker floor. */

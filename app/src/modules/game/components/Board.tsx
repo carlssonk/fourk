@@ -204,11 +204,15 @@ export const Board = ({
     );
   });
 
-  // Fill most of what the viewport allows — width-bound on phones, height-
-  // bound on desktops, backed off to 90% so the board breathes. The reserves
-  // cover the app shell's padding plus the Game screen's top bar, button
-  // row, the on-deck slot and the frame's own padding/gaps.
-  const cell = "max(2rem, calc(min((100dvw - 6rem) / 7, (100dvh - 17rem) / 6) * 0.9))";
+  // Fill most of what the Game screen's size container allows — width-bound
+  // on phones, height-bound on desktops, backed off to 97% so the board
+  // breathes. cqw/cqh are the slack the surrounding bars actually leave
+  // (invite card, error banner and all), so the only reserves left are the
+  // board's own chrome: the on-deck slot and the frame's padding and gaps
+  // (6rem ≈ 88px of frame per axis, on-deck folded into the 6.5 row count).
+  // Without a query container (the board nowhere else yet), cq units fall
+  // back to the viewport, which degrades to the old behaviour.
+  const cell = "max(2rem, calc(min((100cqw - 6rem) / 7, (100cqh - 6rem) / 6.5) * 0.97))";
 
   return (
     <div

@@ -58,7 +58,9 @@ export const AccountPanel = () => {
   // The freshly-minted phrase is the one screen that must actually be read,
   // so it has exactly one way onward — its own acknowledgement. That has to
   // include the backdrop: clicking beside a dialog is the reflex way to
-  // dismiss one, and here it would skip past the words silently.
+  // dismiss one, and here it would skip past the words silently. Going BACK
+  // is different: nothing exists until Done, so the Back row below stays —
+  // a curious visitor needs a visible way out, not a trap.
   const dismissable = view !== "new-phrase";
   // The phrase screens (shown on new-phrase/backup, typed on sign-in) get
   // the privacy backdrop.
@@ -73,7 +75,7 @@ export const AccountPanel = () => {
       <PanelBody view={view} setView={setView} />
       {/* Its own row: the screens above end in their own action, and a
        * "Back" tucked alongside one reads as part of it. */}
-      {dismissable && !isRoot(view) && (
+      {!isRoot(view) && (
         <div className="mt-4">
           <button className="btn btn-muted" onClick={() => setView(rootView())}>
             Back
