@@ -8,7 +8,7 @@ import { isStaked, toHex, type Match } from "../lib/match";
 import { CELLS, isOpen, type State } from "../lib/game";
 import * as engine from "../lib/engine";
 import { ensureFunds } from "../lib/dispenser";
-import type { AutoAction, GameMode } from "./types";
+import type { AutoAction, GameMode, ViewCtx } from "./types";
 
 /** A join spend's successor: the joiner's pubkey is the sig script's first
  * 32-byte push; the mode's joinFields ride along. Null for anything else. */
@@ -61,6 +61,42 @@ export function describeSharedEnd(
 
 /** The catch-all ending line for spends nobody can attribute. */
 export const GENERIC_END = "The game has ended.";
+
+/** The stance every view derives first: seat still open, board full, play
+ * live on screen. */
+export interface ViewFlags {
+  open: boolean;
+  full: boolean;
+  playing: boolean;
+}
+
+export function viewFlags(m: Match, ctx: ViewCtx): ViewFlags {
+  const open = isOpen(m.state);
+  return { open, full: m.state.moveCount >= CELLS, playing: !open && !ctx.result };
+}
+
+/**
+ * "May I claim the clock" — the part both rule sets agree on: a live board,
+ * a seat (not a spectator), a started round, an expired clock. Each mode
+ * supplies the two facts that differ: whether its round has started, and
+ * that the claimant owes the round nothing (classic: not my turn; fourk: no
+ * obligation and the opponent hasn't acted).
+ */
+export function claimTimeoutGate(
+  f: ViewFlags,
+  ctx: ViewCtx,
+  mode: { started: boolean; notOwed: boolean },
+): boolean {
+  return (
+    !f.open &&
+    !f.full &&
+    ctx.role !== "spectator" &&
+    !ctx.result &&
+    mode.started &&
+    ctx.clockExpired &&
+    mode.notOwed
+  );
+}
 
 export async function drawMatch(
   rpc: engine.Rpc,

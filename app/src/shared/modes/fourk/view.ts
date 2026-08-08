@@ -6,12 +6,18 @@
  * from the pre-refactor UI.
  */
 
-import { CELLS, type State } from "../../lib/game";
+import { type State } from "../../lib/game";
 import { isOpen as stateIsOpen } from "../../lib/game";
 import type { Match } from "../../lib/match";
 import type { SpendInfo } from "../../lib/engine";
 import type { ModeView, ModeViewSurface, StatusDescriptor, ViewCtx } from "../types";
-import { GENERIC_END, describeSharedEnd } from "../common";
+import {
+  GENERIC_END,
+  claimTimeoutGate,
+  describeSharedEnd,
+  viewFlags,
+  type ViewFlags,
+} from "../common";
 import {
   ZERO_HASH,
   coreOf,
@@ -32,12 +38,10 @@ interface RoundView {
   saltMissing: boolean;
 }
 
-function roundView(m: Match, ctx: ViewCtx): RoundView {
+function roundView(m: Match, ctx: ViewCtx, f: ViewFlags): RoundView {
   const core = coreOf(m);
   const phase = roundPhase(simulSnapshot(m));
-  const open = stateIsOpen(m.state);
-  const full = m.state.moveCount >= CELLS;
-  const obligation = open || full ? null : myObligation(m.state, core, ctx.myPk);
+  const obligation = f.open || f.full ? null : myObligation(m.state, core, ctx.myPk);
   // "Acted" per seat: in the commit phase a set slot; once reveals start,
   // the revealer has acted and the resolver hasn't.
   const acted: [boolean, boolean] =
@@ -162,11 +166,10 @@ export const fourkView = {
 
   view(m: Match, ctx: ViewCtx): ModeView {
     const s = m.state;
-    const open = stateIsOpen(s);
-    const full = s.moveCount >= CELLS;
-    const playing = !open && !ctx.result;
+    const f = viewFlags(m, ctx);
+    const { full, playing } = f;
     const pending = coreOf(m).pendingWin !== 0;
-    const r = roundView(m, ctx);
+    const r = roundView(m, ctx, f);
     const myIdx = ctx.role === "p2" ? 1 : 0;
     const shownState: State = s;
     // Whose disc lands underneath if both pick the same column this round —
@@ -196,16 +199,10 @@ export const fourkView = {
         ...(ctx.role !== "spectator" && { ghostDisc: (myIdx + 1) as 1 | 2 }),
         myPick: playing ? (r.myPick ?? ctx.pendingCol) : null,
       },
-      canClaimTimeout:
-        !open &&
-        !full &&
-        !pending &&
-        r.obligation === null &&
-        ctx.role !== "spectator" &&
-        !ctx.result &&
-        roundStarted(m) &&
-        ctx.clockExpired &&
-        !r.acted[(1 - myIdx) as 0 | 1],
+      canClaimTimeout: claimTimeoutGate(f, ctx, {
+        started: roundStarted(m),
+        notOwed: !pending && r.obligation === null && !r.acted[(1 - myIdx) as 0 | 1],
+      }),
     };
   },
 

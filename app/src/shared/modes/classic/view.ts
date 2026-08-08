@@ -4,12 +4,12 @@
  * column locally. All user-facing strings are verbatim from the pre-mode UI.
  */
 
-import { CELLS, applyMove, discOf, playerToMove, type State } from "../../lib/game";
+import { applyMove, discOf, playerToMove, type State } from "../../lib/game";
 import { isOpen as stateIsOpen } from "../../lib/game";
 import type { Match } from "../../lib/match";
 import type { SpendInfo } from "../../lib/engine";
 import type { ModeView, ModeViewSurface, StatusDescriptor, ViewCtx } from "../types";
-import { GENERIC_END, describeSharedEnd } from "../common";
+import { GENERIC_END, claimTimeoutGate, describeSharedEnd, viewFlags } from "../common";
 
 function isHex64(s: string): boolean {
   return /^[0-9a-f]{64}$/.test(s);
@@ -58,9 +58,8 @@ export const classicView = {
 
   view(m: Match, ctx: ViewCtx): ModeView {
     const s = m.state;
-    const open = stateIsOpen(s);
-    const full = s.moveCount >= CELLS;
-    const playing = !open && !ctx.result;
+    const f = viewFlags(m, ctx);
+    const { open, full, playing } = f;
     const mover = playerToMove(s);
     const myPkSeat = mover === 0 ? s.p1 : s.p2;
     const myTurn = !open && !full && myPkSeat === ctx.myPk && !ctx.result;
@@ -78,14 +77,10 @@ export const classicView = {
         nextDisc: playing && !full ? (discOf(playerToMove(shownState)) as 1 | 2) : null,
         myPick: null,
       },
-      canClaimTimeout:
-        !open &&
-        !full &&
-        !myTurn &&
-        ctx.role !== "spectator" &&
-        !ctx.result &&
-        s.moveCount > 0 &&
-        ctx.clockExpired,
+      canClaimTimeout: claimTimeoutGate(f, ctx, {
+        started: s.moveCount > 0,
+        notOwed: !myTurn,
+      }),
     };
   },
 
