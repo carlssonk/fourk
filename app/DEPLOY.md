@@ -8,6 +8,8 @@ the headers below matter more than for a typical static site.
 ## Build
 
 ```sh
+pnpm install      # root project first: the app compiles the shared
+                  # rulebook from ../src, whose deps live here
 cd app
 pnpm install
 pnpm build        # tsc + vite build → dist/

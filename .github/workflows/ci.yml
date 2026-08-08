@@ -48,6 +48,11 @@ jobs:
         with:
           node-version: 22
       - run: pnpm install --frozen-lockfile
+      # The app compiles the shared rulebook from ../src, whose imports
+      # (@noble/hashes) resolve upward into the root project's
+      # node_modules — install the root project too.
+      - run: pnpm install --frozen-lockfile
+        working-directory: .
       # tsc -b, NOT bare tsc: the solution-style tsconfig makes a bare
       # `tsc --noEmit` a silent no-op (learned the hard way).
       - run: pnpm typecheck
