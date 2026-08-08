@@ -16,8 +16,9 @@ import type { ModeChainSurface, SpendClass } from "../types";
 import { rederiveJoin } from "../common";
 import {
   ZERO_CORE,
-  ZERO_HASH,
-  applyResolution,
+  applyClaimWin,
+  applyResolve,
+  applyReveal,
   coreOf,
   fromSimulState,
   legalSimulColumns,
@@ -166,54 +167,24 @@ export const fourkEngine = {
     // (at most two extra addresses) and it lets the watcher adopt an
     // opponent's claim without tracing the spend.
     for (const disc of [1, 2] as const) {
-      if (findWin(ss.board, disc))
-        out.push(
-          fromSimulState({
-            ...ss,
-            board: ss.board.slice(),
-            commit1: ZERO_HASH,
-            commit2: ZERO_HASH,
-            reveal1: 0,
-            reveal2: 0,
-            pendingWin: disc,
-          }),
-        );
+      if (findWin(ss.board, disc)) out.push(fromSimulState(applyClaimWin(ss, disc)));
     }
     const phase = roundPhase(ss);
     if (phase === "commit")
       return out.map((next) => ({ ...m, state: next.state, simul: next.simul }));
     if (phase === "reveal") {
+      // The commitments' preimages are unknown; pose the successor the
+      // covenant would enforce for each (player, col) reveal.
       for (const player of [0, 1] as const) {
         for (const col of legalSimulColumns(ss)) {
-          // The commitment's preimage is unknown; pose the successor the
-          // covenant would enforce for this (player, col) reveal.
-          const next = { ...ss, board: ss.board.slice() } as SimulState;
-          if (player === 0) {
-            next.commit1 = ZERO_HASH;
-            next.reveal1 = col + 1;
-          } else {
-            next.commit2 = ZERO_HASH;
-            next.reveal2 = col + 1;
-          }
-          out.push(fromSimulState(next));
+          out.push(fromSimulState(applyReveal(ss, player, col)));
         }
       }
     } else {
       // One reveal on the table: the other player resolves with any legal column.
-      const revealer = ss.reveal1 !== 0 ? 0 : 1;
-      const revealedCol = (revealer === 0 ? ss.reveal1 : ss.reveal2) - 1;
+      const resolver = ss.reveal1 !== 0 ? 1 : 0;
       for (const col of legalSimulColumns(ss)) {
-        out.push(
-          fromSimulState({
-            ...ss,
-            board: applyResolution(ss.board, ss.round, revealedCol, revealer, col),
-            round: ss.round + 1,
-            commit1: ZERO_HASH,
-            commit2: ZERO_HASH,
-            reveal1: 0,
-            reveal2: 0,
-          }),
-        );
+        out.push(fromSimulState(applyResolve(ss, resolver, col)));
       }
     }
     return out.map((next) => ({ ...m, state: next.state, simul: next.simul }));

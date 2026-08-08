@@ -160,6 +160,14 @@ export function reveal(s: SimulState, ctx: Ctx, col: number, salt: Uint8Array): 
   req(s.commit1 !== ZERO_HASH && s.commit2 !== ZERO_HASH, "commit phase not complete");
   const player = playerOf(s, ctx.signer);
   checkReveal(s, player, col, salt);
+  return applyReveal(s, player, col);
+}
+
+/** Shape builder (see CONTEXT.md): the successor of a reveal by `player`,
+ * guards not included — the app's engine poses successors it cannot
+ * authorize (an opponent's salt is unknowable), and the field list must not
+ * fork from the door's. */
+export function applyReveal(s: SimulState, player: 0 | 1, col: number): SimulState {
   const next = { ...s, board: s.board.slice() };
   if (player === 0) {
     next.commit1 = ZERO_HASH;
@@ -184,12 +192,17 @@ export function resolve(s: SimulState, ctx: Ctx, col: number, salt: Uint8Array):
   req(s.pendingWin === 0, "win claim pending");
   const player = playerOf(s, ctx.signer);
   req(revealOf(s, player) === 0, "you already revealed — opponent must resolve");
-  const other = (1 - player) as 0 | 1;
-  const otherReveal = revealOf(s, other);
-  req(otherReveal !== 0, "nothing to resolve — reveal instead");
+  req(revealOf(s, (1 - player) as 0 | 1) !== 0, "nothing to resolve — reveal instead");
   req(commitOf(s, player) !== ZERO_HASH, "no commitment to resolve");
   checkReveal(s, player, col, salt);
-  const board = applyResolution(s.board, s.round, otherReveal - 1, other, col);
+  return applyResolve(s, player, col);
+}
+
+/** Shape builder: the successor of `player` resolving with `col` against the
+ * reveal already on the table — both discs land, slots clear, round bumps. */
+export function applyResolve(s: SimulState, player: 0 | 1, col: number): SimulState {
+  const other = (1 - player) as 0 | 1;
+  const board = applyResolution(s.board, s.round, revealOf(s, other) - 1, other, col);
   return {
     ...s,
     board,
@@ -262,6 +275,12 @@ export function claimWin(s: SimulState, ctx: Ctx, line: LineWitness): SimulState
   req(verifyLine(s.board, disc, line), "invalid win witness");
   const owner = (disc - 1) as 0 | 1;
   req(ctx.signer === simulPubkeyOf(s, owner), "not your line");
+  return applyClaimWin(s, disc);
+}
+
+/** Shape builder: the pending-win successor for a claimed line of `disc`'s
+ * colour — round slots zeroed, the challenge window open. */
+export function applyClaimWin(s: SimulState, disc: number): SimulState {
   return {
     ...s,
     board: s.board.slice(),

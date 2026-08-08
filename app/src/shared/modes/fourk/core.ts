@@ -19,7 +19,10 @@ import {
   type SimulState,
 } from "../../../../../src/simul/state";
 import {
+  applyClaimWin,
   applyResolution,
+  applyResolve,
+  applyReveal,
   claimWin as simulClaimWin,
   commit as simulCommit,
   legalSimulColumns,
@@ -32,7 +35,10 @@ import { type State, ZERO_PK } from "../../lib/game";
 export {
   ZERO_HASH,
   SALT_BYTES,
+  applyClaimWin,
   applyResolution,
+  applyResolve,
+  applyReveal,
   commitmentOf,
   isBoardFull,
   legalSimulColumns,
