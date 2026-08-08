@@ -25,7 +25,11 @@ jobs:
           node-version: 22
       - run: pnpm install --frozen-lockfile
       # Root vitest covers src/ + test/ (rules, properties, share codes)
-      # and app/test (accounts) — the money-critical TS suites.
+      # and app/test (accounts) — the money-critical TS suites. The app
+      # suites import app dependencies (zod, kaspa-wasm), so the app
+      # project needs its own install here too.
+      - run: pnpm install --frozen-lockfile
+        working-directory: app
       - run: pnpm test
       - run: pnpm typecheck
 
