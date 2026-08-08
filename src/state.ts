@@ -32,6 +32,23 @@ export const MOVE_TIMEOUT_DAA = 36_000;
  */
 export const MIN_MOVE_TIMEOUT_DAA = 600;
 
+/**
+ * Contract ceiling for the per-move timeout (~10 days): the sequence-lock
+ * field would happily encode ~13 years, and a genesis with a decades-long
+ * clock turns claim_forfeit into a hostage lock on the joiner's stake — so
+ * join makes it unjoinable instead.
+ */
+export const MAX_MOVE_TIMEOUT_DAA = 8_640_000;
+
+/**
+ * Exclusive upper bound for deadlines, mirroring the consensus lock-time
+ * threshold: at 500e9 a locktime stops meaning "DAA score" and becomes a
+ * unix-ms timestamp, which would let a crafted deadline flip clock semantics
+ * (an epoch-ms value is always already in the past). Join keeps every
+ * deadline strictly in DAA-score territory.
+ */
+export const DEADLINE_LIMIT = 500_000_000_000;
+
 /** 32-byte x-only Schnorr pubkey, lowercase hex. */
 export type PubKey = string;
 export const ZERO_PK: PubKey = "00".repeat(32);
@@ -59,14 +76,19 @@ export interface State {
 export function newMatch(
   p1: PubKey,
   stake: bigint,
-  moveTimeout = MOVE_TIMEOUT_DAA,
-  deadline = 0,
+  moveTimeout: number,
+  deadline: number,
 ): State {
   if (!isPubKey(p1) || p1 === ZERO_PK) throw new Error("invalid p1 pubkey");
   if (stake <= 0n) throw new Error("stake must be positive");
   if (!Number.isInteger(moveTimeout) || moveTimeout < MIN_MOVE_TIMEOUT_DAA)
     throw new Error("move timeout below minimum");
-  if (!Number.isInteger(deadline) || deadline < 0) throw new Error("bad deadline");
+  if (moveTimeout > MAX_MOVE_TIMEOUT_DAA) throw new Error("move timeout above maximum");
+  // A deadline is mandatory: it is the one permissionless exit every match is
+  // guaranteed, so a pot can never be stranded by two vanished players. Join
+  // re-checks, making an uncapped genesis unjoinable rather than a trap.
+  if (!Number.isInteger(deadline) || deadline <= 0 || deadline >= DEADLINE_LIMIT)
+    throw new Error("bad deadline");
   return {
     board: new Uint8Array(CELLS),
     moveCount: 0,

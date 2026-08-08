@@ -28,10 +28,20 @@ async function connectPreferred(): Promise<RpcClient> {
 }
 
 let promise: Promise<RpcClient> | undefined;
+/** Consecutive failed connects — drives the backoff and the offline banner. */
+export const rpcFailuresAtom = atom(0);
 
-/** The one RPC connection, kicked off on first call (after initSdk). */
+/**
+ * The one RPC connection, kicked off on first call (after initSdk).
+ *
+ * A REJECTED connect must not stay cached: `promise` is cleared on failure
+ * so the next call (any user action, or the backoff loop below) retries —
+ * one unlucky resolver timeout at startup must not brick the whole session
+ * behind a permanently-rejected promise.
+ */
 export function getRpc(): Promise<RpcClient> {
-  promise ??= connectPreferred().then((client) => {
+  if (promise) return promise;
+  promise = connectPreferred().then((client) => {
     const store = getDefaultStore();
     try {
       client.addEventListener("disconnect", () => store.set(rpcConnectedAtom, false));
@@ -47,10 +57,32 @@ export function getRpc(): Promise<RpcClient> {
     // The initial connect event fired before these listeners existed.
     store.set(rpcConnectedAtom, true);
     store.set(rpcClientAtom, client);
+    store.set(rpcFailuresAtom, 0);
     checkNetworkReset(client);
     return client;
   });
+  promise.catch(() => {
+    promise = undefined;
+    const store = getDefaultStore();
+    store.set(rpcFailuresAtom, store.get(rpcFailuresAtom) + 1);
+  });
   return promise;
+}
+
+/**
+ * Startup wiring (main.tsx): connect, and keep trying on our own clock with
+ * a capped backoff — without this, a dead-on-arrival connection would sit
+ * until the player happened to click something. Callers of getRpc() during
+ * an outage still get a fresh attempt (or its in-flight promise) each time.
+ */
+export function initRpc(): void {
+  const RETRY_CAP_MS = 30_000;
+  const tick = (delay: number): void => {
+    getRpc().catch(() => {
+      setTimeout(() => tick(Math.min(delay * 2, RETRY_CAP_MS)), delay);
+    });
+  };
+  tick(2_000);
 }
 
 /** True when the socket dropped after a successful connect — the SDK is

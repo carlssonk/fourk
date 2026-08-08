@@ -4,18 +4,20 @@ import * as cov from "@shared/lib/covenant";
 import { ensureFunds } from "@shared/lib/dispenser";
 import { CELLS, isOpen } from "@shared/lib/game";
 import { inviteLink } from "@shared/lib/invite";
-import type { Match } from "@shared/lib/match";
+import { fmtKas, isStaked, type Match } from "@shared/lib/match";
 import { modeOf } from "@shared/modes/registry";
 import type { StatusDescriptor } from "@shared/modes/types";
 import { playClaimReady, playClockExpired, playClockWarning } from "@shared/lib/sound";
 import { DiscLoader } from "@shared/components/DiscLoader";
 import {
+  RESET_RESULT,
   advanceConnecting,
+  askConfirm,
   busyAtom,
   createGame,
   exitMatch,
   getRpc,
-  getWallet,
+  matchWallet,
   newGame,
   profileAtom,
   rpcClientAtom,
@@ -59,11 +61,17 @@ export const Game = ({ match }: Props) => {
 
   const s = match.state;
   const mode = modeOf(match);
-  const myPk = getWallet().myPk;
+  // Per-match wallet: after a sign-in, games seated by a retired key stay
+  // fully playable — matchWallet finds whichever of our keys holds the seat.
+  // No seat means spectating; the empty pk matches neither player (nor the
+  // ZERO_PK of an unjoined seat), so every role check below reads right.
+  const seat = matchWallet(match);
+  const myPk = seat?.myPk ?? "";
   const role = cov.myRole(match, myPk);
   const iAmPlayer = role !== "spectator";
   const open = isOpen(s);
   const full = s.moveCount >= CELLS;
+  const staked = isStaked(match);
   const { result, finish, myTurn, needManualImport, importMatch } = useMatchWatcher(match);
 
   // The obligation clock only runs once something is staked on it — an
@@ -137,11 +145,19 @@ export const Game = ({ match }: Props) => {
     }
   }, [secondsLeft, myTurn, iAmPlayer, result, s.moveTimeout]);
 
+  /** The key for an action that only a player can take. Every caller is
+   * already behind a player-only control, so this throwing is a bug guard,
+   * not a path the UI offers. */
+  const seatKey = () => {
+    if (!seat) throw new Error("NOT_SEATED");
+    return seat.key;
+  };
+
   const drop = (col: number) => {
     setPending({ onTxid: match.txid, col });
     runAction(async () => {
       try {
-        const { key } = getWallet();
+        const key = seatKey();
         const rpc = await getRpc();
         const outcome = await mode.actions.drop(rpc, key, match, col);
         if (outcome.kind === "ended") {
@@ -165,7 +181,7 @@ export const Game = ({ match }: Props) => {
   // into minutes.
   const claimTimeoutWin = () =>
     runAction(async () => {
-      const { key } = getWallet();
+      const key = seatKey();
       const rpc = await getRpc();
       const age = await cov.gameUtxoAge(rpc, match);
       if (age !== null && age < s.moveTimeout) {
@@ -189,17 +205,18 @@ export const Game = ({ match }: Props) => {
   // One exit for every phase: an open game we created is cancelled on-chain
   // (the stake comes back) and forgotten; anything else goes back to the hub
   // but stays under "Open matches".
-  const leaveMatch = () => {
+  const leaveMatch = async () => {
     if (open && role === "p1") {
-      if (
-        !confirm(
-          "Leave the match? Nobody has joined yet, so it's called off and your stake returns.",
-        )
-      )
-        return;
+      const ok = await askConfirm({
+        title: "Call off the game?",
+        body: "Nobody has joined yet, so the game is called off and your stake comes back to your balance.",
+        confirm: "Call it off",
+        danger: true,
+      });
+      if (!ok) return;
       runAction(async () => {
         const rpc = await getRpc();
-        await cov.cancelMatch(rpc, getWallet().key, match);
+        await cov.cancelMatch(rpc, seatKey(), match);
         exitMatch(true);
       });
     } else {
@@ -207,18 +224,29 @@ export const Game = ({ match }: Props) => {
     }
   };
 
-  const dissolveGame = () => {
-    const msg =
+  const dissolveGame = async () => {
+    const ok = await askConfirm(
       role === "p1"
-        ? "Kick your opponent? Their stake returns, their link stops working, and you get a fresh game with a new invite link to share."
-        : "Leave the match? It hasn't started, so it's called off and both stakes return.";
-    if (!confirm(msg)) return;
+        ? {
+            title: "Kick your opponent?",
+            body: "Their stake returns and their link stops working. You get a fresh game with a new invite link to share.",
+            confirm: "Kick them",
+            danger: true,
+          }
+        : {
+            title: "Leave the match?",
+            body: "It hasn't started, so it's called off and both stakes return.",
+            confirm: "Leave",
+            danger: true,
+          },
+    );
+    if (!ok) return;
     runAction(async () => {
       startConnecting(role === "p1" ? "Kicking your opponent" : "Leaving the match", [
         "Connecting to the Kaspa network",
         "Returning both stakes",
       ]);
-      const { key } = getWallet();
+      const key = seatKey();
       const rpc = await getRpc();
       advanceConnecting();
       // The covenant gates the joiner's exit on one move clock — re-check
@@ -233,7 +261,7 @@ export const Game = ({ match }: Props) => {
           );
         }
       }
-      await ensureFunds(rpc, key, cov.FEE_HEADROOM);
+      await ensureFunds(rpc, key, cov.FEE_HEADROOM, { staked: isStaked(match) });
       await cov.dissolveMatch(rpc, key, match);
       exitMatch(true);
       // A kick reads as "clear the seat", not "destroy the match". On-chain
@@ -247,11 +275,26 @@ export const Game = ({ match }: Props) => {
   const link = inviteLink(match);
   const shown = view.board.shownState;
 
+  // Where the money went, said in balance terms — only for staked games and
+  // only to the players in them. Appended to the verdict rather than baked
+  // into the ending sentences (resultTone classifies those by substring).
+  // A testnet reset returns nothing, so it gets no money line.
+  let potLine: string | undefined;
+  if (staked && result && iAmPlayer && result !== RESET_RESULT) {
+    const tone = resultTone(result);
+    potLine =
+      tone === "win"
+        ? `The ${fmtKas(match.value)} KAS pot is in your balance.`
+        : tone === "loss"
+          ? `The ${fmtKas(match.value)} KAS pot went to your opponent.`
+          : `Your ${fmtKas(open ? match.value : match.value / 2n)} KAS came back to your balance.`;
+  }
+
   return (
-    // A full-viewport column (the app shell pads 1rem top and bottom): the
-    // seats and status up top, the buttons pinned at the bottom, and the
-    // board stretched across everything in between.
-    <div className="flex min-h-[calc(100dvh-2rem)] flex-col">
+    // A full-viewport column (minus the shell's 1rem padding top and bottom
+    // and its 2.5rem account header): the seats and status up top, the
+    // buttons pinned at the bottom, and the board stretched between.
+    <div className="flex min-h-[calc(100dvh-4.5rem)] flex-col">
       {/* The seats flank the status; on narrow screens the status drops to
        * its own line below them. */}
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
@@ -278,6 +321,16 @@ export const Game = ({ match }: Props) => {
           ) : (
             <Status status={view.status} />
           )}
+          {staked && !result && (
+            <div
+              className="text-sm text-accent"
+              title="Both stakes sit in the pot until the game decides who takes it."
+            >
+              {open
+                ? `${fmtKas(match.value * 2n)} KAS pot once your opponent joins`
+                : `Pot: ${fmtKas(match.value)} KAS — winner takes it`}
+            </div>
+          )}
           {capLeft && (
             <div
               className="text-sm text-dim"
@@ -301,6 +354,7 @@ export const Game = ({ match }: Props) => {
       {result && !overlayDismissed && (
         <ResultOverlay
           result={result}
+          pot={potLine}
           tone={resultTone(result)}
           busy={busy}
           onPlayAgain={() => {
@@ -377,6 +431,7 @@ export const Game = ({ match }: Props) => {
         {result && overlayDismissed && (
           <div className="absolute top-1 left-1/2 z-10 w-max max-w-[calc(100%-1rem)] -translate-x-1/2 rounded-lg border border-ok bg-panel/80 px-3.5 py-2 text-center backdrop-blur-xs">
             {result}
+            {potLine && <span className="block text-sm text-accent">{potLine}</span>}
           </div>
         )}
         <Board
@@ -423,7 +478,7 @@ export const Game = ({ match }: Props) => {
                 ? "The covenant lets the joiner withdraw after one move clock — the wait stops join-and-run lobby griefing."
                 : undefined
             }
-            onClick={dissolveGame}
+            onClick={() => void dissolveGame()}
           >
             {role === "p1"
               ? "Kick opponent"
@@ -433,7 +488,7 @@ export const Game = ({ match }: Props) => {
           </button>
         )}
         {!result && (
-          <button className="btn btn-muted" disabled={busy} onClick={leaveMatch}>
+          <button className="btn btn-muted" disabled={busy} onClick={() => void leaveMatch()}>
             Leave match
           </button>
         )}

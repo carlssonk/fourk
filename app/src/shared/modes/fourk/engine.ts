@@ -10,9 +10,9 @@
 
 import { fourk } from "../../lib/sdk";
 import { fromHex, phaseOf, toHex, type Match } from "../../lib/match";
-import type { State } from "../../lib/game";
+import { findWin, type State } from "../../lib/game";
 import type { SpendInfo } from "../../lib/engine";
-import type { GameMode, SpendClass } from "../types";
+import type { ModeChainSurface, SpendClass } from "../types";
 import { rederiveJoin } from "../common";
 import {
   ZERO_CORE,
@@ -23,6 +23,7 @@ import {
   legalSimulColumns,
   myObligation,
   roundPhase,
+  simulClaimWin,
   simulCommit,
   simulProgress,
   simulResolve,
@@ -49,9 +50,12 @@ const SIMUL_MATCH_ENTRYPOINTS = [
   "claim_timeout",
   "split_timeout",
   "sudden_death",
+  "sweep_win",
 ] as const;
 
-const CONTINUATIONS = new Set<string>(["commit", "reveal", "resolve"]);
+// claim_win is a continuation now: it parks the pot in a pending-win
+// successor (the challenge window) rather than paying out.
+const CONTINUATIONS = new Set<string>(["commit", "reveal", "resolve", "claim_win"]);
 
 function isOpen(s: State): boolean {
   return phaseOf(s) === 0;
@@ -59,7 +63,19 @@ function isOpen(s: State): boolean {
 
 function simulArgs(
   ss: SimulState,
-): [Uint8Array, Uint8Array, Uint8Array, bigint, Uint8Array, Uint8Array, bigint, bigint, bigint, bigint] {
+): [
+  Uint8Array,
+  Uint8Array,
+  Uint8Array,
+  bigint,
+  Uint8Array,
+  Uint8Array,
+  bigint,
+  bigint,
+  bigint,
+  bigint,
+  bigint,
+] {
   return [
     fromHex(ss.p1),
     fromHex(ss.p2),
@@ -69,6 +85,7 @@ function simulArgs(
     fromHex(ss.commit2),
     BigInt(ss.reveal1),
     BigInt(ss.reveal2),
+    BigInt(ss.pendingWin),
     BigInt(ss.moveTimeout),
     BigInt(ss.deadline),
   ];
@@ -140,9 +157,31 @@ export const fourkEngine = {
   successors(m: Match): Match[] {
     if (isOpen(m.state)) return [];
     const ss = simulSnapshot(m);
-    const phase = roundPhase(ss);
-    if (phase === "commit") return [];
+    // A pending-win state has no covenant successors — every remaining door
+    // is terminal (contest, sweep, sudden death).
+    if (ss.pendingWin !== 0) return [];
     const out: Array<{ state: State; simul: SimulCore }> = [];
+    // claim_win successors are enumerable from ANY live sub-phase: one
+    // pending state per colour that has a line on the current board. Cheap
+    // (at most two extra addresses) and it lets the watcher adopt an
+    // opponent's claim without tracing the spend.
+    for (const disc of [1, 2] as const) {
+      if (findWin(ss.board, disc))
+        out.push(
+          fromSimulState({
+            ...ss,
+            board: ss.board.slice(),
+            commit1: ZERO_HASH,
+            commit2: ZERO_HASH,
+            reveal1: 0,
+            reveal2: 0,
+            pendingWin: disc,
+          }),
+        );
+    }
+    const phase = roundPhase(ss);
+    if (phase === "commit")
+      return out.map((next) => ({ ...m, state: next.state, simul: next.simul }));
     if (phase === "reveal") {
       for (const player of [0, 1] as const) {
         for (const col of legalSimulColumns(ss)) {
@@ -181,7 +220,11 @@ export const fourkEngine = {
   },
 
   canEnumerate(m: Match): boolean {
-    return !isOpen(m.state) && roundPhase(simulSnapshot(m)) !== "commit";
+    const ss = simulSnapshot(m);
+    // Commit phase stays blind (an opponent's commit embeds an unknowable
+    // hash) even though claim_win successors are enumerable there; a
+    // pending state's spends are all terminal — nothing to enumerate.
+    return !isOpen(m.state) && ss.pendingWin === 0 && roundPhase(ss) !== "commit";
   },
 
   /** Joins plus the round continuations: lift the pushes, replay the
@@ -208,6 +251,17 @@ export const fourkEngine = {
           spend.kind === "reveal"
             ? simulReveal(ss, simulCtx(toHex(pk)), col, salt)
             : simulResolve(ss, simulCtx(toHex(pk)), col, salt);
+      } else if (spend.kind === "claim_win") {
+        // ABI order: sig(65), then wcol/wrow/wdir as int args. The signer is
+        // the witnessed line's owner — the reference re-validates the line,
+        // so peeking at the cell for the owner is safe.
+        const [wcol, wrow, wdir] = spend.args;
+        if (wcol === undefined || wrow === undefined || wdir === undefined) return null;
+        if (wcol < 0 || wcol >= 7 || wrow < 0 || wrow >= 6) return null;
+        const disc = ss.board[wcol * 6 + wrow];
+        if (disc !== 1 && disc !== 2) return null;
+        const owner = disc === 1 ? ss.p1 : ss.p2;
+        next = simulClaimWin(ss, simulCtx(owner), { col: wcol, row: wrow, dir: wdir });
       } else {
         return null; // terminal door — the watcher classifies it instead
       }
@@ -234,4 +288,4 @@ export const fourkEngine = {
   onMatchesPruned(keptCovenantIds: string[]): void {
     pruneSalts(keptCovenantIds);
   },
-} satisfies Omit<GameMode, "meta">;
+} satisfies ModeChainSurface;

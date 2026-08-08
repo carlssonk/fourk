@@ -15,16 +15,21 @@
  *
  * Because two discs land at once, the winner of a round need not be the
  * player who resolved it — so win claims are their own doors, keyed to the
- * witness line's OWNER: claimWin (signed by the owner, pot goes where they
- * direct) and claimSplit (both colors have a line — the double win — pot
- * splits, permissionless). A double win where one owner races claimWin ahead
- * of the honest claimSplit is a DOCUMENTED EDGE, accepted like classic's
- * unclaimed-win-lost-to-draw: the covenant cannot prove a line's absence
- * without the board scan this whole design avoids.
+ * witness line's OWNER. The covenant cannot prove a line's ABSENCE (no board
+ * scan, by design), so a one-line claimWin cannot be trusted to pay out
+ * immediately: instead it opens a CHALLENGE WINDOW (pendingWin in state) of
+ * one move clock, during which the permissionless claimSplit — legal on
+ * pending states precisely for this — converts a hidden double win into the
+ * fair split; sweepWin pays the winner once the window lapses. The old
+ * "greedy claimWin races honest claimSplit in the mempool" edge is gone: the
+ * race is now a full block-time window, and consensus itself (the sweep's
+ * sequence lock) rejects an early sweep.
  */
 
 import {
   COLS,
+  DEADLINE_LIMIT,
+  MAX_MOVE_TIMEOUT_DAA,
   MIN_MOVE_TIMEOUT_DAA,
   P1_DISC,
   P2_DISC,
@@ -44,6 +49,7 @@ import {
   commitOf,
   isBoardFull,
   isSimulOpen,
+  pendingWinner,
   priorityPlayer,
   revealOf,
   simulPot,
@@ -73,12 +79,19 @@ function simulPubkeyOf(s: SimulState, player: 0 | 1): PubKey {
 
 // --- Open phase --------------------------------------------------------------
 
-/** Identical to classic join: p2 adds a matching stake (successor value = 2 * stake). */
+/** Identical to classic join: p2 adds a matching stake (successor value = 2 * stake),
+ * with the same genesis sanity gates — clock floor and ceiling, and a
+ * mandatory in-range deadline (see ../rules.ts join for the full rationale;
+ * in fourk mode a strandable pot is even easier to reach, because
+ * claimTimeout pays one SPECIFIC player, who may be the one who vanished). */
 export function join(s: SimulState, ctx: Ctx): SimulState {
   req(isSimulOpen(s), "match is not open");
   req(isPubKey(ctx.signer) && ctx.signer !== ZERO_PK, "invalid joiner pubkey");
   req(ctx.signer !== s.p1, "cannot join your own match");
   req(s.moveTimeout >= MIN_MOVE_TIMEOUT_DAA, "move timeout below minimum");
+  req(s.moveTimeout <= MAX_MOVE_TIMEOUT_DAA, "move timeout above maximum");
+  req(s.deadline > 0, "no game deadline set");
+  req(s.deadline < DEADLINE_LIMIT, "deadline out of range");
   return { ...s, board: s.board.slice(), p2: ctx.signer };
 }
 
@@ -97,6 +110,9 @@ export function cancel(s: SimulState, ctx: Ctx): Payout[] {
  */
 export function dissolve(s: SimulState, ctx: Ctx): Payout[] {
   req(!isSimulOpen(s), "match not started");
+  // Unreachable in honest play (a line needs rounds), but a directly-created
+  // covenant UTXO could carry it — belt and braces.
+  req(s.pendingWin === 0, "win claim pending");
   req(s.round === 0, "game has begun");
   req(s.commit1 === ZERO_HASH && s.commit2 === ZERO_HASH, "game has begun");
   req(s.reveal1 === 0 && s.reveal2 === 0, "game has begun");
@@ -118,6 +134,7 @@ export function dissolve(s: SimulState, ctx: Ctx): Payout[] {
  */
 export function commit(s: SimulState, ctx: Ctx, h: Commitment): SimulState {
   req(!isSimulOpen(s), "match not started");
+  req(s.pendingWin === 0, "win claim pending");
   req(!isBoardFull(s.board), "board full — claim the draw instead");
   req(s.reveal1 === 0 && s.reveal2 === 0, "commit phase is over");
   const player = playerOf(s, ctx.signer);
@@ -138,6 +155,7 @@ export function commit(s: SimulState, ctx: Ctx, h: Commitment): SimulState {
  */
 export function reveal(s: SimulState, ctx: Ctx, col: number, salt: Uint8Array): SimulState {
   req(!isSimulOpen(s), "match not started");
+  req(s.pendingWin === 0, "win claim pending");
   req(s.reveal1 === 0 && s.reveal2 === 0, "round already has a reveal — resolve instead");
   req(s.commit1 !== ZERO_HASH && s.commit2 !== ZERO_HASH, "commit phase not complete");
   const player = playerOf(s, ctx.signer);
@@ -163,6 +181,7 @@ export function reveal(s: SimulState, ctx: Ctx, col: number, salt: Uint8Array): 
  */
 export function resolve(s: SimulState, ctx: Ctx, col: number, salt: Uint8Array): SimulState {
   req(!isSimulOpen(s), "match not started");
+  req(s.pendingWin === 0, "win claim pending");
   const player = playerOf(s, ctx.signer);
   req(revealOf(s, player) === 0, "you already revealed — opponent must resolve");
   const other = (1 - player) as 0 | 1;
@@ -220,27 +239,62 @@ export function applyResolution(
 // --- Terminal doors ----------------------------------------------------------
 
 /**
- * Terminal door 1: point at four-in-a-row on the CURRENT board. No disc is
- * played — resolution already landed it — and the resolver need not be the
- * winner, so the pot is keyed to the line's owner: the witness's first cell
- * names the disc color, and that color's player must be the signer. Signed
- * by the sole owner of the pot, so funds go wherever they direct.
+ * Door 1: point at four-in-a-row on the CURRENT board and open the challenge
+ * window. No disc is played — resolution already landed it — and the
+ * resolver need not be the winner, so the claim is keyed to the line's
+ * owner: the witness's first cell names the disc color, and that color's
+ * player must be the signer.
+ *
+ * NOT a terminal door: the covenant cannot prove the OTHER line's absence
+ * (no board scan, by design), so paying out immediately would let a
+ * double-win owner race the honest claimSplit in the mempool — a race a bot
+ * always wins. Instead the claim parks the pot in a pending state for one
+ * move clock: claimSplit (permissionless, needs both real lines) converts
+ * it to the fair split at leisure, and sweepWin pays the winner once the
+ * window lapses. The round slots are zeroed — the game is over except for
+ * the contest, and a canonical pending state keeps the phase unambiguous.
  */
-export function claimWin(s: SimulState, ctx: Ctx, line: LineWitness): Payout[] {
+export function claimWin(s: SimulState, ctx: Ctx, line: LineWitness): SimulState {
   req(!isSimulOpen(s), "match not started");
+  req(s.pendingWin === 0, "win claim already pending");
   const disc = discAt(s.board, line);
   req(disc === P1_DISC || disc === P2_DISC, "invalid win witness");
   req(verifyLine(s.board, disc, line), "invalid win witness");
   const owner = (disc - 1) as 0 | 1;
   req(ctx.signer === simulPubkeyOf(s, owner), "not your line");
-  return [{ to: simulPubkeyOf(s, owner), amount: simulPot(s) }];
+  return {
+    ...s,
+    board: s.board.slice(),
+    commit1: ZERO_HASH,
+    commit2: ZERO_HASH,
+    reveal1: 0,
+    reveal2: 0,
+    pendingWin: disc,
+  };
 }
 
 /**
- * Terminal door 2: the double win — one round completed a line for BOTH
- * colors, so the pot splits. Two witnesses, one per color; permissionless
- * (payouts pinned, anyone may crank). See the header note for the accepted
- * claimWin race.
+ * Terminal door: sweep a pending win whose challenge window has lapsed.
+ * Signed by the sole owner of the pot, so funds go wherever they direct.
+ * The window is one move clock of UTXO age — consensus itself (the sequence
+ * lock) rejects an early sweep, so there is nothing to race.
+ */
+export function sweepWin(s: SimulState, ctx: Ctx): Payout[] {
+  req(!isSimulOpen(s), "match not started");
+  const winner = pendingWinner(s);
+  req(winner !== null, "no win claim pending");
+  req(ctx.utxoAge >= s.moveTimeout, "challenge window still open");
+  req(ctx.signer === simulPubkeyOf(s, winner), "only the pending winner can sweep");
+  return [{ to: simulPubkeyOf(s, winner), amount: simulPot(s) }];
+}
+
+/**
+ * Terminal door 2: the double win — BOTH colors have a line, so the pot
+ * splits. Two witnesses, one per color; permissionless (payouts pinned,
+ * anyone may crank). Deliberately legal in a pending-win state too: this is
+ * the CONTEST that keeps a one-sided claimWin honest, and because the
+ * witnesses are computable from the public board, anyone — the opponent's
+ * client, an altruistic observer — can fire it inside the window.
  */
 export function claimSplit(s: SimulState, _ctx: Ctx, w1: LineWitness, w2: LineWitness): Payout[] {
   req(!isSimulOpen(s), "match not started");
@@ -258,6 +312,10 @@ export function claimSplit(s: SimulState, _ctx: Ctx, w1: LineWitness, w2: LineWi
  */
 export function claimDraw(s: SimulState, _ctx: Ctx): Payout[] {
   req(!isSimulOpen(s), "match not started");
+  // A pending win outranks the draw: this door is permissionless, and on a
+  // full board it would otherwise race half the pot away from a winner
+  // whose challenge window is still open.
+  req(s.pendingWin === 0, "win claim pending");
   req(isBoardFull(s.board), "board not full");
   return [
     { to: s.p1, amount: s.stake },
@@ -275,6 +333,7 @@ export function claimDraw(s: SimulState, _ctx: Ctx): Payout[] {
  */
 export function claimTimeout(s: SimulState, ctx: Ctx): Payout[] {
   req(!isSimulOpen(s), "match not started");
+  req(s.pendingWin === 0, "win claim pending — sweep or contest instead");
   req(!isBoardFull(s.board), "board full — claim the draw instead");
   req(ctx.utxoAge >= s.moveTimeout, "round deadline not expired");
   let claimant: 0 | 1;
@@ -297,6 +356,10 @@ export function claimTimeout(s: SimulState, ctx: Ctx): Payout[] {
  */
 export function splitTimeout(s: SimulState, ctx: Ctx): Payout[] {
   req(!isSimulOpen(s), "match not started");
+  // A pending-win state is slot-empty and symmetric-shaped — without this
+  // gate, the same clock that opens sweepWin would open a permissionless
+  // split of the winner's pot.
+  req(s.pendingWin === 0, "win claim pending — sweep or contest instead");
   req(s.reveal1 === 0 && s.reveal2 === 0, "one-sided state — claim the forfeit instead");
   req((s.commit1 === ZERO_HASH) === (s.commit2 === ZERO_HASH), "one-sided state — claim the forfeit instead");
   req(ctx.utxoAge >= s.moveTimeout, "round deadline not expired");

@@ -1,6 +1,7 @@
 import { useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import { Avatar } from "@shared/components/Avatar";
+import { KaspaStamp } from "@shared/components/KaspaStamp";
 import {
   GENE_KEYS,
   GENE_LABELS,
@@ -10,7 +11,7 @@ import {
   type Genes,
 } from "@shared/lib/avatar";
 import { MAX_NAME_LEN } from "@shared/lib/match";
-import { profileAtom, saveProfile } from "@shared/state";
+import { discColorAtom, profileAtom, saveDiscColor, saveProfile } from "@shared/state";
 
 interface Props {
   actionLabel: string;
@@ -19,12 +20,14 @@ interface Props {
   /** Placeholder headline action (e.g. matchmaking): rendered first with
    * primary styling but disabled, demoting the submit button to a ghost. */
   headlineLabel?: string;
-  /** Per-match settings (colour, timers), rendered as a sibling card beside
-   * the identity card; the action button sits centered below both. */
-  children?: React.ReactNode;
-  /** Mode/opponent pickers, rendered inside the main card under the avatar
-   * section (create flow only). */
-  modes?: React.ReactNode;
+  /** What kind of game to start (mode, clock, stake), rendered inside the
+   * card below the identity section — create flow only; the join flow
+   * inherits every setting from the invite. */
+  settings?: React.ReactNode;
+  /** Offer the disc-colour choice. Hosts pick; joiners always take the
+   * other colour, so showing them a picker would promise a choice the
+   * invite has already made. */
+  pickDiscColor?: boolean;
 }
 
 type GeneKey = (typeof GENE_KEYS)[number];
@@ -35,20 +38,22 @@ const rollBatch = (): Genes[] => Array.from({ length: 7 }, randomGenes);
 /**
  * The pre-game seat setup, shared by both players: Player 1 sees it on the
  * home screen before creating a game, Player 2 when opening an invite link.
- * Picks the username and the procedural avatar, slot-machine style: spin a
- * single gene of the held avatar, or spin the candidate batch and adopt one;
- * saved as the local profile on submit, then carried to the opponent by link
- * or join payload.
+ * Picks the username, the procedural avatar (slot-machine style: spin a
+ * single gene of the held avatar, or spin the candidate batch and adopt
+ * one), and the disc colour — all of it about the player rather than the
+ * match, saved as the local profile on submit and carried to the opponent
+ * by link or join payload.
  */
 export const PlayerSetup = ({
   actionLabel,
   busy,
   onSubmit,
   headlineLabel,
-  children,
-  modes,
+  settings,
+  pickDiscColor = false,
 }: Props) => {
   const profile = useAtomValue(profileAtom);
+  const discColor = useAtomValue(discColorAtom);
   const [name, setName] = useState(profile.name);
   const [genes, setGenes] = useState<Genes>(() => codeToGenes(profile.avatar));
   const [batch, setBatch] = useState<Genes[]>(rollBatch);
@@ -81,7 +86,7 @@ export const PlayerSetup = ({
           <div className="flex min-w-56 flex-1 flex-col justify-between gap-2">
             {/* wrapper keeps the input out of the flex column: .input's
              * flex-1 would otherwise stretch it vertically */}
-            <div>
+            <div className="flex items-center gap-2">
               <input
                 ref={inputRef}
                 id="username"
@@ -96,6 +101,29 @@ export const PlayerSetup = ({
                 data-form-type="other"
                 onChange={(e) => setName(e.target.value)}
               />
+              {/* Your colour, beside your name: identity, not a match
+               * setting — the opponent always takes the other one. */}
+              {pickDiscColor && (
+                <>
+                  <div className="flex shrink-0 gap-1">
+                    {(["blue", "red"] as const).map((c) => (
+                      <button
+                        key={c}
+                        type="button"
+                        title={`your discs are ${c}`}
+                        aria-label={`play as ${c}`}
+                        aria-pressed={discColor === c}
+                        onClick={() => saveDiscColor(c)}
+                        className={`size-6 cursor-pointer rounded-full border-2 ${
+                          c === "red" ? "bg-red" : "bg-blue"
+                        } ${discColor === c ? "border-ink" : "border-transparent opacity-40"}`}
+                      >
+                        <KaspaStamp />
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-1.5">
               {GENE_KEYS.map((k) => (
@@ -133,21 +161,13 @@ export const PlayerSetup = ({
             ↻
           </button>
         </div>
-        {modes}
+        {settings}
       </div>
-      {/* Match settings hang off the identity card's right edge on wide
-       * screens (mirroring the open-matches list on the left), keeping the
-       * identity card on the page's center axis; stacked below otherwise. */}
-      {children && (
-        <div className="card mx-auto mt-3 w-full max-w-115 p-4 text-left xl:absolute xl:top-0 xl:left-full xl:mt-0 xl:ml-6 xl:w-56">
-          {children}
-        </div>
-      )}
       <div className="mt-4 flex flex-wrap justify-center gap-2.5">
         {headlineLabel && (
           <button type="button" disabled className="btn cursor-default px-8 py-2.5 text-lg">
             {headlineLabel}
-            <span className="ml-2 rounded-sm bg-field/30 px-1.5 py-0.5 align-middle text-[10px] font-bold uppercase">
+            <span className="ml-2 rounded-sm bg-line px-1.5 py-0.5 align-middle text-[10px] font-bold uppercase text-dim">
               soon
             </span>
           </button>

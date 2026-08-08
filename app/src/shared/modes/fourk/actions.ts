@@ -6,13 +6,21 @@
  */
 
 import { CELLS, findWin, isOpen, type LineWitness } from "../../lib/game";
-import { fromHex, toHex, type Match } from "../../lib/match";
+import { fromHex, isStaked, toHex, type Match } from "../../lib/match";
 import * as engine from "../../lib/engine";
 import { ensureFunds } from "../../lib/dispenser";
 import type { AutoAction, AutoCtx, DropResult, ModeActions } from "../types";
 import { fourkEngine, simulCtx, simulSnapshot } from "./engine";
 import { coreOf, myObligation, priorityPlayer } from "./core";
-import { commitmentOf, fromSimulState, roundPhase, simulCommit, simulResolve, simulReveal } from "./core";
+import {
+  commitmentOf,
+  fromSimulState,
+  roundPhase,
+  simulClaimWin,
+  simulCommit,
+  simulResolve,
+  simulReveal,
+} from "./core";
 import { loadSalt, saveSalt } from "./saltStore";
 
 export async function commitMatch(
@@ -69,15 +77,47 @@ export async function revealMatch(
   );
 }
 
-/** Claim a completed line on the current board. The covenant pays the line's
- * owner (who must be the signer), wherever they direct it. */
+/** Claim a completed line on the current board: opens the challenge window.
+ * The pot parks in a pending-win successor for one move clock — claim_split
+ * (the permissionless double-win contest) can convert it to the fair split
+ * inside the window, and sweepWinMatch pays out once it lapses. */
 export async function claimWinMatch(
   rpc: engine.Rpc,
   key: engine.PrivateKey,
   match: Match,
   w: LineWitness,
+): Promise<Match> {
+  const pkHex = engine.walletPubkey(key);
+  const ss = simulSnapshot(match);
+  const next = fromSimulState(simulClaimWin(ss, simulCtx(pkHex), w));
+  return engine.continuation(
+    rpc,
+    key,
+    fourkEngine,
+    match,
+    "claim_win",
+    () => ({ ints: [w.col, w.row, w.dir] }),
+    next,
+    0n,
+  );
+}
+
+/** Sweep a pending win whose challenge window has lapsed. The sequence field
+ * carries the age proof, exactly like claim_timeout. */
+export async function sweepWinMatch(
+  rpc: engine.Rpc,
+  key: engine.PrivateKey,
+  match: Match,
 ): Promise<string> {
-  return engine.signedTerminal(rpc, key, fourkEngine, match, "claim_win", [w.col, w.row, w.dir]);
+  return engine.signedTerminal(
+    rpc,
+    key,
+    fourkEngine,
+    match,
+    "sweep_win",
+    [],
+    BigInt(match.state.moveTimeout),
+  );
 }
 
 /** The double win — both colors completed a line in one round. Two witnesses
@@ -120,12 +160,15 @@ export async function claimTimeoutMatch(
 export const fourkActions: ModeActions = {
   /** A drop seals a commitment; the board itself moves only on resolution. */
   async drop(rpc, key, match, col): Promise<DropResult> {
-    await ensureFunds(rpc, key, engine.FEE_HEADROOM);
+    await ensureFunds(rpc, key, engine.FEE_HEADROOM, { staked: isStaked(match) });
     return { kind: "continued", match: await commitMatch(rpc, key, match, col) };
   },
 
   claimTimeout: claimTimeoutMatch,
 };
+
+export const SPLIT_MESSAGE = "You both connected four in the same drop — the pot split evenly.";
+const WIN_MESSAGE = "You connected four — you win! 🎉";
 
 /**
  * Fourk's round duties. Reveals and resolves fire the moment they're owed
@@ -133,35 +176,70 @@ export const fourkActions: ModeActions = {
  * phase BOTH players owe a reveal and would race the same UTXO, so the
  * round's priority player goes first and the other holds back a beat (their
  * duty flips to "resolve" when the first reveal lands; if the priority
- * player is gone, the delayed reveal still goes out). Finished lines are
- * claimed as soon as they exist: mine alone takes the pot (claim_win, keyed
- * to the line's owner); one line per colour is the double win and splits
- * (claim_split, permissionless). An opponent's lone line is theirs to claim.
+ * player is gone, the delayed reveal still goes out).
+ *
+ * Wins run through the challenge window. A lone line of mine opens it
+ * (claim_win — a continuation, not an ending); a line per colour is the
+ * double win and splits directly (claim_split, permissionless). On a
+ * PENDING state: if both lines exist, ANY client contests it into the fair
+ * split — this is the duty that makes a greedy one-line claim pointless —
+ * and the pending winner sweeps once the window lapses.
  */
 export function fourkAutoActions(m: Match, ctx: AutoCtx): AutoAction[] {
   const out: AutoAction[] = [];
   if (isOpen(m.state)) return out;
   const core = coreOf(m);
-  const full = m.state.moveCount >= CELLS;
   const myIdx = ctx.role === "p2" ? 1 : 0;
+  const myDisc = myIdx === 0 ? 1 : 2;
 
+  if (core.pendingWin !== 0) {
+    // The round machine is suspended; the only duties are the window's.
+    const p1Line = findWin(m.state.board, 1);
+    const p2Line = findWin(m.state.board, 2);
+    if (p1Line && p2Line) {
+      out.push({
+        key: "contest",
+        oncePer: "utxo",
+        run: async (rpc, key, mm) => {
+          await ensureFunds(rpc, key, engine.FEE_HEADROOM, { staked: isStaked(mm) });
+          await claimSplitMatch(rpc, key, mm, p1Line, p2Line);
+          return { kind: "finished", message: SPLIT_MESSAGE };
+        },
+        onTerminated: SPLIT_MESSAGE,
+      });
+    } else if (core.pendingWin === myDisc) {
+      out.push({
+        key: "sweep",
+        oncePer: "match",
+        scheduleMs: async (rpc) => {
+          const age = await engine.gameUtxoAge(rpc, fourkEngine, m);
+          // The +2s pad lets the chain tick past the sequence lock before
+          // the age-gated tx is submitted.
+          return Math.max(0, (m.state.moveTimeout - (age ?? 0)) * 100 + 2000);
+        },
+        run: async (rpc, key, mm) => {
+          await ensureFunds(rpc, key, engine.FEE_HEADROOM, { staked: isStaked(mm) });
+          await sweepWinMatch(rpc, key, mm);
+          return { kind: "finished", message: WIN_MESSAGE };
+        },
+      });
+    }
+    return out;
+  }
+
+  const full = m.state.moveCount >= CELLS;
   const obligation = full ? null : myObligation(m.state, core, ctx.myPk);
-  if (
-    (obligation === "reveal" || obligation === "resolve") &&
-    loadSalt(m.covenantId, core.round)
-  )
+  if ((obligation === "reveal" || obligation === "resolve") && loadSalt(m.covenantId, core.round))
     out.push({
       key: "reveal",
       oncePer: "utxo",
-      ...(obligation === "reveal" &&
-        myIdx !== priorityPlayer(core.round) && { delayMs: 2000 }),
+      ...(obligation === "reveal" && myIdx !== priorityPlayer(core.round) && { delayMs: 2000 }),
       run: async (rpc, key, mm) => {
-        await ensureFunds(rpc, key, engine.FEE_HEADROOM);
+        await ensureFunds(rpc, key, engine.FEE_HEADROOM, { staked: isStaked(mm) });
         return { kind: "advanced", match: await revealMatch(rpc, key, mm) };
       },
     });
 
-  const myDisc = myIdx === 0 ? 1 : 2;
   const mine = findWin(m.state.board, myDisc);
   if (mine) {
     const theirs = findWin(m.state.board, 3 - myDisc);
@@ -169,18 +247,15 @@ export function fourkAutoActions(m: Match, ctx: AutoCtx): AutoAction[] {
       key: "claim",
       oncePer: "utxo",
       run: async (rpc, key, mm) => {
+        await ensureFunds(rpc, key, engine.FEE_HEADROOM, { staked: isStaked(mm) });
         if (theirs) {
-          await ensureFunds(rpc, key, engine.FEE_HEADROOM);
           const w1 = myIdx === 0 ? mine : theirs;
           const w2 = myIdx === 0 ? theirs : mine;
           await claimSplitMatch(rpc, key, mm, w1, w2);
-          return {
-            kind: "finished",
-            message: "You both connected four in the same drop — the pot split evenly.",
-          };
+          return { kind: "finished", message: SPLIT_MESSAGE };
         }
-        await claimWinMatch(rpc, key, mm, mine);
-        return { kind: "finished", message: "You connected four — you win! 🎉" };
+        // Opens the window; the sweep duty takes over on the pending state.
+        return { kind: "advanced", match: await claimWinMatch(rpc, key, mm, mine) };
       },
     });
   }

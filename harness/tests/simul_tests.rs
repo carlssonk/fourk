@@ -33,7 +33,9 @@ const STAKE: u64 = 100_000_000;
 const POT: u64 = 2 * STAKE;
 const MOVE_TIMEOUT: i64 = 36_000;
 const MIN_MOVE_TIMEOUT: i64 = 600;
+const MAX_MOVE_TIMEOUT: i64 = 8_640_000;
 const DEADLINE: i64 = 5_000_000;
+const DEADLINE_LIMIT: i64 = 500_000_000_000;
 
 const ROWS: usize = 6;
 const CELLS: usize = 42;
@@ -107,6 +109,7 @@ struct Simul {
     commit2: [u8; 32],
     reveal1: i64,
     reveal2: i64,
+    pending_win: i64,
 }
 
 fn new_simul() -> Simul {
@@ -117,6 +120,7 @@ fn new_simul() -> Simul {
         commit2: [0; 32],
         reveal1: 0,
         reveal2: 0,
+        pending_win: 0,
     }
 }
 
@@ -200,6 +204,20 @@ fn resolved(s: &Simul, col_a: usize, player_a: usize, col_b: usize) -> Simul {
         commit2: [0; 32],
         reveal1: 0,
         reveal2: 0,
+        pending_win: 0,
+    }
+}
+
+/// claim_win's canonical pending successor: round slots zeroed, the
+/// witnessed color parked in pending_win, everything else untouched.
+fn with_pending(s: &Simul, color: i64) -> Simul {
+    Simul {
+        commit1: [0; 32],
+        commit2: [0; 32],
+        reveal1: 0,
+        reveal2: 0,
+        pending_win: color,
+        ..s.clone()
     }
 }
 
@@ -233,6 +251,7 @@ fn simul_state_full(
         commit2: s.commit2.to_vec(),
         reveal1: s.reveal1,
         reveal2: s.reveal2,
+        pending_win: s.pending_win,
         move_timeout: move_timeout,
         deadline: deadline,
     }
@@ -448,23 +467,50 @@ fn run_resolve(active: &Simul, player: usize, col: usize) -> RunResult {
     )
 }
 
-fn run_claim_win(
+/// claim_win with a caller-supplied successor, for tampering tests.
+fn run_claim_win_into(
     active: &Simul,
     (wcol, wrow, wdir): (i64, i64, i64),
     signer: Keypair,
-    smuggle_successor: bool,
+    successor: Option<(BTreeMap<String, ArtifactValue>, u64)>,
 ) -> RunResult {
-    let claimant = pk(&signer);
     let entry = EntryCall::new("claim_win")
         .args_with(move |tx, idx| args![sign_input(tx, idx, &signer), wcol, wrow, wdir]);
-    let successor = smuggle_successor.then(|| (simul_state(active), POT));
+    run_simul_entry(entry, simul_state(active), 0, 0, vec![], successor).map(|_| ())
+}
+
+/// Honest claim_win: emits the canonical pending successor for the
+/// witnessed cell's color, preserving the pot.
+fn run_claim_win(active: &Simul, witness: (i64, i64, i64), signer: Keypair) -> RunResult {
+    // A bogus witness (out of bounds, empty cell) has no meaningful
+    // successor color; any pending value works because the spend must fail
+    // before the successor is checked.
+    let in_bounds = (0..7).contains(&witness.0) && (0..ROWS as i64).contains(&witness.1);
+    let color = if in_bounds {
+        active.board[(witness.0 as usize) * ROWS + witness.1 as usize] as i64
+    } else {
+        0
+    };
+    let color = if color == 0 { 1 } else { color };
+    run_claim_win_into(
+        active,
+        witness,
+        signer,
+        Some((simul_state(&with_pending(active, color)), POT)),
+    )
+}
+
+fn run_sweep_win(active: &Simul, signer: Keypair, sequence: u64) -> RunResult {
+    let claimant = pk(&signer);
+    let entry = EntryCall::new("sweep_win")
+        .args_with(move |tx, idx| args![sign_input(tx, idx, &signer)]);
     run_simul_entry(
         entry,
         simul_state(active),
-        0,
+        sequence,
         0,
         vec![(p2pk_spk(&claimant), POT)],
-        successor,
+        None,
     )
     .map(|_| ())
 }
@@ -703,6 +749,64 @@ fn simul_join_rejects_trap_timeout() {
     assert_pass(
         run_simul_join(p2(), pk(&p2()), floor, floor_next, STAKE, POT),
         "clock at floor",
+    );
+}
+
+#[test]
+fn simul_join_rejects_hostage_timeout() {
+    let hostage = simul_lobby_state_with(MAX_MOVE_TIMEOUT + 1, DEADLINE);
+    let hostage_next = simul_state_full(
+        &new_simul(),
+        pk(&p1()),
+        pk(&p2()),
+        MAX_MOVE_TIMEOUT + 1,
+        DEADLINE,
+    );
+    assert_fail(
+        run_simul_join(p2(), pk(&p2()), hostage, hostage_next, STAKE, POT),
+        "hostage timeout",
+    );
+
+    let ceiling = simul_lobby_state_with(MAX_MOVE_TIMEOUT, DEADLINE);
+    let ceiling_next = simul_state_full(
+        &new_simul(),
+        pk(&p1()),
+        pk(&p2()),
+        MAX_MOVE_TIMEOUT,
+        DEADLINE,
+    );
+    assert_pass(
+        run_simul_join(p2(), pk(&p2()), ceiling, ceiling_next, STAKE, POT),
+        "clock at ceiling",
+    );
+}
+
+#[test]
+fn simul_join_rejects_uncapped_or_clock_flipping_deadline() {
+    // deadline == 0 is a strandable pot: claim_timeout pays one SPECIFIC
+    // player (who may be the vanished one) and split_timeout needs symmetric
+    // silence, so sudden_death is the only guaranteed exit.
+    let uncapped = simul_lobby_state_with(MOVE_TIMEOUT, 0);
+    let uncapped_next = simul_state_full(&new_simul(), pk(&p1()), pk(&p2()), MOVE_TIMEOUT, 0);
+    assert_fail(
+        run_simul_join(p2(), pk(&p2()), uncapped, uncapped_next, STAKE, POT),
+        "uncapped game",
+    );
+
+    let flipped = simul_lobby_state_with(MOVE_TIMEOUT, DEADLINE_LIMIT);
+    let flipped_next =
+        simul_state_full(&new_simul(), pk(&p1()), pk(&p2()), MOVE_TIMEOUT, DEADLINE_LIMIT);
+    assert_fail(
+        run_simul_join(p2(), pk(&p2()), flipped, flipped_next, STAKE, POT),
+        "timestamp-flavored deadline",
+    );
+
+    let edge = simul_lobby_state_with(MOVE_TIMEOUT, DEADLINE_LIMIT - 1);
+    let edge_next =
+        simul_state_full(&new_simul(), pk(&p1()), pk(&p2()), MOVE_TIMEOUT, DEADLINE_LIMIT - 1);
+    assert_pass(
+        run_simul_join(p2(), pk(&p2()), edge, edge_next, STAKE, POT),
+        "deadline just under the limit",
     );
 }
 
@@ -1436,8 +1540,8 @@ fn p1_line() -> Simul {
 }
 
 #[test]
-fn claim_win_pays_the_line_owner() {
-    assert_pass(run_claim_win(&p1_line(), (0, 0, E), p1(), false), "p1 line");
+fn claim_win_opens_the_challenge_window() {
+    assert_pass(run_claim_win(&p1_line(), (0, 0, E), p1()), "p1 line");
 
     let p2_vertical = with_cells(
         &[
@@ -1452,20 +1556,144 @@ fn claim_win_pays_the_line_owner() {
         ],
         4,
     );
+    assert_pass(run_claim_win(&p2_vertical, (5, 0, N), p2()), "p2 line");
+    // Slots on the table are zeroed by the claim — the game is over except
+    // for the contest.
+    let mid_round = with_commit(&p1_line(), 1, 5);
     assert_pass(
-        run_claim_win(&p2_vertical, (5, 0, N), p2(), false),
-        "p2 line",
+        run_claim_win(&mid_round, (0, 0, E), p1()),
+        "claim mid-commit zeroes the slots",
+    );
+}
+
+#[test]
+fn claim_win_rejects_tampered_pending_successors() {
+    let s = p1_line();
+    let w = (0, 0, E);
+    assert_fail(
+        run_claim_win_into(&s, w, p1(), None),
+        "no pending successor at all (the old terminal shape)",
+    );
+    assert_fail(
+        run_claim_win_into(&s, w, p1(), Some((simul_state(&with_pending(&s, 2)), POT))),
+        "pending the wrong color",
+    );
+    assert_fail(
+        run_claim_win_into(&s, w, p1(), Some((simul_state(&s), POT))),
+        "successor without the pending mark",
+    );
+    assert_fail(
+        run_claim_win_into(
+            &s,
+            w,
+            p1(),
+            Some((simul_state(&with_pending(&s, 1)), POT - 1)),
+        ),
+        "pending successor shaving the pot",
+    );
+    let mut wiped = with_pending(&s, 1);
+    wiped.board = [0; CELLS];
+    assert_fail(
+        run_claim_win_into(&s, w, p1(), Some((simul_state(&wiped), POT))),
+        "pending successor wiping the board",
+    );
+    assert_fail(
+        run_claim_win(&with_pending(&s, 1), w, p1()),
+        "claiming again on an already-pending state",
+    );
+}
+
+#[test]
+fn sweep_win_pays_the_winner_after_the_window() {
+    let pending = with_pending(&p1_line(), 1);
+    assert_pass(
+        run_sweep_win(&pending, p1(), MOVE_TIMEOUT as u64),
+        "sweep at the clock",
+    );
+    assert_fail(
+        run_sweep_win(&pending, p1(), MOVE_TIMEOUT as u64 - 1),
+        "sweep one block early",
+    );
+    assert_fail(
+        run_sweep_win(&pending, p2(), MOVE_TIMEOUT as u64),
+        "the loser sweeping",
+    );
+    assert_fail(
+        run_sweep_win(&pending, stranger(), MOVE_TIMEOUT as u64),
+        "a stranger sweeping",
+    );
+    assert_fail(
+        run_sweep_win(&p1_line(), p1(), MOVE_TIMEOUT as u64),
+        "sweeping with no pending claim",
+    );
+}
+
+#[test]
+fn sweep_win_must_end_the_lineage() {
+    let pending = with_pending(&p1_line(), 1);
+    let signer = p1();
+    let entry = EntryCall::new("sweep_win")
+        .args_with(move |tx, idx| args![sign_input(tx, idx, &signer)]);
+    assert_fail(
+        run_simul_entry(
+            entry,
+            simul_state(&pending),
+            MOVE_TIMEOUT as u64,
+            0,
+            vec![(p2pk_spk(&pk(&p1())), POT)],
+            Some((simul_state(&pending), 1_000)),
+        )
+        .map(|_| ()),
+        "smuggled successor",
+    );
+}
+
+#[test]
+fn a_pending_win_freezes_every_other_door_except_the_exits() {
+    let pending = with_pending(&p1_line(), 1);
+    // The round machine is suspended...
+    assert_fail(
+        run_commit(
+            &pending,
+            p2(),
+            pk(&p2()),
+            commitment(5, &salt(1, pending.round)),
+            simul_state(&with_commit(&pending, 1, 5)),
+            POT,
+        ),
+        "commit into a pending state",
+    );
+    // ...the permissionless pot-splitters are gated (split_timeout on the
+    // same clock as the sweep would otherwise halve the winner's pot)...
+    assert_fail(
+        run_split_timeout(&pending, MOVE_TIMEOUT as u64, half_split()),
+        "split_timeout on a pending state",
+    );
+    assert_fail(
+        run_claim_timeout(&pending, p1(), MOVE_TIMEOUT as u64),
+        "claim_timeout on a pending state",
+    );
+    let mut full_pending = with_pending(&full_board_simul(), 1);
+    full_pending.round = full_board_simul().round;
+    assert_fail(
+        run_simul_draw(&full_pending, half_split()),
+        "claim_draw racing a pending win on a full board",
+    );
+    // ...but the liveness exit stays open.
+    assert_pass(
+        run_simul_sudden_death(simul_state(&pending), half_split(), DEADLINE as u64),
+        "sudden death on an abandoned pending win",
     );
 }
 
 #[test]
 fn claim_win_rejects_non_owners() {
     assert_fail(
-        run_claim_win(&p1_line(), (0, 0, E), p2(), false),
+        run_claim_win(&p1_line(), (0, 0, E), p2()),
         "opponent claiming",
     );
     assert_fail(
-        run_claim_win(&p1_line(), (0, 0, E), stranger(), false),
+        run_claim_win(&p1_line(), (0, 0, E), stranger()),
         "stranger claiming",
     );
 }
@@ -1473,19 +1701,11 @@ fn claim_win_rejects_non_owners() {
 #[test]
 fn claim_win_rejects_bad_witnesses() {
     let s = p1_line();
-    assert_fail(run_claim_win(&s, (0, 5, E), p1(), false), "empty start");
-    assert_fail(run_claim_win(&s, (0, 1, E), p2(), false), "broken line");
-    assert_fail(run_claim_win(&s, (6, 0, E), p1(), false), "off the edge");
-    assert_fail(run_claim_win(&s, (-1, 0, E), p1(), false), "negative col");
-    assert_fail(run_claim_win(&s, (0, 0, 4), p1(), false), "bad direction");
-}
-
-#[test]
-fn claim_win_must_end_the_lineage() {
-    assert_fail(
-        run_claim_win(&p1_line(), (0, 0, E), p1(), true),
-        "smuggled successor",
-    );
+    assert_fail(run_claim_win(&s, (0, 5, E), p1()), "empty start");
+    assert_fail(run_claim_win(&s, (0, 1, E), p2()), "broken line");
+    assert_fail(run_claim_win(&s, (6, 0, E), p1()), "off the edge");
+    assert_fail(run_claim_win(&s, (-1, 0, E), p1()), "negative col");
+    assert_fail(run_claim_win(&s, (0, 0, 4), p1()), "bad direction");
 }
 
 // -- claim_split -----------------------------------------------------------
@@ -1512,6 +1732,42 @@ fn claim_split_splits_on_a_double_win() {
     assert_pass(
         run_claim_split(&double_win(), (0, 0, E), (0, 1, E), half_split()),
         "double win split",
+    );
+}
+
+/// THE POINT of the challenge window: a greedy one-line claim_win on a
+/// double-win board no longer races the honest claim_split in the mempool —
+/// it opens a pending state that claim_split (permissionless, witnesses
+/// computable from the public board by anyone) converts into the fair split
+/// for a whole move clock, while the sweep's sequence lock keeps the greedy
+/// claimant waiting.
+#[test]
+fn a_greedy_double_win_claim_is_contestable_for_a_whole_move_clock() {
+    // Either owner can still open the window with only their own line...
+    assert_pass(
+        run_claim_win(&double_win(), (0, 0, E), p1()),
+        "p1 claims a double win with only their own line",
+    );
+    assert_pass(
+        run_claim_win(&double_win(), (0, 1, E), p2()),
+        "p2 claims a double win with only their own line",
+    );
+    // ...but the pending state is exactly where claim_split stays legal.
+    for greedy in [1, 2] {
+        assert_pass(
+            run_claim_split(
+                &with_pending(&double_win(), greedy),
+                (0, 0, E),
+                (0, 1, E),
+                half_split(),
+            ),
+            "contest converts the pending claim into the fair split",
+        );
+    }
+    // And the greedy sweep is exactly one move clock away — consensus-gated.
+    assert_fail(
+        run_sweep_win(&with_pending(&double_win(), 1), p1(), MOVE_TIMEOUT as u64 - 1),
+        "sweeping inside the window",
     );
 }
 
@@ -1822,6 +2078,43 @@ fn compute_budget_probe() {
         let tx = run_simul_entry(entry, simul_state(&double_win()), 0, 0, half_split(), None)
             .expect("claim_split executes");
         measured.push(("claim_split", budget_of(&tx)));
+    }
+
+    // claim_win — now a continuation: line check PLUS the successor template
+    // rebuild, the same cost class as commit/reveal/resolve.
+    {
+        let s = p1_line();
+        let signer = p1();
+        let entry = EntryCall::new("claim_win")
+            .args_with(move |tx, idx| args![sign_input(tx, idx, &signer), 0i64, 0i64, E]);
+        let tx = run_simul_entry(
+            entry,
+            simul_state(&s),
+            0,
+            0,
+            vec![],
+            Some((simul_state(&with_pending(&s, 1)), POT)),
+        )
+        .expect("claim_win executes");
+        measured.push(("claim_win", budget_of(&tx)));
+    }
+
+    // sweep_win
+    {
+        let pending = with_pending(&p1_line(), 1);
+        let signer = p1();
+        let entry = EntryCall::new("sweep_win")
+            .args_with(move |tx, idx| args![sign_input(tx, idx, &signer)]);
+        let tx = run_simul_entry(
+            entry,
+            simul_state(&pending),
+            MOVE_TIMEOUT as u64,
+            0,
+            vec![(p2pk_spk(&pk(&p1())), POT)],
+            None,
+        )
+        .expect("sweep_win executes");
+        measured.push(("sweep_win", budget_of(&tx)));
     }
 
     println!("measured budgets: {measured:?}");

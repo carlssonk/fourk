@@ -18,7 +18,7 @@ import { useEffect, useRef, useState } from "react";
 import * as cov from "@shared/lib/covenant";
 import type { Match } from "@shared/lib/match";
 import type { GameMode } from "@shared/modes/types";
-import { getRpc, getWallet, runAction, updateMatch } from "@shared/state";
+import { getRpc, matchWallet, runAction, updateMatch } from "@shared/state";
 
 const CROSSED = /game UTXO not found|orphan|already spent|missing outpoint/i;
 /** setTimeout's cap (~24.8 days); longer schedules re-arm on a later mount. */
@@ -42,18 +42,26 @@ export function useAutopilot(
 
   useEffect(() => {
     if (result || busy) return;
-    const myPk = getWallet().myPk;
-    const role = cov.myRole(match, myPk);
-    if (role === "spectator") return;
+    // No seat, nothing to automate. Holding one also settles the role:
+    // matchWallet only ever returns a wallet whose pk is p1 or p2.
+    const seat = matchWallet(match);
+    if (!seat) return;
+    const myPk = seat.myPk;
+    const role = myPk === match.state.p1 ? "p1" : "p2";
     const actions = mode.autoActions(match, { myPk, role });
 
     let alive = true;
     const timers: Array<ReturnType<typeof setTimeout>> = [];
 
-    const fire = (key: string, guardId: string, run: (typeof actions)[number]["run"], onTerminated?: string) => {
+    const fire = (
+      key: string,
+      guardId: string,
+      run: (typeof actions)[number]["run"],
+      onTerminated?: string,
+    ) => {
       fired.current.set(key, guardId);
       runAction(async () => {
-        const { key: signKey } = getWallet();
+        const signKey = seat.key;
         const rpc = await getRpc();
         try {
           const outcome = await run(rpc, signKey, match);

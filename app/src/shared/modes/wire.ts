@@ -13,7 +13,9 @@ import { FOURK_MODE_BYTE, pushSimulSection, takeSimulSection } from "./fourk/wir
 /** Write a mode section: mode byte, then the mode's body. */
 export function pushModeSection(
   out: number[],
-  mode: "fourk",
+  // Named for the call sites (and the next mode); fourk is the only mode
+  // with a section today, so the byte is a constant here.
+  _mode: "fourk",
   simul: SimulCore | undefined,
 ): void {
   out.push(FOURK_MODE_BYTE);

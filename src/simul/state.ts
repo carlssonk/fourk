@@ -18,9 +18,10 @@
 import {
   CELLS,
   COLS,
+  DEADLINE_LIMIT,
   EMPTY,
+  MAX_MOVE_TIMEOUT_DAA,
   MIN_MOVE_TIMEOUT_DAA,
-  MOVE_TIMEOUT_DAA,
   P1_DISC,
   P2_DISC,
   ROWS,
@@ -48,25 +49,38 @@ export interface SimulState {
   /** 0 = not revealed this round, else revealed column + 1. */
   reveal1: number;
   reveal2: number;
+  /**
+   * The challenge window: 0 = normal play; 1/2 = that color's owner proved a
+   * line via claimWin and the pot is pending theirs. The opponent (anyone,
+   * in fact — it is permissionless) has one move clock to present the OTHER
+   * line via claimSplit (the double-win contest); after `this.age >=
+   * moveTimeout` the pending winner sweeps. This turns the double-win
+   * mempool race into a full block-time window, and consensus itself (the
+   * sweep's sequence lock) rejects an early sweep.
+   */
+  pendingWin: number;
   /** Per-player stake in sompi. Pot = 2 * stake once joined. */
   stake: bigint;
   /** Per-obligation forfeit timeout in DAA blocks; chosen at creation. */
   moveTimeout: number;
-  /** Absolute DAA score for sudden death; 0 = uncapped. */
+  /** Absolute DAA score for sudden death. Mandatory (join refuses 0): the
+   * one permissionless exit that keeps a pot from being stranded forever. */
   deadline: number;
 }
 
 export function newSimulMatch(
   p1: PubKey,
   stake: bigint,
-  moveTimeout = MOVE_TIMEOUT_DAA,
-  deadline = 0,
+  moveTimeout: number,
+  deadline: number,
 ): SimulState {
   if (!isPubKey(p1) || p1 === ZERO_PK) throw new Error("invalid p1 pubkey");
   if (stake <= 0n) throw new Error("stake must be positive");
   if (!Number.isInteger(moveTimeout) || moveTimeout < MIN_MOVE_TIMEOUT_DAA)
     throw new Error("move timeout below minimum");
-  if (!Number.isInteger(deadline) || deadline < 0) throw new Error("bad deadline");
+  if (moveTimeout > MAX_MOVE_TIMEOUT_DAA) throw new Error("move timeout above maximum");
+  if (!Number.isInteger(deadline) || deadline <= 0 || deadline >= DEADLINE_LIMIT)
+    throw new Error("bad deadline");
   return {
     board: new Uint8Array(CELLS),
     round: 0,
@@ -76,10 +90,16 @@ export function newSimulMatch(
     commit2: ZERO_HASH,
     reveal1: 0,
     reveal2: 0,
+    pendingWin: 0,
     stake,
     moveTimeout,
     deadline,
   };
+}
+
+/** The color whose claimWin opened the current challenge window, if any. */
+export function pendingWinner(s: SimulState): 0 | 1 | null {
+  return s.pendingWin === 0 ? null : ((s.pendingWin - 1) as 0 | 1);
 }
 
 export function isSimulOpen(s: SimulState): boolean {
@@ -134,10 +154,10 @@ export function isBoardFull(board: Uint8Array): boolean {
 //
 // Fixed layout, one valid encoding per state, mirroring ../state.ts.
 // Layout: board[42] | round u8 | p1[32] | p2[32] | commit1[32] | commit2[32]
-//       | reveal1 u8 | reveal2 u8 | stake u64le | moveTimeout u32le
-//       | deadline u64le.
+//       | reveal1 u8 | reveal2 u8 | pendingWin u8 | stake u64le
+//       | moveTimeout u32le | deadline u64le.
 
-export const SIMUL_STATE_BYTES = CELLS + 1 + 32 + 32 + 32 + 32 + 1 + 1 + 8 + 4 + 8; // 193
+export const SIMUL_STATE_BYTES = CELLS + 1 + 32 + 32 + 32 + 32 + 1 + 1 + 1 + 8 + 4 + 8; // 194
 
 export function encodeSimulState(s: SimulState): Uint8Array {
   const out = new Uint8Array(SIMUL_STATE_BYTES);
@@ -149,10 +169,11 @@ export function encodeSimulState(s: SimulState): Uint8Array {
   out.set(hexToBytes(s.commit2), CELLS + 97);
   out[CELLS + 129] = s.reveal1;
   out[CELLS + 130] = s.reveal2;
+  out[CELLS + 131] = s.pendingWin;
   const view = new DataView(out.buffer);
-  view.setBigUint64(CELLS + 131, s.stake, true);
-  view.setUint32(CELLS + 139, s.moveTimeout, true);
-  view.setBigUint64(CELLS + 143, BigInt(s.deadline), true);
+  view.setBigUint64(CELLS + 132, s.stake, true);
+  view.setUint32(CELLS + 140, s.moveTimeout, true);
+  view.setBigUint64(CELLS + 144, BigInt(s.deadline), true);
   return out;
 }
 
@@ -165,6 +186,8 @@ export function decodeSimulState(buf: Uint8Array): SimulState {
   const reveal1 = buf[CELLS + 129]!;
   const reveal2 = buf[CELLS + 130]!;
   if (reveal1 > COLS || reveal2 > COLS) throw new Error("bad reveal value");
+  const pendingWin = buf[CELLS + 131]!;
+  if (pendingWin > 2) throw new Error("bad pending win value");
   const view = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
   return {
     board,
@@ -175,9 +198,10 @@ export function decodeSimulState(buf: Uint8Array): SimulState {
     commit2: bytesToHex(buf.slice(CELLS + 97, CELLS + 129)),
     reveal1,
     reveal2,
-    stake: view.getBigUint64(CELLS + 131, true),
-    moveTimeout: view.getUint32(CELLS + 139, true),
-    deadline: Number(view.getBigUint64(CELLS + 143, true)),
+    pendingWin,
+    stake: view.getBigUint64(CELLS + 132, true),
+    moveTimeout: view.getUint32(CELLS + 140, true),
+    deadline: Number(view.getBigUint64(CELLS + 144, true)),
   };
 }
 

@@ -138,9 +138,9 @@
         {
           "name": "claim_win",
           "kind": "leader",
-          "emits": { "kind": "none" },
+          "emits": { "kind": "outputs", "outputs": [{ "name": "pending", "auth_index": 0, "actors": ["FourkSimul"] }] },
           "consumes": [],
-          "routes": []
+          "routes": [{ "output": "pending", "actor": "FourkSimul", "state": "next_match" }]
         },
         {
           "name": "claim_split",
@@ -172,6 +172,13 @@
         },
         {
           "name": "sudden_death",
+          "kind": "leader",
+          "emits": { "kind": "none" },
+          "consumes": [],
+          "routes": []
+        },
+        {
+          "name": "sweep_win",
           "kind": "leader",
           "emits": { "kind": "none" },
           "consumes": [],

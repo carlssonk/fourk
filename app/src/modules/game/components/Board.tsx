@@ -8,7 +8,7 @@ import {
   playerToMove,
   type State,
 } from "@shared/lib/game";
-import { KASPA_K_PATH, KASPA_RING_PATH } from "@shared/lib/kaspaMark";
+import { KaspaStamp } from "@shared/components/KaspaStamp";
 
 interface Props {
   state: State;
@@ -53,17 +53,6 @@ const BOUNCE_E = [0.12, 0.18, 0.24, 0.3] as const;
  * animation segment is the true gravity parabola rather than a lookalike. */
 const QUAD_IN = "cubic-bezier(0.33, 0, 0.67, 0.33)";
 const QUAD_OUT = "cubic-bezier(0.33, 0.67, 0.67, 1)";
-
-/** The Kaspa mark stamped into the coin face: the uneven roundel as an
- * inner border ring hugging the rim, the K in its logo position inside it.
- * The viewBox squares up around the roundel's centre (~98.3, 98.3), sized
- * so the ring spans ~92% of the face. */
-const KaspaStamp = () => (
-  <svg viewBox="36.3 36.3 124 124" aria-hidden className="size-full">
-    <path d={KASPA_RING_PATH} fill="none" stroke="rgba(0, 0, 0, 0.2)" strokeWidth="4" />
-    <path d={KASPA_K_PATH} fill="rgba(0, 0, 0, 0.2)" />
-  </svg>
-);
 
 /** Drop a freshly landed disc in from just above the frame's top edge with
  * the backdrop's kinematics: free fall over `fell` rows, then one rebound at
@@ -232,36 +221,34 @@ export const Board = ({
         aria-hidden
         className="mb-2 flex h-[calc(var(--cell)*0.5)] items-center justify-center gap-2"
       >
-        {nextDisc === "both" ? (
-          // Fourk mode: both colours are in play at once. The round's
-          // collision-priority disc sits in front — it lands underneath if
-          // both players pick the same column.
-          (() => {
-            const first = priorityDisc ?? 1;
-            const second = first === 1 ? 2 : 1;
-            return (
-              <div
-                className="flex items-center"
-                title="If both players pick the same column, the front disc lands underneath — priority alternates every round."
-              >
-                <div className={`z-10 size-[calc(var(--cell)*0.5)] rounded-full ${DISC[first]}`}>
-                  <KaspaStamp />
-                </div>
+        {nextDisc === "both"
+          ? // Fourk mode: both colours are in play at once. The round's
+            // collision-priority disc sits in front — it lands underneath if
+            // both players pick the same column.
+            (() => {
+              const first = priorityDisc ?? 1;
+              const second = first === 1 ? 2 : 1;
+              return (
                 <div
-                  className={`-ml-3 size-[calc(var(--cell)*0.5)] rounded-full opacity-70 ${DISC[second]}`}
+                  className="flex items-center"
+                  title="If both players pick the same column, the front disc lands underneath — priority alternates every round."
                 >
-                  <KaspaStamp />
+                  <div className={`z-10 size-[calc(var(--cell)*0.5)] rounded-full ${DISC[first]}`}>
+                    <KaspaStamp />
+                  </div>
+                  <div
+                    className={`-ml-3 size-[calc(var(--cell)*0.5)] rounded-full opacity-70 ${DISC[second]}`}
+                  >
+                    <KaspaStamp />
+                  </div>
                 </div>
+              );
+            })()
+          : nextDisc !== null && (
+              <div className={`size-[calc(var(--cell)*0.5)] rounded-full ${DISC[nextDisc]}`}>
+                <KaspaStamp />
               </div>
-            );
-          })()
-        ) : (
-          nextDisc !== null && (
-            <div className={`size-[calc(var(--cell)*0.5)] rounded-full ${DISC[nextDisc]}`}>
-              <KaspaStamp />
-            </div>
-          )
-        )}
+            )}
       </div>
       {/* p-1.75 + the half-gap inside each cell's pitch keeps the old 12px
        * breathing room between the outer holes and the frame edge. */}

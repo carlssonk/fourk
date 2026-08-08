@@ -1,0 +1,36 @@
+# Netlify / Cloudflare Pages headers file. Vite copies public/ into dist/
+# verbatim, so this ships with every build. Hosts that don't read _headers
+# (Vercel, nginx, S3+CloudFront, ...) need the same headers configured by
+# hand — DEPLOY.md carries the equivalents.
+#
+# CSP rationale:
+#   script-src 'wasm-unsafe-eval'  - the kaspa/fourk wasm modules are
+#       compiled in-browser; without this, WebAssembly.instantiate throws.
+#   style-src 'unsafe-inline'      - Tailwind (and React inline style props)
+#       set styles via inline <style>/style attributes.
+#   connect-src wss: https:        - the app discovers arbitrary public
+#       Kaspa nodes through the resolver at runtime; their hostnames cannot
+#       be known ahead of time, so the whole wss:/https: schemes must be
+#       open. Everything else (scripts, styles, images) stays same-origin.
+#   img-src data:                  - generated avatars/QR-style images use
+#       data: URIs.
+#   frame-ancestors 'none'         - the app manages real crypto keys in
+#       localStorage; never allow it to be framed (clickjacking). This
+#       directive only works as a real header — meta CSP ignores it — which
+#       is why hosts that drop _headers must recreate it (see DEPLOY.md).
+#   object-src 'none' / base-uri 'self' / form-action 'self' - standard
+#       lockdown; the app has no plugins, no <base>, no cross-site forms.
+
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss: https:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=()
+
+# Hashed build output is immutable — cache it forever. This includes the
+# ~11.7MB kaspa wasm; hosts brotli-compress it automatically on the wire
+# (no precompression step needed here), and with `immutable` each browser
+# downloads it once per release.
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable

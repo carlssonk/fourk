@@ -5,15 +5,10 @@
  */
 
 import { fourk } from "../../lib/sdk";
-import {
-  applyMove,
-  legalColumns,
-  playerToMove,
-  type State,
-} from "../../lib/game";
+import { applyMove, legalColumns, playerToMove, type State } from "../../lib/game";
 import { fromHex, phaseOf, toHex, type Match } from "../../lib/match";
 import type { SpendInfo } from "../../lib/engine";
-import type { GameMode, SpendClass } from "../types";
+import type { ModeChainSurface, SpendClass } from "../types";
 import { rederiveJoin } from "../common";
 
 /** Entrypoints in ABI/selector order — must match fourk.ag declaration order
@@ -64,7 +59,14 @@ export const classicEngine = {
     const intArgs = ints.length ? BigInt64Array.from(ints.map(BigInt)) : undefined;
     return toHex(
       isOpen(s)
-        ? fourk.lobbySigScript(fromHex(s.p1), BigInt(s.moveTimeout), BigInt(s.deadline), fn, sig, pk)
+        ? fourk.lobbySigScript(
+            fromHex(s.p1),
+            BigInt(s.moveTimeout),
+            BigInt(s.deadline),
+            fn,
+            sig,
+            pk,
+          )
         : fourk.matchSigScript(...classicArgs(s), fn, sig, pk, intArgs),
     );
   },
@@ -96,11 +98,14 @@ export const classicEngine = {
     return rederiveJoin(m, spend, {});
   },
 
-  /** Classic live spends are moves (enumerable — never reaches the watcher's
-   * discovery path) or terminal doors; an untraceable spend of an enumerable
-   * phase reads as an ending, exactly as before modes existed. */
-  classifySpend(_spend: SpendInfo | null): SpendClass {
-    return "terminal";
+  /** Only a TRACED terminal door reads as an ending. An untraceable spend
+   * (pruned checkpoint, UTXO-index race, a node that can't serve the trace)
+   * proves nothing: declaring it terminal would persist "The game has
+   * ended." onto a live match — and in a staked game the player who stops
+   * playing then loses the pot to claim_forfeit. Continuations (join, and
+   * any move whose adoption failed) retry too. */
+  classifySpend(spend: SpendInfo | null): SpendClass {
+    return !spend || spend.kind === "join" || spend.kind === "move" ? "continuation" : "terminal";
   },
 
   progress(m: Match): number {
@@ -111,4 +116,4 @@ export const classicEngine = {
     const mover = playerToMove(m.state) === 0 ? m.state.p1 : m.state.p2;
     return mover === pkHex;
   },
-} satisfies Omit<GameMode, "meta">;
+} satisfies ModeChainSurface;

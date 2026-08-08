@@ -146,9 +146,21 @@ async function claimFromLane(
  * One drip may not cover a large stake (a CLI-hosted invite can carry any
  * amount), so this claims lane after lane until the balance is there — or
  * the dispenser runs out of eligible lanes and the claim itself throws.
+ *
+ * Staked games never drip: the player's own balance is the whole point, so
+ * a shortfall is a "add funds" moment (LOW_BALANCE), not a top-up.
  */
-export async function ensureFunds(rpc: Rpc, key: PrivateKey, need: bigint): Promise<void> {
+export async function ensureFunds(
+  rpc: Rpc,
+  key: PrivateKey,
+  need: bigint,
+  opts: { staked?: boolean } = {},
+): Promise<void> {
   const address = walletAddress(key);
+  if (opts.staked) {
+    if ((await walletBalance(rpc, address)) < need) throw new Error("LOW_BALANCE");
+    return;
+  }
   for (let claims = 0; claims < 4; claims++) {
     const before = await walletBalance(rpc, address);
     if (before >= need) return;

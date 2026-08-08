@@ -81,6 +81,18 @@ export function removeMatch(covenantId: string): void {
   );
 }
 
+/**
+ * The games this key is sitting in that haven't ended. Its balance is
+ * spoken for while any exist (it still owes their fees), and losing the key
+ * would strand them — which is what the cash-out reserve and the sign-in
+ * warning are each asking about.
+ * (An unjoined seat has p2 = ZERO_PK, which no real key can equal, so the
+ * open/joined distinction needs no separate test.)
+ */
+export function unfinishedGamesOn(matches: Match[], pk: string): Match[] {
+  return matches.filter((m) => !m.result && (m.state.p1 === pk || m.state.p2 === pk));
+}
+
 /** Back to the hub; `forget` also drops the game from the stored list. */
 export function exitMatch(forget: boolean): void {
   const cur = store.get(currentMatchAtom);

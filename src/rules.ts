@@ -16,6 +16,8 @@
 import {
   CELLS,
   COLS,
+  DEADLINE_LIMIT,
+  MAX_MOVE_TIMEOUT_DAA,
   MIN_MOVE_TIMEOUT_DAA,
   ROWS,
   type State,
@@ -88,8 +90,20 @@ export function join(s: State, ctx: Ctx): State {
   // for every door keyed on "the other player" — rule it out at the gate.
   req(ctx.signer !== s.p1, "cannot join your own match");
   // Genesis sanity the joiner relies on: a near-instant forfeit clock would
-  // make the game a trap, so a genesis below the floor is unjoinable.
+  // make the game a trap, so a genesis below the floor is unjoinable — and a
+  // decades-long clock would turn claimForfeit into a hostage lock, so a
+  // genesis above the ceiling is unjoinable too.
   req(s.moveTimeout >= MIN_MOVE_TIMEOUT_DAA, "move timeout below minimum");
+  req(s.moveTimeout <= MAX_MOVE_TIMEOUT_DAA, "move timeout above maximum");
+  // A deadline is mandatory: suddenDeath is the one permissionless exit every
+  // match is guaranteed, so a pot can never be stranded by two vanished
+  // players (every other mid-game door needs a player's signature). It must
+  // also stay below the consensus lock-time threshold, where a "DAA score"
+  // would silently become a unix-ms timestamp. What script CANNOT check is
+  // that the deadline is still in the future (a locktime proves time passed,
+  // never time remaining) — that check belongs to the joiner's client.
+  req(s.deadline > 0, "no game deadline set");
+  req(s.deadline < DEADLINE_LIMIT, "deadline out of range");
   return { ...s, board: s.board.slice(), p2: ctx.signer };
 }
 

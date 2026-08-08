@@ -8,7 +8,7 @@ import { CELLS, applyMove, discOf, playerToMove, type State } from "../../lib/ga
 import { isOpen as stateIsOpen } from "../../lib/game";
 import type { Match } from "../../lib/match";
 import type { SpendInfo } from "../../lib/engine";
-import type { ModeView, StatusDescriptor, ViewCtx } from "../types";
+import type { ModeView, ModeViewSurface, StatusDescriptor, ViewCtx } from "../types";
 import { GENERIC_END, describeSharedEnd } from "../common";
 
 function isHex64(s: string): boolean {
@@ -124,4 +124,4 @@ export const classicView = {
     }
     return m;
   },
-};
+} satisfies ModeViewSurface;

@@ -1,0 +1,53 @@
+# CI for what a clean clone can verify. The Rust harness (harness/) and the
+# contract/wasm rebuilds need the sibling checkouts ../silverscript and
+# ../argent-lang, which are not pinnable yet (argent-lang is not a git repo)
+# — those suites stay local until the toolchain repos are vendored or
+# published. Everything TypeScript-side runs here, against the committed
+# wasm artifacts, exactly like a fresh contributor's machine.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  reference:
+    name: reference rules (tests + types)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      # Root vitest covers src/ + test/ (rules, properties, share codes)
+      # and app/test (accounts) — the money-critical TS suites.
+      - run: pnpm test
+      - run: pnpm typecheck
+
+  app:
+    name: app (types + lint + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      # tsc -b, NOT bare tsc: the solution-style tsconfig makes a bare
+      # `tsc --noEmit` a silent no-op (learned the hard way).
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm build
+        env:
+          VITE_COMMIT_SHA: ${{ github.sha }}

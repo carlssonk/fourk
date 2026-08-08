@@ -36,6 +36,12 @@ contract Fourk(
     // Floor for the per-move clock (~1 minute at ~10 blocks/s). Join
     // re-checks it, so a trap genesis with an instant clock is unjoinable.
     int constant MIN_MOVE_TIMEOUT = 600;
+    // Ceiling (~10 days): a decades-long clock would turn claim_forfeit
+    // into a hostage lock on the joiner's stake.
+    int constant MAX_MOVE_TIMEOUT = 8640000;
+    // Exclusive deadline bound, mirroring the consensus lock-time threshold
+    // (past it a locktime means unix-ms, not DAA score).
+    int constant DEADLINE_LIMIT = 500000000000;
 
     pubkey p1 = init_p1;
     pubkey p2 = init_p2;
@@ -59,6 +65,14 @@ contract Fourk(
         require(move_count == 0);
         require(board == byte[42](0x000000000000000000000000000000000000000000000000000000000000000000000000000000000000));
         require(move_timeout >= MIN_MOVE_TIMEOUT);
+        require(move_timeout <= MAX_MOVE_TIMEOUT);
+        // Mandatory in-range deadline: sudden_death is the one permissionless
+        // exit that keeps a stranded pot spendable, and the bound keeps the
+        // deadline in DAA-score semantics. Whether it is already in the past
+        // is the joining client's check (a locktime proves time passed,
+        // never time remaining).
+        require(deadline > 0);
+        require(deadline < DEADLINE_LIMIT);
         // A same-key match is degenerate for every door keyed on "the other
         // player" — rule it out at the gate (mirrors rules.ts join).
         require(pk != p1);

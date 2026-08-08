@@ -14,9 +14,11 @@ export interface Genes {
 }
 
 export const GENE_KEYS = ["shape", "color", "eyes", "extra"] as const;
+/** "Palette", not "Colour": the setup card also picks a DISC colour, and two
+ * controls both called colour four lines apart read as the same setting. */
 export const GENE_LABELS: Record<keyof Genes, string> = {
   shape: "Shape",
-  color: "Colour",
+  color: "Palette",
   eyes: "Eyes",
   extra: "Extras",
 };
@@ -34,8 +36,8 @@ export function genesToCode(g: Genes): string {
 
 export function codeToGenes(code: string): Genes {
   const hex = /^[0-9a-f]{16}$/.test(code) ? code : code.padEnd(16, "0").slice(0, 16);
-  const [shape, color, eyes, extra] = [0, 4, 8, 12].map((i) =>
-    parseInt(hex.slice(i, i + 4), 16) || 0,
+  const [shape, color, eyes, extra] = [0, 4, 8, 12].map(
+    (i) => parseInt(hex.slice(i, i + 4), 16) || 0,
   );
   return { shape: shape!, color: color!, eyes: eyes!, extra: extra! };
 }

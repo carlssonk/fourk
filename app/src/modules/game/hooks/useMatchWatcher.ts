@@ -9,7 +9,7 @@ import { watchAddress } from "@shared/lib/watch";
 import {
   RESET_RESULT,
   busyAtom,
-  getWallet,
+  matchWallet,
   networkResetAtom,
   rpcClientAtom,
   updateMatch,
@@ -46,8 +46,7 @@ export function useMatchWatcher(match: Match) {
     let spend = fresh ? await cov.discoverSpend(client, m, fresh).catch(() => null) : null;
     if (!spend) {
       const low = checkpoint.current ?? loadCheckpoint(m.covenantId);
-      if (low && low !== fresh)
-        spend = await cov.discoverSpend(client, m, low).catch(() => null);
+      if (low && low !== fresh) spend = await cov.discoverSpend(client, m, low).catch(() => null);
     }
     return spend;
   };
@@ -61,7 +60,9 @@ export function useMatchWatcher(match: Match) {
 
   const open = isOpen(match.state);
   const full = match.state.moveCount >= CELLS;
-  const myTurn = cov.isActionable(match, getWallet().myPk) && !open && !full && !result;
+  // Spectators hold no seat: the empty pk is actionable in no game.
+  const myPk = matchWallet(match)?.myPk ?? "";
+  const myTurn = cov.isActionable(match, myPk) && !open && !full && !result;
 
   // Open phase: watch for a join. The joiner's successor address cannot be
   // enumerated (it embeds their pubkey), so we checkpoint the chain while the
@@ -93,7 +94,7 @@ export function useMatchWatcher(match: Match) {
           } else if (chainReset) {
             finish(RESET_RESULT);
           } else if (spend?.kind === "cancel") {
-            finish(modeOf(match).describeEnd(spend, match, getWallet().myPk));
+            finish(modeOf(match).describeEnd(spend, match, myPk));
           } else {
             setNeedManualImport(true);
           }
@@ -144,10 +145,7 @@ export function useMatchWatcher(match: Match) {
             // Skip the tick; the watcher retries.
             const mode = modeOf(match);
             if (mode.classifySpend(spend) === "continuation") return;
-            finish(
-              mode.describeEnd(spend, match, getWallet().myPk),
-              mode.finalSnapshot(spend, match),
-            );
+            finish(mode.describeEnd(spend, match, myPk), mode.finalSnapshot(spend, match));
           }
         } finally {
           freshCp.current = cp;

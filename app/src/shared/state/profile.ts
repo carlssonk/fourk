@@ -1,7 +1,7 @@
 import { atom, getDefaultStore } from "jotai";
 import { genesToCode, randomGenes } from "../lib/avatar";
 import type { MatchTiming } from "../lib/covenant";
-import { MIN_MOVE_TIMEOUT_DAA, MOVE_TIMEOUT_DAA } from "../lib/game";
+import { MAX_MOVE_TIMEOUT_DAA, MIN_MOVE_TIMEOUT_DAA, MOVE_TIMEOUT_DAA } from "../lib/game";
 import { trimName, type PlayerProfile } from "../lib/match";
 import { parseModeKey } from "../modes/registry";
 import type { GameModeKey } from "../modes/types";
@@ -37,18 +37,24 @@ export function saveProfile(p: PlayerProfile): void {
 
 const COLOR_KEY = "fourk.p1color";
 
-/** The disc colour this player hosts games as (a match setting, not part of
- * the shareable identity — the joiner always gets the other colour). */
-export const hostColorAtom = atom<"red" | "blue">(
-  localStorage.getItem(COLOR_KEY) === "blue" ? "blue" : "red",
-);
-
-export function getHostColor(): "red" | "blue" {
-  return store.get(hostColorAtom);
+/** The colour this player's discs are, as a standing preference rather than
+ * a per-match choice — it can't be a matchmaking bucket (two players can't
+ * both be red), so it belongs with the avatar, not with the game settings.
+ * The opponent always takes the other colour; when hosting, the host's
+ * preference wins. Pure paint either way: on-chain discs are only 1
+ * (creator) and 2 (joiner), and the host moves first regardless. */
+function loadDiscColor(): "red" | "blue" {
+  return localStorage.getItem(COLOR_KEY) === "red" ? "red" : "blue";
 }
 
-export function saveHostColor(c: "red" | "blue"): void {
-  store.set(hostColorAtom, c);
+export const discColorAtom = atom<"red" | "blue">(loadDiscColor());
+
+export function getDiscColor(): "red" | "blue" {
+  return store.get(discColorAtom);
+}
+
+export function saveDiscColor(c: "red" | "blue"): void {
+  store.set(discColorAtom, c);
   localStorage.setItem(COLOR_KEY, c);
 }
 
@@ -71,50 +77,83 @@ export function saveGameMode(mode: GameModeKey): void {
   localStorage.setItem(MODE_KEY, mode);
 }
 
+// --- Stake (host-side setting) ------------------------------------------------
+
+const STAKE_KEY = "fourk.stake";
+
+function loadStake(): bigint {
+  try {
+    const v = BigInt(localStorage.getItem(STAKE_KEY) ?? "0");
+    return v > 0n ? v : 0n;
+  } catch {
+    return 0n;
+  }
+}
+
+/** The stake hosted games open with, in sompi; 0 = free play, which opens
+ * at the hidden drip-funded FREE_STAKE instead. Anything above 0 makes the
+ * game staked: pot visible, seats funded from the players' own balances. */
+export const stakeAtom = atom<bigint>(loadStake());
+
+export function getStake(): bigint {
+  return store.get(stakeAtom);
+}
+
+export function saveStake(sompi: bigint): void {
+  if (sompi < 0n) return;
+  store.set(stakeAtom, sompi);
+  localStorage.setItem(STAKE_KEY, String(sompi));
+}
+
 // --- Match timing (host-side settings, remembered per player) ----------------
 
 const TIMEOUT_KEY = "fourk.movetimeout";
-const CAP_KEY = "fourk.gamecap";
 
-function loadDaa(key: string, fallback: number, min = 0): number {
+function loadDaa(key: string, fallback: number, min = 0, max = Number.MAX_SAFE_INTEGER): number {
   const raw = localStorage.getItem(key);
   const n = raw === null ? NaN : Number(raw);
-  return Number.isInteger(n) && n >= min ? n : fallback;
+  return Number.isInteger(n) && n >= min && n <= max ? n : fallback;
 }
 
 /** Per-move forfeit clock for hosted games, DAA blocks. */
 export const moveTimeoutAtom = atom<number>(
-  loadDaa(TIMEOUT_KEY, MOVE_TIMEOUT_DAA, MIN_MOVE_TIMEOUT_DAA),
+  loadDaa(TIMEOUT_KEY, MOVE_TIMEOUT_DAA, MIN_MOVE_TIMEOUT_DAA, MAX_MOVE_TIMEOUT_DAA),
 );
 
-/** Total game cap for hosted games, DAA blocks; 0 = uncapped. */
-export const gameCapAtom = atom<number>(loadDaa(CAP_KEY, 0));
-
 export function saveMoveTimeout(daa: number): void {
-  if (!Number.isInteger(daa) || daa < MIN_MOVE_TIMEOUT_DAA) return;
+  if (!Number.isInteger(daa) || daa < MIN_MOVE_TIMEOUT_DAA || daa > MAX_MOVE_TIMEOUT_DAA) return;
   store.set(moveTimeoutAtom, daa);
   localStorage.setItem(TIMEOUT_KEY, String(daa));
 }
 
-export function saveGameCap(daa: number): void {
-  if (!Number.isInteger(daa) || daa < 0) return;
-  store.set(gameCapAtom, daa);
-  localStorage.setItem(CAP_KEY, String(daa));
-}
+/** The sudden-death cap, as a multiple of the per-move clock. An honest game
+ * cannot brush it — 42 moves x one clock each is the theoretical ceiling and
+ * this is triple that — so its only job is being the guaranteed
+ * permissionless exit: if BOTH players vanish (lost keys, cleared storage),
+ * anyone can eventually split the pot back to them instead of the funds
+ * being stranded forever. The covenant refuses to seat a joiner without a
+ * deadline, so hosting without one is no longer an option. */
+const TOTAL_CAP_CLOCKS = 128;
+/** Floor for the cap (~1 day): blitz clocks shouldn't make lobbies that
+ * sudden-death out from under a player who answered an invite over lunch. */
+const MIN_TOTAL_CAP_DAA = 864_000;
 
 export function getMatchTiming(): MatchTiming {
-  return { moveTimeout: store.get(moveTimeoutAtom), totalCap: store.get(gameCapAtom) };
+  const moveTimeout = store.get(moveTimeoutAtom);
+  return { moveTimeout, totalCap: Math.max(MIN_TOTAL_CAP_DAA, TOTAL_CAP_CLOCKS * moveTimeout) };
 }
 
 // Cross-tab: adopt identity/settings saved from another tab (storage events
 // only fire in other tabs, so re-loading here can't echo).
 window.addEventListener("storage", (ev) => {
   if (ev.key === KEY) store.set(profileAtom, load());
-  else if (ev.key === COLOR_KEY)
-    store.set(hostColorAtom, localStorage.getItem(COLOR_KEY) === "blue" ? "blue" : "red");
+  else if (ev.key === COLOR_KEY) store.set(discColorAtom, loadDiscColor());
   else if (ev.key === TIMEOUT_KEY)
-    store.set(moveTimeoutAtom, loadDaa(TIMEOUT_KEY, MOVE_TIMEOUT_DAA, MIN_MOVE_TIMEOUT_DAA));
-  else if (ev.key === CAP_KEY) store.set(gameCapAtom, loadDaa(CAP_KEY, 0));
+    store.set(
+      moveTimeoutAtom,
+      loadDaa(TIMEOUT_KEY, MOVE_TIMEOUT_DAA, MIN_MOVE_TIMEOUT_DAA, MAX_MOVE_TIMEOUT_DAA),
+    );
+  else if (ev.key === STAKE_KEY) store.set(stakeAtom, loadStake());
   else if (ev.key === MODE_KEY)
     store.set(gameModeAtom, parseModeKey(localStorage.getItem(MODE_KEY)));
 });

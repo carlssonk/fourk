@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { KASPA_K_PATH, KASPA_RING_PATH } from "@shared/lib/kaspaMark";
 import { useChainPulse } from "../hooks";
 
 /** Grid pitch in px — the zoom knob. Smaller = more, smaller cells on
@@ -31,6 +32,36 @@ interface Disc {
 }
 
 const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/**
+ * A backdrop disc, pre-rendered once per colour: the flat coin fill with
+ * the same Kaspa stamp the game board's discs wear (Board.tsx KaspaStamp —
+ * the roundel as an inner ring, the K inside it, both at 20% black),
+ * scaled down from the stamp's 124-unit frame to backdrop size. Sprites
+ * keep the stamp free per frame — the board can hold thousands of discs,
+ * and blitting a cached bitmap is cheaper than even a plain arc fill.
+ */
+function renderDisc(color: string, dpr: number) {
+  const layer = document.createElement("canvas");
+  layer.width = layer.height = Math.ceil(DISC * dpr);
+  const ctx = layer.getContext("2d")!;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const r = DISC / 2;
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(r, r, r, 0, 2 * Math.PI);
+  ctx.fill();
+  // The stamp's viewBox (36.3 36.3 124 124) mapped onto the disc face.
+  const s = DISC / 124;
+  ctx.scale(s, s);
+  ctx.translate(-36.3, -36.3);
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.2)";
+  ctx.lineWidth = 4;
+  ctx.stroke(new Path2D(KASPA_RING_PATH));
+  ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
+  ctx.fill(new Path2D(KASPA_K_PATH));
+  return layer;
+}
 
 /**
  * The board itself, painted over the discs: opaque page-color between the
@@ -67,7 +98,7 @@ function renderBoard(w: number, h: number, dpr: number, ink: string, bg: string)
 
 /**
  * Decorative connect-four board behind the home screen: faint holes cover the
- * viewport and low-opacity discs drop into random columns to the beat of the
+ * viewport and muted discs drop into random columns to the beat of the
  * chain, stacking from the bottom until the board is full. One canvas, no DOM
  * per disc; the rAF loop runs only while a disc is in flight. Purely cosmetic
  * — hidden from the a11y tree, no pointer events, and static under
@@ -89,14 +120,14 @@ export const BoardBackdrop = () => {
 
     const styles = getComputedStyle(canvas);
     const color = (name: string) => styles.getPropertyValue(name).trim();
-    const red = color("--color-red");
-    const blue = color("--color-blue");
 
     let w = 0;
     let h = 0;
     let cols = 0;
     let rows = 0;
     let board: HTMLCanvasElement;
+    let redDisc: HTMLCanvasElement;
+    let blueDisc: HTMLCanvasElement;
     const discs: Disc[] = [];
 
     /** Paint one frame; true while any disc is still in flight. Falling is
@@ -105,7 +136,10 @@ export const BoardBackdrop = () => {
      * snap to rest after a background-tab gap instead of replaying. */
     const draw = (now: number) => {
       ctx.clearRect(0, 0, w, h);
-      ctx.globalAlpha = 0.15;
+      // Near-solid, so the discs sit ON the glow behind the canvas and it
+      // only fills the empty holes around them; the last sliver of
+      // translucency keeps them backdrop, not foreground.
+      ctx.globalAlpha = 0.85;
       let flying = false;
       for (const d of discs) {
         const t = (now - d.start) / 1000;
@@ -119,10 +153,13 @@ export const BoardBackdrop = () => {
           off = -(d.e * GRAVITY * t1 * tb - 0.5 * GRAVITY * tb * tb);
           flying = true;
         }
-        ctx.fillStyle = d.blue ? blue : red;
-        ctx.beginPath();
-        ctx.arc(d.col * CELL + CELL / 2, h - (d.row * CELL + CELL / 2) + off, DISC / 2, 0, 2 * Math.PI);
-        ctx.fill();
+        ctx.drawImage(
+          d.blue ? blueDisc : redDisc,
+          d.col * CELL + PAD,
+          h - (d.row * CELL + CELL / 2) + off - DISC / 2,
+          DISC,
+          DISC,
+        );
       }
       ctx.globalAlpha = 1;
       ctx.drawImage(board, 0, 0, w, h);
@@ -189,6 +226,8 @@ export const BoardBackdrop = () => {
       canvas.height = Math.round(h * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       board = renderBoard(w, h, dpr, color("--color-ink"), color("--color-bg"));
+      redDisc = renderDisc(color("--color-red"), dpr);
+      blueDisc = renderDisc(color("--color-blue"), dpr);
       if (draw(performance.now())) kick();
     };
     resize();
@@ -203,11 +242,17 @@ export const BoardBackdrop = () => {
   const mask = "linear-gradient(to top, black 55%, transparent 100%)";
 
   return (
-    <canvas
-      ref={canvasRef}
-      aria-hidden
-      className="pointer-events-none fixed inset-0 -z-10 h-full w-full"
-      style={{ maskImage: mask, WebkitMaskImage: mask }}
-    />
+    <>
+      {/* Behind the canvas, which paints opaque page-colour between its
+       * holes: the glow reads plainly in the masked-out top and through the
+       * punched holes below, like light behind the board. */}
+      <div aria-hidden />
+      <canvas
+        ref={canvasRef}
+        aria-hidden
+        className="pointer-events-none fixed inset-0 -z-10 h-full w-full"
+        style={{ maskImage: mask, WebkitMaskImage: mask }}
+      />
+    </>
   );
 };

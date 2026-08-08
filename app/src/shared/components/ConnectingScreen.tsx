@@ -25,10 +25,7 @@ export const ConnectingScreen = ({ connecting: { title, steps, step } }: Props) 
     <p className="mb-6 text-sm text-dim">Everything happens on-chain — this can take a moment.</p>
     <ol className="inline-flex flex-col items-start gap-2 text-sm">
       {steps.map((label, i) => (
-        <li
-          key={label}
-          className={`flex items-center gap-2.5 ${i === step ? "" : "text-dim"}`}
-        >
+        <li key={label} className={`flex items-center gap-2.5 ${i === step ? "" : "text-dim"}`}>
           <span className="w-4 text-center">
             {markOf(i < step ? "done" : i === step ? "active" : "todo")}
           </span>

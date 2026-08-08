@@ -5,7 +5,7 @@
  */
 
 import { applyMove, discOf, findWin, playerToMove, type LineWitness } from "../../lib/game";
-import type { Match } from "../../lib/match";
+import { isStaked, type Match } from "../../lib/match";
 import * as engine from "../../lib/engine";
 import { ensureFunds } from "../../lib/dispenser";
 import type { DropResult, ModeActions } from "../types";
@@ -79,8 +79,9 @@ export const classicActions: ModeActions = {
       };
     }
     // A move's fee comes off a wallet UTXO; refill from the dispenser if the
-    // wallet has run dry mid-game.
-    await ensureFunds(rpc, key, engine.FEE_HEADROOM);
+    // wallet has run dry mid-game (free games only — staked players hold
+    // their own fee margin).
+    await ensureFunds(rpc, key, engine.FEE_HEADROOM, { staked: isStaked(match) });
     return { kind: "continued", match: await moveMatch(rpc, key, match, col) };
   },
 

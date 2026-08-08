@@ -4,7 +4,7 @@
  * sudden_death — same selector names, same pinned-payout shape).
  */
 
-import { toHex, type Match } from "../lib/match";
+import { isStaked, toHex, type Match } from "../lib/match";
 import { CELLS, isOpen, type State } from "../lib/game";
 import * as engine from "../lib/engine";
 import { ensureFunds } from "../lib/dispenser";
@@ -97,12 +97,15 @@ export const SUDDEN_DEATH_MESSAGE =
 export function sharedAutoActions(mode: GameMode, m: Match): AutoAction[] {
   const out: AutoAction[] = [];
   if (isOpen(m.state)) return out;
-  if (m.state.moveCount >= CELLS)
+  // A pending win outranks the draw (the covenant gates claim_draw on it):
+  // a full board with an open challenge window settles via contest/sweep.
+  const pendingWin = (m.simul?.pendingWin ?? 0) !== 0;
+  if (m.state.moveCount >= CELLS && !pendingWin)
     out.push({
       key: "draw",
       oncePer: "match",
       run: async (rpc, key, mm) => {
-        await ensureFunds(rpc, key, engine.FEE_HEADROOM);
+        await ensureFunds(rpc, key, engine.FEE_HEADROOM, { staked: isStaked(mm) });
         await drawMatch(rpc, key, mode, mm);
         return { kind: "finished", message: DRAW_MESSAGE };
       },
@@ -119,7 +122,7 @@ export function sharedAutoActions(mode: GameMode, m: Match): AutoAction[] {
         return Math.max(0, (m.state.deadline - Number(info.virtualDaaScore)) * 100 + 2000);
       },
       run: async (rpc, key, mm) => {
-        await ensureFunds(rpc, key, engine.FEE_HEADROOM);
+        await ensureFunds(rpc, key, engine.FEE_HEADROOM, { staked: isStaked(mm) });
         await suddenDeathMatch(rpc, key, mode, mm);
         return { kind: "finished", message: SUDDEN_DEATH_MESSAGE };
       },

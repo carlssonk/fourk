@@ -6,7 +6,7 @@
  * on the mode modules — shared/modes/(classic|fourk)/actions.ts.
  */
 
-import { MOVE_TIMEOUT_DAA, ZERO_PK, type State } from "./game";
+import { ZERO_PK, type State } from "./game";
 import { NETWORK_ID, fromHex, type Match, type PlayerProfile } from "./match";
 import * as engine from "./engine";
 import { MODES, modeOf } from "../modes/registry";
@@ -19,6 +19,7 @@ export {
   chainCheckpoint,
   connect,
   myRole,
+  sendTo,
   walletAddress,
   walletBalance,
   walletPubkey,
@@ -48,15 +49,16 @@ export async function openMatch(
   rpc: Rpc,
   key: PrivateKey,
   stake: bigint,
-  timing: engine.MatchTiming = { moveTimeout: MOVE_TIMEOUT_DAA, totalCap: 0 },
+  timing: engine.MatchTiming,
   modeKey: GameModeKey = "classic",
 ): Promise<Match> {
   const mode = MODES[modeKey];
-  let deadline = 0;
-  if (timing.totalCap > 0) {
-    const info: any = await engine.withRetry(() => rpc.getBlockDagInfo());
-    deadline = Number(info.virtualDaaScore) + timing.totalCap;
-  }
+  // A deadline is mandatory — the covenant refuses to seat a joiner without
+  // one (it is the permissionless exit that keeps an abandoned pot
+  // spendable), so opening capless would just mint an unjoinable lobby.
+  if (timing.totalCap <= 0) throw new Error("openMatch requires a total game cap");
+  const info: any = await engine.withRetry(() => rpc.getBlockDagInfo());
+  const deadline = Number(info.virtualDaaScore) + timing.totalCap;
   const genesis: State = {
     p1: engine.walletPubkey(key),
     p2: ZERO_PK,
@@ -76,6 +78,22 @@ export async function openMatch(
   };
   const { covenantId, txid } = await engine.openCovenant(rpc, key, mode, draft);
   return engine.untilIndexed(rpc, mode, { ...draft, covenantId, txid });
+}
+
+/** The least game time a joiner should accept: below two move clocks (or
+ * half an hour, whichever is more), sudden death would split the pot
+ * mid-game — and a deadline already in the past is the trap this check
+ * exists for: the covenant CANNOT reject it (script can prove time passed,
+ * never time remaining), so a host could otherwise craft an
+ * expired-deadline invite and permissionlessly refund both stakes whenever
+ * they're losing. The app's seat-taking flow enforces this BEFORE funding
+ * the seat; joinMatch itself stays policy-free so tests and tools can
+ * exercise short-capped games deliberately. */
+export async function assertJoinableDeadline(rpc: Rpc, match: Match): Promise<void> {
+  const info: any = await engine.withRetry(() => rpc.getBlockDagInfo());
+  const remaining = match.state.deadline - Number(info.virtualDaaScore);
+  const floor = Math.max(2 * match.state.moveTimeout, 18_000);
+  if (match.state.deadline <= 0 || remaining < floor) throw new Error("DEADLINE_TOO_CLOSE");
 }
 
 export async function joinMatch(
@@ -169,8 +187,7 @@ async function findSuccessor(rpc: Rpc, match: Match): Promise<Match | null> {
   for (const entry of res.entries ?? []) {
     if (String(entry.entry?.covenantId ?? entry.covenantId ?? "") !== match.covenantId) continue;
     const next = byAddress.get(String(entry.address ?? entry.entry?.address ?? ""));
-    if (next)
-      return { ...next, txid: engine.entryTxId(entry), value: engine.entryAmount(entry) };
+    if (next) return { ...next, txid: engine.entryTxId(entry), value: engine.entryAmount(entry) };
   }
   return null;
 }

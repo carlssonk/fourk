@@ -14,9 +14,9 @@ const MS_PER_DAA = 100;
  * arrives; "any moment" once the deadline has passed (the auto-crank in
  * useMatchWatcher settles it).
  */
-export function useCapClock(match: Match, active: boolean): string | null {
+export function useCapClock(match: Match | null, active: boolean): string | null {
   const rpc = useAtomValue(rpcClientAtom);
-  const deadline = match.state.deadline;
+  const deadline = match?.state.deadline ?? 0;
   const [anchor, setAnchor] = useState<{ daa: number; at: number } | null>(null);
   const [now, setNow] = useState(() => Date.now());
 

@@ -2,8 +2,9 @@ import React from "react";
 import { createRoot } from "react-dom/client";
 import { ErrorBoundary } from "@shared/components/ErrorBoundary";
 import { initSdk } from "@shared/lib/sdk";
-import { getRpc as initRpc, reportError } from "@shared/state";
+import { initRpc, reportError } from "@shared/state";
 import App from "./App";
+import "@fontsource-variable/baloo-2";
 import "./styles.css";
 
 const root = createRoot(document.getElementById("root")!);

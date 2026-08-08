@@ -6,11 +6,11 @@
  * from the pre-refactor UI.
  */
 
-import { CELLS, cellIndex, type State } from "../../lib/game";
+import { CELLS, type State } from "../../lib/game";
 import { isOpen as stateIsOpen } from "../../lib/game";
 import type { Match } from "../../lib/match";
 import type { SpendInfo } from "../../lib/engine";
-import type { ModeView, StatusDescriptor, ViewCtx } from "../types";
+import type { ModeView, ModeViewSurface, StatusDescriptor, ViewCtx } from "../types";
 import { GENERIC_END, describeSharedEnd } from "../common";
 import {
   ZERO_HASH,
@@ -64,6 +64,31 @@ function roundView(m: Match, ctx: ViewCtx): RoundView {
 
 function status(m: Match, ctx: ViewCtx, r: RoundView, inLobbyNow: boolean): StatusDescriptor {
   const iAmPlayer = ctx.role !== "spectator";
+  // The challenge window: a win is claimed and the pot is parked for one
+  // move clock. The client handles everything (the contest if a second line
+  // exists, the sweep when the window lapses) — the status just says so.
+  const pending = coreOf(m).pendingWin;
+  if (pending !== 0) {
+    const myDisc = ctx.role === "p2" ? 2 : 1;
+    if (!iAmPlayer)
+      return { segments: [{ text: "A win was claimed — the pot pays out shortly…" }], tone: "dim" };
+    return pending === myDisc
+      ? {
+          segments: [
+            { text: "You connected four!", bold: true },
+            { text: " The pot pays out shortly…" },
+          ],
+          spinner: true,
+        }
+      : {
+          segments: [
+            { text: "Your opponent connected four", bold: true },
+            { text: " — verifying the board before the pot pays out…" },
+          ],
+          tone: "dim",
+          spinner: true,
+        };
+  }
   if (r.saltMissing)
     return {
       segments: [
@@ -140,24 +165,25 @@ export const fourkView = {
     const open = stateIsOpen(s);
     const full = s.moveCount >= CELLS;
     const playing = !open && !ctx.result;
+    const pending = coreOf(m).pendingWin !== 0;
     const r = roundView(m, ctx);
     const myIdx = ctx.role === "p2" ? 1 : 0;
     const shownState: State = s;
     // Whose disc lands underneath if both pick the same column this round —
     // a plannable resource, so both seats always see whose "round" it is.
     const priority = priorityPlayer(coreOf(m).round);
-    const showPriority = playing && !full;
+    const showPriority = playing && !full && !pending;
     return {
       status: status(m, ctx, r, inLobby(m)),
       seats: [
         {
-          active: playing && !full && !r.acted[0],
-          showClock: roundStarted(m) && !r.acted[0],
+          active: playing && !full && !pending && !r.acted[0],
+          showClock: roundStarted(m) && !pending && !r.acted[0],
           collisionPriority: showPriority && priority === 0,
         },
         {
-          active: playing && !full && !r.acted[1],
-          showClock: roundStarted(m) && !r.acted[1],
+          active: playing && !full && !pending && !r.acted[1],
+          showClock: roundStarted(m) && !pending && !r.acted[1],
           collisionPriority: showPriority && priority === 1,
         },
       ],
@@ -165,7 +191,7 @@ export const fourkView = {
         shownState,
         interactive:
           r.obligation === "commit" && !ctx.busy && ctx.pendingCol === null && !ctx.result,
-        nextDisc: playing && !full ? "both" : null,
+        nextDisc: playing && !full && !pending ? "both" : null,
         priorityDisc: (priority + 1) as 1 | 2,
         ...(ctx.role !== "spectator" && { ghostDisc: (myIdx + 1) as 1 | 2 }),
         myPick: playing ? (r.myPick ?? ctx.pendingCol) : null,
@@ -173,6 +199,7 @@ export const fourkView = {
       canClaimTimeout:
         !open &&
         !full &&
+        !pending &&
         r.obligation === null &&
         ctx.role !== "spectator" &&
         !ctx.result &&
@@ -187,13 +214,13 @@ export const fourkView = {
     if (shared) return shared;
     const s = m.state;
     switch (spend?.kind) {
-      case "claim_win": {
-        // The witness names the line's first cell; its disc on the pre-spend
-        // board identifies the winner (claim_win plays no disc of its own).
-        const [wc, wr] = spend.args;
-        const disc = wc !== undefined && wr !== undefined ? s.board[cellIndex(wc, wr)] : 0;
-        const ownerPk = disc === 1 ? s.p1 : disc === 2 ? s.p2 : null;
-        return ownerPk === myPk
+      case "sweep_win": {
+        // Only reachable from a pending state, whose pendingWin names the
+        // winner (claim_win itself is a continuation now — the challenge
+        // window — and never reaches ending classification).
+        const winner = coreOf(m).pendingWin === 1 ? s.p1 : coreOf(m).pendingWin === 2 ? s.p2 : null;
+        if (!winner) return GENERIC_END;
+        return winner === myPk
           ? "You connected four — you win! 🎉"
           : "Your opponent connected four — they win this one.";
       }
@@ -226,4 +253,4 @@ export const fourkView = {
   finalSnapshot(_spend: SpendInfo | null, m: Match): Match {
     return m;
   },
-};
+} satisfies ModeViewSurface;

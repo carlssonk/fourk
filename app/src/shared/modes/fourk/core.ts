@@ -20,6 +20,7 @@ import {
 } from "../../../../../src/simul/state";
 import {
   applyResolution,
+  claimWin as simulClaimWin,
   commit as simulCommit,
   legalSimulColumns,
   resolve as simulResolve,
@@ -37,6 +38,7 @@ export {
   legalSimulColumns,
   priorityPlayer,
   roundPhase,
+  simulClaimWin,
   simulCommit,
   simulResolve,
   simulReveal,
@@ -50,6 +52,9 @@ export interface SimulCore {
   commit2: Commitment;
   reveal1: number;
   reveal2: number;
+  /** 0 = normal play; 1/2 = that color proved a line and the challenge
+   * window is open (see SimulState.pendingWin in the reference). */
+  pendingWin: number;
 }
 
 export const ZERO_CORE: SimulCore = {
@@ -58,6 +63,7 @@ export const ZERO_CORE: SimulCore = {
   commit2: ZERO_HASH,
   reveal1: 0,
   reveal2: 0,
+  pendingWin: 0,
 };
 
 /** The round machine of a match, defaulted for records from before the slot
@@ -77,6 +83,7 @@ export function toSimulState(s: State, core: SimulCore = ZERO_CORE): SimulState 
     commit2: core.commit2,
     reveal1: core.reveal1,
     reveal2: core.reveal2,
+    pendingWin: core.pendingWin ?? 0,
     stake: s.stake,
     moveTimeout: s.moveTimeout,
     deadline: s.deadline,
@@ -105,16 +112,19 @@ export function fromSimulState(ss: SimulState): { state: State; simul: SimulCore
       commit2: ss.commit2,
       reveal1: ss.reveal1,
       reveal2: ss.reveal2,
+      pendingWin: ss.pendingWin,
     },
   };
 }
 
-/** Monotone progress key for fresherOf: rounds tick by 4, sub-phases by 1
- * (one commit, both commits, one reveal). */
+/** Monotone progress key for fresherOf: rounds tick by 5, sub-phases by 1
+ * (one commit, both commits, one reveal), and a pending win outranks every
+ * sub-phase of its round (claimWin keeps the round number but must still
+ * read as fresher than the state it spent). */
 export function simulProgress(core: SimulCore): number {
   const commits = (core.commit1 !== ZERO_HASH ? 1 : 0) + (core.commit2 !== ZERO_HASH ? 1 : 0);
-  const sub = core.reveal1 !== 0 || core.reveal2 !== 0 ? 3 : commits;
-  return core.round * 4 + sub;
+  const sub = core.pendingWin !== 0 ? 4 : core.reveal1 !== 0 || core.reveal2 !== 0 ? 3 : commits;
+  return core.round * 5 + sub;
 }
 
 export type Obligation = "commit" | "reveal" | "resolve";
@@ -123,6 +133,9 @@ export type Obligation = "commit" | "reveal" | "resolve";
  * analog of "is it my turn": null means we're waiting on the opponent (or
  * not a player, or the board is full). */
 export function myObligation(s: State, core: SimulCore, pkHex: string): Obligation | null {
+  // A pending win suspends the round machine — the contest and the sweep
+  // are autopilot duties, not obligations with a forfeit clock on them.
+  if (core.pendingWin !== 0) return null;
   if (s.p2 === ZERO_PK || isBoardFull(s.board)) return null;
   const player = s.p1 === pkHex ? 0 : s.p2 === pkHex ? 1 : null;
   if (player === null) return null;

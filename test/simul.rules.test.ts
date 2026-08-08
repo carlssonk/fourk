@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
+  DEADLINE_LIMIT,
+  MAX_MOVE_TIMEOUT_DAA,
   MIN_MOVE_TIMEOUT_DAA,
   MOVE_TIMEOUT_DAA,
   ZERO_PK,
@@ -27,10 +29,16 @@ import {
   reveal,
   splitTimeout,
   suddenDeath,
+  sweepWin,
 } from "../src/simul/rules.js";
 import { commitmentOf } from "../src/simul/hash.js";
-import { P1, P2, STAKE, STRANGER, ctx } from "./helpers.js";
+import { DEADLINE, P1, P2, STAKE, STRANGER, ctx } from "./helpers.js";
 import { commitBoth, playRound, playRounds, salt, simulGame } from "./simul-helpers.js";
+
+/** A fresh open simul match with valid timing (join refuses uncapped genesis states). */
+function openSimul(): ReturnType<typeof newSimulMatch> {
+  return newSimulMatch(P1, STAKE, MOVE_TIMEOUT_DAA, DEADLINE);
+}
 
 const TIMEOUT = MOVE_TIMEOUT_DAA;
 
@@ -58,16 +66,22 @@ describe("open phase", () => {
     expect(() => join(s, ctx(STRANGER))).toThrow("match is not open");
   });
 
-  test("join guards: self-join, zero key, trap clock", () => {
-    const open = newSimulMatch(P1, STAKE);
+  test("join guards: self-join, zero key, trap clock, hostage clock, deadline", () => {
+    const open = openSimul();
     expect(() => join(open, ctx(P1))).toThrow("cannot join your own match");
     expect(() => join(open, ctx(ZERO_PK))).toThrow("invalid joiner pubkey");
     const trap = { ...open, moveTimeout: MIN_MOVE_TIMEOUT_DAA - 1 };
     expect(() => join(trap, ctx(P2))).toThrow("move timeout below minimum");
+    const hostage = { ...open, moveTimeout: MAX_MOVE_TIMEOUT_DAA + 1 };
+    expect(() => join(hostage, ctx(P2))).toThrow("move timeout above maximum");
+    expect(() => join({ ...open, deadline: 0 }, ctx(P2))).toThrow("no game deadline");
+    expect(() => join({ ...open, deadline: DEADLINE_LIMIT }, ctx(P2))).toThrow(
+      "deadline out of range",
+    );
   });
 
   test("cancel: p1 only, open only", () => {
-    const open = newSimulMatch(P1, STAKE);
+    const open = openSimul();
     expect(cancel(open, ctx(P1))).toEqual([{ to: P1, amount: STAKE }]);
     expect(() => cancel(open, ctx(P2))).toThrow("only p1 can cancel");
     expect(() => cancel(simulGame(), ctx(P1))).toThrow("match is not open");
@@ -127,7 +141,7 @@ describe("commit", () => {
     expect(() => commit(full, ctx(P1), commitmentOf(0, salt(0, 0)))).toThrow(
       "board full — claim the draw instead",
     );
-    expect(() => commit(newSimulMatch(P1, STAKE), ctx(P1), commitmentOf(0, salt(0, 0)))).toThrow(
+    expect(() => commit(openSimul(), ctx(P1), commitmentOf(0, salt(0, 0)))).toThrow(
       "match not started",
     );
   });
@@ -233,11 +247,47 @@ describe("claim_win", () => {
     ]);
   }
 
-  test("the line's owner takes the pot — even though the opponent resolved", () => {
+  test("the line's owner opens the challenge window — even though the opponent resolved", () => {
     const s = p1WinGame();
-    expect(claimWin(s, ctx(P1), { col: 0, row: 0, dir: 0 })).toEqual([
+    const pending = claimWin(s, ctx(P1), { col: 0, row: 0, dir: 0 });
+    expect(pending.pendingWin).toBe(1);
+    // Canonical pending state: round slots zeroed, board and round kept.
+    expect(pending.commit1).toBe(ZERO_HASH);
+    expect(pending.commit2).toBe(ZERO_HASH);
+    expect(pending.reveal1).toBe(0);
+    expect(pending.reveal2).toBe(0);
+    expect(pending.board).toEqual(s.board);
+    expect(pending.round).toBe(s.round);
+  });
+
+  test("the sweep pays the winner after the window — and only then, and only them", () => {
+    const pending = claimWin(p1WinGame(), ctx(P1), { col: 0, row: 0, dir: 0 });
+    expect(sweepWin(pending, ctx(P1, pending.moveTimeout))).toEqual([
       { to: P1, amount: 2n * STAKE },
     ]);
+    expect(() => sweepWin(pending, ctx(P1, pending.moveTimeout - 1))).toThrow(
+      "challenge window still open",
+    );
+    expect(() => sweepWin(pending, ctx(P2, pending.moveTimeout))).toThrow("pending winner");
+    expect(() => sweepWin(pending, ctx(STRANGER, pending.moveTimeout))).toThrow("pending winner");
+    expect(() => sweepWin(p1WinGame(), ctx(P1, 1e9))).toThrow("no win claim pending");
+  });
+
+  test("a pending win freezes the game: no round doors, no draw, no timeouts, no second claim", () => {
+    const pending = claimWin(p1WinGame(), ctx(P1), { col: 0, row: 0, dir: 0 });
+    expect(() => commit(pending, ctx(P2), commitmentOf(5, salt(1, pending.round)))).toThrow(
+      "win claim pending",
+    );
+    expect(() => claimTimeout(pending, ctx(P1, 1e6))).toThrow("win claim pending");
+    // Critical: a pending state is slot-empty and symmetric-shaped — without
+    // its gate, splitTimeout would split the winner's pot on the same clock
+    // that opens the sweep.
+    expect(() => splitTimeout(pending, ctx(STRANGER, 1e6))).toThrow("win claim pending");
+    expect(() => claimWin(pending, ctx(P1), { col: 0, row: 0, dir: 0 })).toThrow(
+      "already pending",
+    );
+    // suddenDeath stays legal — the liveness exit outranks the window.
+    expect(suddenDeath(pending, ctx(STRANGER, 0, pending.deadline))).toHaveLength(2);
   });
 
   test("only the owner: opponent and stranger are rejected on a real line", () => {
@@ -256,9 +306,35 @@ describe("claim_win", () => {
 
   test("an unclaimed win survives later rounds and stays claimable", () => {
     const s = playRound(p1WinGame(), 4, 5);
-    expect(claimWin(s, ctx(P1), { col: 0, row: 0, dir: 0 })).toEqual([
-      { to: P1, amount: 2n * STAKE },
-    ]);
+    expect(claimWin(s, ctx(P1), { col: 0, row: 0, dir: 0 }).pendingWin).toBe(1);
+  });
+
+  test("THE POINT: a hidden double win is contestable for a whole move clock", () => {
+    // P1 greedily claims their line on a board where P2 also has one. Under
+    // the old design this was a mempool race; now claimSplit stays legal on
+    // the pending state — for anyone — until the sweep clock runs out.
+    const doubled = {
+      ...simulGame(),
+      board: posedBoard([
+        [0, 0, 1],
+        [1, 0, 1],
+        [2, 0, 1],
+        [3, 0, 1],
+        [0, 1, 2],
+        [1, 1, 2],
+        [2, 1, 2],
+        [3, 1, 2],
+      ]),
+    };
+    const pending = claimWin(doubled, ctx(P1), { col: 0, row: 0, dir: 0 });
+    const w1 = { col: 0, row: 0, dir: 0 };
+    const w2 = { col: 0, row: 1, dir: 0 };
+    for (const signer of [P1, P2, STRANGER]) {
+      expect(claimSplit(pending, ctx(signer), w1, w2)).toEqual([
+        { to: P1, amount: STAKE },
+        { to: P2, amount: STAKE },
+      ]);
+    }
   });
 });
 
@@ -384,9 +460,10 @@ describe("sudden death", () => {
       { to: P2, amount: STAKE },
     ]);
     expect(() => suddenDeath(s, ctx(STRANGER, 0, 999))).toThrow("deadline not reached");
-    expect(() => suddenDeath(playRound(simulGame(), 2, 5), ctx(P1, 0, 1e9))).toThrow(
-      "no game deadline set",
-    );
+    // Deadline-0 states are unreachable via join now, but the door must
+    // still refuse one carried by a directly-created covenant UTXO.
+    const uncapped = { ...playRound(simulGame(), 2, 5), deadline: 0 };
+    expect(() => suddenDeath(uncapped, ctx(P1, 0, 1e9))).toThrow("no game deadline set");
   });
 });
 

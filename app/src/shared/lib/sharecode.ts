@@ -36,17 +36,18 @@
  * and typechecked anywhere.
  */
 
-import { CELLS, MOVE_TIMEOUT_DAA, ZERO_PK, type State } from "./game";
+import {
+  CELLS,
+  DEADLINE_LIMIT,
+  MAX_MOVE_TIMEOUT_DAA,
+  MIN_MOVE_TIMEOUT_DAA,
+  MOVE_TIMEOUT_DAA,
+  ZERO_PK,
+  type State,
+} from "./game";
 import { ZERO_HASH, type SimulCore } from "../modes/fourk/core";
 import { pushModeSection, takeModeSection } from "../modes/wire";
-import {
-  pushHex32,
-  pushVarint,
-  readVarint,
-  takeByte,
-  takeHex32,
-  takeSmallInt,
-} from "./bytes";
+import { pushHex32, pushVarint, readVarint, takeByte, takeHex32, takeSmallInt } from "./bytes";
 import { trimName, type Match, type PlayerProfile } from "./match";
 
 const NETWORKS = ["mainnet", "testnet-10", "testnet-11", "devnet", "simnet"];
@@ -143,8 +144,19 @@ export function decodeMatchBinary(buf: Uint8Array): Match {
   }
 
   const stake = readVarint(buf, i);
-  const value = valueStored ? readVarint(buf, i) : p2Joined ? stake * 2n : stake;
-  const moveCount = moveStored ? takeSmallInt(buf, i, CELLS, "move count") : countDiscs(board);
+  // The derivations are covenant-enforced invariants (join doubles the pot
+  // exactly, moves preserve it, moveCount tracks the disc count in every
+  // mode), so a code whose stored fields diverge from them describes a match
+  // that cannot exist on-chain — and the stored value is what the join flow
+  // DEBITS, so an inflated one is a "the number you agreed to is not the
+  // number we spend" attack. Reject divergence outright.
+  const derivedValue = p2Joined ? stake * 2n : stake;
+  const value = valueStored ? readVarint(buf, i) : derivedValue;
+  if (value !== derivedValue) throw new Error("value does not match the stake in share code");
+  const derivedMoves = countDiscs(board);
+  const moveCount = moveStored ? takeSmallInt(buf, i, CELLS, "move count") : derivedMoves;
+  if (moveCount !== derivedMoves)
+    throw new Error("move count does not match the board in share code");
 
   let profiles: Match["profiles"];
   let p1Blue = false;
@@ -161,9 +173,14 @@ export function decodeMatchBinary(buf: Uint8Array): Match {
       if (pf & 2) profiles.p2 = takeProfile(buf, i);
     }
     if (pf & 8) {
-      moveTimeout = takeSmallInt(buf, i, Number.MAX_SAFE_INTEGER, "move timeout");
-      deadline = takeSmallInt(buf, i, Number.MAX_SAFE_INTEGER, "deadline");
-      if (moveTimeout === 0) throw new Error("zero move timeout in share code");
+      // The covenant's own join gates, applied at the door: a clock below
+      // the floor is a trap, above the ceiling a hostage lock, and a
+      // deadline at/past the consensus lock-time threshold flips from DAA
+      // score to unix-ms. (Whether the deadline has already PASSED needs
+      // the chain's clock — the seat-taking flow checks that.)
+      moveTimeout = takeSmallInt(buf, i, MAX_MOVE_TIMEOUT_DAA, "move timeout");
+      deadline = takeSmallInt(buf, i, DEADLINE_LIMIT - 1, "deadline");
+      if (moveTimeout < MIN_MOVE_TIMEOUT_DAA) throw new Error("bad move timeout in share code");
     }
     if (pf & 16) simul = takeModeSection(buf, i).simul;
   }

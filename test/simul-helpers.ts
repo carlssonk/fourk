@@ -1,7 +1,8 @@
 import { SimulState, newSimulMatch } from "../src/simul/state.js";
+import { MOVE_TIMEOUT_DAA } from "../src/state.js";
 import { commit, join, resolve, reveal } from "../src/simul/rules.js";
 import { commitmentOf } from "../src/simul/hash.js";
-import { P1, P2, STAKE, ctx } from "./helpers.js";
+import { DEADLINE, P1, P2, STAKE, ctx } from "./helpers.js";
 
 /** Deterministic per-player, per-round salt — tests never need real entropy. */
 export function salt(player: 0 | 1, round: number): Uint8Array {
@@ -14,7 +15,7 @@ export function pkOf(player: 0 | 1): string {
 
 /** A joined simul match, round 0, commit phase. */
 export function simulGame(): SimulState {
-  return join(newSimulMatch(P1, STAKE), ctx(P2));
+  return join(newSimulMatch(P1, STAKE, MOVE_TIMEOUT_DAA, DEADLINE), ctx(P2));
 }
 
 /** Both players commit their sealed picks (p1 first — order is free). */

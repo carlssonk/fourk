@@ -8,6 +8,8 @@
 import {
   CELLS,
   COLS,
+  DEADLINE_LIMIT,
+  MAX_MOVE_TIMEOUT_DAA,
   MIN_MOVE_TIMEOUT_DAA,
   MOVE_TIMEOUT_DAA,
   ROWS,
@@ -24,6 +26,8 @@ import { DIRS, verifyLine, type LineWitness } from "../../../../src/rules";
 export {
   CELLS,
   COLS,
+  DEADLINE_LIMIT,
+  MAX_MOVE_TIMEOUT_DAA,
   MIN_MOVE_TIMEOUT_DAA,
   MOVE_TIMEOUT_DAA,
   ROWS,
@@ -45,7 +49,8 @@ export function legalColumns(s: State): number[] {
 /** Apply a move without signature checks — used to enumerate successors. */
 export function applyMove(s: State, col: number): State {
   const h = heightOf(s.board, col);
-  if (isOpen(s) || s.moveCount >= CELLS || h >= ROWS) throw new Error(`illegal move in column ${col}`);
+  if (isOpen(s) || s.moveCount >= CELLS || h >= ROWS)
+    throw new Error(`illegal move in column ${col}`);
   const board = s.board.slice();
   board[cellIndex(col, h)] = discOf(playerToMove(s));
   return { ...s, board, moveCount: s.moveCount + 1 };

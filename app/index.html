@@ -3,6 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Defense-in-depth for hosts that ignore public/_headers. Deliberately
+      minimal: a meta CSP also binds the dev server (HMR websocket, local
+      ws:// nodes), and frame-ancestors is ignored in <meta> per spec — so
+      the full policy lives in _headers / real response headers (DEPLOY.md).
+    -->
+    <meta http-equiv="Content-Security-Policy" content="object-src 'none'; base-uri 'self'" />
     <meta
       name="description"
       content="Connect Four on Kaspa — every move is a covenant transaction, the pot pays the winner, and there's no backend anywhere. Games start from an invite link."

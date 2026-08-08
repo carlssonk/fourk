@@ -3,7 +3,7 @@ import { useAtomValue } from "jotai";
 import * as cov from "@shared/lib/covenant";
 import { finishedLongAgo, phaseOf, type Match } from "@shared/lib/match";
 import { modeOf } from "@shared/modes/registry";
-import { getRpc, getWallet, matchesAtom, removeMatch, updateMatch } from "@shared/state";
+import { getRpc, matchWallet, matchesAtom, removeMatch, updateMatch } from "@shared/state";
 
 /** At-a-glance state of a stored match, from a cheap sync on the home screen. */
 export type MatchGlance = "waiting" | "your-turn" | "their-turn" | "finished" | "changed";
@@ -40,8 +40,10 @@ export function useMatchGlances(): Record<string, MatchGlance> {
     let stale = false;
     (async () => {
       const rpc = await getRpc();
-      const { myPk } = getWallet();
       for (const m of pending) {
+        // Per match: a seat taken by a now-retired key still reads as ours;
+        // a game we only ever watched has no seat, and glances as theirs.
+        const myPk = matchWallet(m)?.myPk ?? "";
         const key = `${m.covenantId}:${m.txid}`;
         // A recorded ending is already the answer — no RPC needed.
         if (m.result) {

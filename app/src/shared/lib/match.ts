@@ -73,6 +73,37 @@ export const NETWORK_ID: string =
 export const NETWORK_TYPE = NETWORK_ID.split("-")[0]!;
 export const SOMPI_PER_KAS = 100_000_000n;
 
+/**
+ * What a free game puts up per seat — dispenser money, not the player's.
+ *
+ * The odd sompi is deliberate. Whether a game is staked is not a claim that
+ * travels with the invite (a link is written by a stranger and can say
+ * anything); it is read off the covenant's own stake, which the chain
+ * enforces. That only works if no stake a player can choose equals this
+ * value — hence a number no stake picker would ever offer, pinned by a test
+ * against STAKE_PRESETS. Even a hand-forged covenant that hits it exactly
+ * wins nothing: it would be playing for one dispensed KAS, which is what
+ * free mode hands out anyway.
+ */
+export const FREE_STAKE = SOMPI_PER_KAS + 1n;
+
+/**
+ * Is this game played for the players' own money? Read off the covenant's
+ * stake, never off the invite. The stake is chain-enforced — a link that
+ * lies about it produces a transaction the node rejects — whereas a flag in
+ * the link is only a stranger's assertion about whose money funds the seat,
+ * and believing it is what would let a forged "this one's free" link spend
+ * dispenser funds on someone's wager.
+ */
+export function isStaked(m: Match): boolean {
+  return m.state.stake !== FREE_STAKE;
+}
+
+/** The stakes a player can pick, sompi; 0 = free play. Lives here, beside
+ * FREE_STAKE, because the one thing that must stay true of this list is
+ * that it never contains FREE_STAKE — a test holds the line. */
+export const STAKE_PRESETS = [0n, 1n, 5n, 25n].map((k) => k * SOMPI_PER_KAS);
+
 /** Human duration for a DAA block count (~10 blocks/s). */
 export function fmtDaaDuration(daa: number): string {
   const mins = Math.round(daa / 600);
@@ -80,6 +111,17 @@ export function fmtDaaDuration(daa: number): string {
   const hours = mins / 60;
   if (hours < 48) return Number.isInteger(hours) ? `${hours} h` : `${hours.toFixed(1)} h`;
   return `${Math.round(hours / 24)} d`;
+}
+
+/** Parse a user-typed KAS amount ("12", "0.5", "1,25") to sompi; null on
+ * anything that isn't a plain positive decimal number. */
+export function parseKas(input: string): bigint | null {
+  const m = /^(\d+)(?:[.,](\d{1,8}))?$/.exec(input.trim());
+  if (!m) return null;
+  const whole = BigInt(m[1]!) * SOMPI_PER_KAS;
+  const frac = m[2] ? BigInt(m[2].padEnd(8, "0")) : 0n;
+  const sompi = whole + frac;
+  return sompi > 0n ? sompi : null;
 }
 
 export function fmtKas(sompi: bigint): string {
@@ -163,6 +205,7 @@ const matchJsonSchema = z.object({
   commit2: hex64.optional(),
   reveal1: z.number().int().min(0).max(7).optional(),
   reveal2: z.number().int().min(0).max(7).optional(),
+  pendingWin: z.number().int().min(0).max(2).optional(),
 });
 
 export function matchFromJson(json: string): Match {
@@ -203,9 +246,15 @@ export function encodeShareCode(m: Match): string {
 
 /** Decode a share code (compact binary; throws on anything else). */
 export function decodeShareCode(code: string): Match {
-  return decodeMatchBinary(base64UrlToBytes(code.trim()));
+  const m = decodeMatchBinary(base64UrlToBytes(code.trim()));
+  // A code minted for another network must not be silently reinterpreted on
+  // this one: every address this match derives would point at nothing here —
+  // or, worse, a mainnet code opened by a testnet build would look free to
+  // join while the real seat sits on mainnet.
+  if (m.network !== NETWORK_ID)
+    throw new Error(`WRONG_NETWORK: share code is for ${m.network}, this app runs ${NETWORK_ID}`);
+  return m;
 }
-
 
 export const LIST_KEY = "fourk.matches";
 

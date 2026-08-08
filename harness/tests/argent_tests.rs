@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 use argent_runtime::{
-    ArgValue, Artifact, ArtifactValue, EntryCall, TxBuilder, TxContext, args,
+    Artifact, ArtifactValue, EntryCall, InputSigScript, TxBuilder, TxContext, args,
     execute_transaction_with_covenants, state,
 };
 use kaspa_consensus_core::{
@@ -29,8 +29,8 @@ use kaspa_consensus_core::{
         sighash_type::SIG_HASH_ALL,
     },
     tx::{
-        CovenantBinding, MutableTransaction, ScriptPublicKey, Transaction, TransactionId,
-        TransactionOutpoint, UtxoEntry,
+        ComputeCommit, CovenantBinding, MutableTransaction, ScriptPublicKey, Transaction,
+        TransactionId, TransactionOutpoint, UtxoEntry,
     },
 };
 use secp256k1::{Keypair, Secp256k1, SecretKey};
@@ -39,7 +39,9 @@ const STAKE: u64 = 100_000_000;
 const POT: u64 = 2 * STAKE;
 const MOVE_TIMEOUT: i64 = 36_000;
 const MIN_MOVE_TIMEOUT: i64 = 600;
+const MAX_MOVE_TIMEOUT: i64 = 8_640_000;
 const DEADLINE: i64 = 5_000_000;
+const DEADLINE_LIMIT: i64 = 500_000_000_000;
 
 const COLS: usize = 7;
 const ROWS: usize = 6;
@@ -67,6 +69,10 @@ fn p2() -> Keypair {
 
 fn stranger() -> Keypair {
     keypair(3)
+}
+
+fn funder() -> Keypair {
+    keypair(4)
 }
 
 fn pk(kp: &Keypair) -> [u8; 32] {
@@ -217,9 +223,58 @@ fn p2pk_spk(pk: &[u8; 32]) -> ScriptPublicKey {
 type RunResult = Result<(), String>;
 
 fn build_and_execute(context: TxContext<'_>, utxo: UtxoEntry) -> RunResult {
+    build_executed_tx(context, vec![utxo]).map(|_| ())
+}
+
+fn build_executed_tx(context: TxContext<'_>, entries: Vec<UtxoEntry>) -> Result<Transaction, String> {
     let builder = TxBuilder::new(artifact()).map_err(|e| format!("builder: {e}"))?;
     let mut tx = builder.build(&context).map_err(|e| format!("build: {e}"))?;
-    execute_transaction_with_covenants(&mut tx, vec![utxo]).map_err(|e| format!("script: {e}"))
+    execute_transaction_with_covenants(&mut tx, entries).map_err(|e| format!("script: {e}"))?;
+    Ok(tx)
+}
+
+// -- multi-input plumbing --------------------------------------------------
+//
+// Real transactions are never single-input: continuations preserve the pot,
+// so fees ride on a plain P2PK wallet input, and terminal spends carry wallet
+// change. The funded runners put that funding input BEFORE the covenant,
+// pushing the covenant to input index 1 — exercising every compiled
+// activeInputIndex path (OpAuthOutputCount / OpAuthOutputIdx / self.value)
+// off the index-0 fast case, plus the pinned doors' absolute tx.outputs[0]/[1]
+// indexing with a trailing change output present. Signatures are produced by
+// per-input callbacks after the builder fixes the full transaction shape —
+// the sighash commits to every input's outpoint and every output.
+
+/// Fee money on the funding input. No engine rule inspects fees; the value
+/// only has to exist so the wallet spend verifies.
+const FEE_FUND: u64 = 5_000_000;
+
+fn funding_outpoint() -> TransactionOutpoint {
+    TransactionOutpoint {
+        transaction_id: TransactionId::from_bytes([0x12; 32]),
+        index: 0,
+    }
+}
+
+fn funding_utxo() -> UtxoEntry {
+    UtxoEntry::new(FEE_FUND, p2pk_spk(&pk(&funder())), 0, false, None)
+}
+
+/// Plain P2PK signature script: a single push of the funder's signature,
+/// built once the transaction shape is known.
+fn funding_sig_script() -> InputSigScript<'static> {
+    InputSigScript::with_transaction(|tx, idx| {
+        let sig = sign_input(tx, idx, &funder());
+        let mut script = Vec::with_capacity(66);
+        script.push(sig.len() as u8);
+        script.extend_from_slice(&sig);
+        script
+    })
+}
+
+/// The wallet's change, appended AFTER whatever outputs the door pins.
+fn change_payout() -> (ScriptPublicKey, u64) {
+    (p2pk_spk(&pk(&funder())), FEE_FUND - 1_000)
 }
 
 /// Runs one FourkLobby::join. The successor match output is caller-supplied so
@@ -288,7 +343,7 @@ fn run_match_entry(
     lock_time: u64,
     payouts: Vec<(ScriptPublicKey, u64)>,
     successor: Option<(BTreeMap<String, ArtifactValue>, u64)>,
-) -> RunResult {
+) -> Result<Transaction, String> {
     let builder = TxBuilder::new(artifact()).map_err(|e| format!("builder: {e}"))?;
     let utxo = builder
         .covenant_utxo(
@@ -319,7 +374,81 @@ fn run_match_entry(
     for (spk, value) in payouts {
         context = context.output(spk, None, value);
     }
-    build_and_execute(context, utxo)
+    build_executed_tx(context, vec![utxo])
+}
+
+/// run_match_entry in the real wallet shape: P2PK funding input at index 0,
+/// covenant input at index 1, successor (if any) authorized by input 1.
+fn run_match_entry_funded(
+    entry: EntryCall<'_>,
+    active: BTreeMap<String, ArtifactValue>,
+    in_value: u64,
+    sequence: u64,
+    lock_time: u64,
+    payouts: Vec<(ScriptPublicKey, u64)>,
+    successor: Option<(BTreeMap<String, ArtifactValue>, u64)>,
+) -> RunResult {
+    let builder = TxBuilder::new(artifact()).map_err(|e| format!("builder: {e}"))?;
+    let utxo = builder
+        .covenant_utxo(
+            "FourkMatch",
+            active.clone(),
+            in_value,
+            0,
+            false,
+            Some(covenant_id()),
+        )
+        .map_err(|e| format!("builder: {e}"))?;
+    let mut context = TxContext::new()
+        .lock_time(lock_time)
+        .input(funding_outpoint(), funding_utxo(), funding_sig_script(), 0)
+        .actor_input("FourkMatch", active, entry, outpoint(), utxo.clone(), sequence);
+    if let Some((next, out_value)) = successor {
+        context = context.actor_output(
+            "FourkMatch",
+            next,
+            CovenantBinding::new(1, covenant_id()),
+            out_value,
+        );
+    }
+    for (spk, value) in payouts {
+        context = context.output(spk, None, value);
+    }
+    build_executed_tx(context, vec![funding_utxo(), utxo]).map(|_| ())
+}
+
+/// run_join in the real wallet shape (see run_match_entry_funded).
+fn run_join_funded(
+    joiner: Keypair,
+    next: BTreeMap<String, ArtifactValue>,
+    in_value: u64,
+    out_value: u64,
+) -> RunResult {
+    let builder = TxBuilder::new(artifact()).map_err(|e| format!("builder: {e}"))?;
+    let lobby = lobby_state();
+    let utxo = builder
+        .covenant_utxo(
+            "FourkLobby",
+            lobby.clone(),
+            in_value,
+            0,
+            false,
+            Some(covenant_id()),
+        )
+        .map_err(|e| format!("builder: {e}"))?;
+    let joiner_pk = pk(&joiner);
+    let entry = EntryCall::new("join")
+        .args_with(move |tx, idx| args![sign_input(tx, idx, &joiner), joiner_pk]);
+    let context = TxContext::new()
+        .input(funding_outpoint(), funding_utxo(), funding_sig_script(), 0)
+        .actor_input("FourkLobby", lobby, entry, outpoint(), utxo.clone(), 0)
+        .actor_output(
+            "FourkMatch",
+            next,
+            CovenantBinding::new(1, covenant_id()),
+            out_value,
+        );
+    build_executed_tx(context, vec![funding_utxo(), utxo]).map(|_| ())
 }
 
 fn run_move(
@@ -340,6 +469,7 @@ fn run_move(
         vec![],
         Some((next, out_value)),
     )
+    .map(|_| ())
 }
 
 fn run_winning_move(
@@ -362,6 +492,7 @@ fn run_winning_move(
         vec![(p2pk_spk(&winner), POT)],
         successor,
     )
+    .map(|_| ())
 }
 
 fn run_dissolve(
@@ -384,6 +515,7 @@ fn run_dissolve(
         payouts,
         successor,
     )
+    .map(|_| ())
 }
 
 fn run_draw(active: &Game, payouts: Vec<(ScriptPublicKey, u64)>) -> RunResult {
@@ -396,6 +528,7 @@ fn run_draw(active: &Game, payouts: Vec<(ScriptPublicKey, u64)>) -> RunResult {
         payouts,
         None,
     )
+    .map(|_| ())
 }
 
 fn run_forfeit(
@@ -415,6 +548,7 @@ fn run_forfeit(
         vec![(p2pk_spk(&claimant), POT)],
         None,
     )
+    .map(|_| ())
 }
 
 fn run_sudden_death(
@@ -431,6 +565,7 @@ fn run_sudden_death(
         payouts,
         None,
     )
+    .map(|_| ())
 }
 
 fn half_split() -> Vec<(ScriptPublicKey, u64)> {
@@ -606,6 +741,64 @@ fn join_rejects_trap_timeout() {
 }
 
 #[test]
+fn join_rejects_hostage_timeout() {
+    let hostage = lobby_state_with(MAX_MOVE_TIMEOUT + 1, DEADLINE);
+    let hostage_next = match_state_full(
+        &new_game(),
+        pk(&p1()),
+        pk(&p2()),
+        MAX_MOVE_TIMEOUT + 1,
+        DEADLINE,
+    );
+    assert_fail(
+        run_join(p2(), pk(&p2()), hostage, hostage_next, STAKE, POT),
+        "hostage timeout",
+    );
+
+    let ceiling = lobby_state_with(MAX_MOVE_TIMEOUT, DEADLINE);
+    let ceiling_next = match_state_full(
+        &new_game(),
+        pk(&p1()),
+        pk(&p2()),
+        MAX_MOVE_TIMEOUT,
+        DEADLINE,
+    );
+    assert_pass(
+        run_join(p2(), pk(&p2()), ceiling, ceiling_next, STAKE, POT),
+        "clock at ceiling",
+    );
+}
+
+#[test]
+fn join_rejects_uncapped_or_clock_flipping_deadline() {
+    // deadline == 0 would leave the pot strandable by two vanished players.
+    let uncapped = lobby_state_with(MOVE_TIMEOUT, 0);
+    let uncapped_next = match_state_full(&new_game(), pk(&p1()), pk(&p2()), MOVE_TIMEOUT, 0);
+    assert_fail(
+        run_join(p2(), pk(&p2()), uncapped, uncapped_next, STAKE, POT),
+        "uncapped game",
+    );
+
+    // At/past the consensus lock-time threshold a "DAA score" reads as a
+    // unix-ms timestamp.
+    let flipped = lobby_state_with(MOVE_TIMEOUT, DEADLINE_LIMIT);
+    let flipped_next =
+        match_state_full(&new_game(), pk(&p1()), pk(&p2()), MOVE_TIMEOUT, DEADLINE_LIMIT);
+    assert_fail(
+        run_join(p2(), pk(&p2()), flipped, flipped_next, STAKE, POT),
+        "timestamp-flavored deadline",
+    );
+
+    let edge = lobby_state_with(MOVE_TIMEOUT, DEADLINE_LIMIT - 1);
+    let edge_next =
+        match_state_full(&new_game(), pk(&p1()), pk(&p2()), MOVE_TIMEOUT, DEADLINE_LIMIT - 1);
+    assert_pass(
+        run_join(p2(), pk(&p2()), edge, edge_next, STAKE, POT),
+        "deadline just under the limit",
+    );
+}
+
+#[test]
 fn join_preserves_timing_fields() {
     let stretched = match_state_full(
         &new_game(),
@@ -690,6 +883,42 @@ fn cancel_by_p1_succeeds() {
 fn cancel_by_others_fails() {
     assert_fail(run_cancel(p2()), "cancel by p2");
     assert_fail(run_cancel(stranger()), "cancel by stranger");
+}
+
+#[test]
+fn cancel_must_end_the_lineage() {
+    // `emits none` compiles to OpAuthOutputCount == 0: a cancel that smuggles
+    // out an authorized lobby successor would resurrect the seat with p1's
+    // refund gone.
+    let result = (|| -> RunResult {
+        let builder = TxBuilder::new(artifact()).map_err(|e| format!("builder: {e}"))?;
+        let lobby = lobby_state();
+        let utxo = builder
+            .covenant_utxo(
+                "FourkLobby",
+                lobby.clone(),
+                STAKE,
+                0,
+                false,
+                Some(covenant_id()),
+            )
+            .map_err(|e| format!("builder: {e}"))?;
+        let signer = p1();
+        let refund = pk(&signer);
+        let entry =
+            EntryCall::new("cancel").args_with(move |tx, idx| args![sign_input(tx, idx, &signer)]);
+        let context = TxContext::new()
+            .actor_input("FourkLobby", lobby.clone(), entry, outpoint(), utxo.clone(), 0)
+            .output(p2pk_spk(&refund), None, STAKE)
+            .actor_output(
+                "FourkLobby",
+                lobby,
+                CovenantBinding::new(0, covenant_id()),
+                1_000,
+            );
+        build_and_execute(context, utxo)
+    })();
+    assert_fail(result, "cancel smuggling a covenant successor");
 }
 
 // -- dissolve --------------------------------------------------------------
@@ -1155,6 +1384,23 @@ fn claim_draw_rejects_bad_payouts() {
     );
 }
 
+#[test]
+fn claim_draw_must_end_the_lineage() {
+    assert_fail(
+        run_match_entry(
+            EntryCall::new("claim_draw"),
+            match_state(&full_board()),
+            POT,
+            0,
+            0,
+            half_split(),
+            Some((match_state(&full_board()), 1_000)),
+        )
+        .map(|_| ()),
+        "draw smuggling a covenant successor",
+    );
+}
+
 // -- claim_forfeit ---------------------------------------------------------
 
 #[test]
@@ -1225,6 +1471,28 @@ fn forfeit_uses_the_match_clock() {
     );
 }
 
+#[test]
+fn claim_forfeit_must_end_the_lineage() {
+    let begun = play(&[3]);
+    let signer = p1();
+    let claimant = pk(&signer);
+    let entry = EntryCall::new("claim_forfeit")
+        .args_with(move |tx, idx| args![sign_input(tx, idx, &signer)]);
+    assert_fail(
+        run_match_entry(
+            entry,
+            match_state(&begun),
+            POT,
+            MOVE_TIMEOUT as u64,
+            0,
+            vec![(p2pk_spk(&claimant), POT)],
+            Some((match_state(&begun), 1_000)),
+        )
+        .map(|_| ()),
+        "forfeit smuggling a covenant successor",
+    );
+}
+
 // -- sudden_death ----------------------------------------------------------
 
 #[test]
@@ -1281,4 +1549,415 @@ fn sudden_death_rejects_bad_payouts() {
         ),
         "swapped split",
     );
+}
+
+#[test]
+fn sudden_death_must_end_the_lineage() {
+    assert_fail(
+        run_match_entry(
+            EntryCall::new("sudden_death"),
+            match_state(&play(&[3, 3])),
+            POT,
+            0,
+            DEADLINE as u64,
+            half_split(),
+            Some((match_state(&play(&[3, 3])), 1_000)),
+        )
+        .map(|_| ()),
+        "sudden death smuggling a covenant successor",
+    );
+}
+
+// -- multi-input transaction shapes ----------------------------------------
+//
+// Funded variants of every classic door (run_match_entry_funded /
+// run_join_funded): a P2PK wallet input at index 0 pays fees, the covenant
+// sits at input index 1, and the pinned-payout doors carry a trailing wallet
+// change output. Same pass/fail outcomes as the single-input tests above.
+
+fn run_move_funded(
+    active: &Game,
+    col: i64,
+    signer: Keypair,
+    next: BTreeMap<String, ArtifactValue>,
+    out_value: u64,
+) -> RunResult {
+    let entry =
+        EntryCall::new("move").args_with(move |tx, idx| args![sign_input(tx, idx, &signer), col]);
+    run_match_entry_funded(
+        entry,
+        match_state(active),
+        POT,
+        0,
+        0,
+        vec![],
+        Some((next, out_value)),
+    )
+}
+
+#[test]
+fn funded_join_succeeds_and_doubles_pot() {
+    assert_pass(
+        run_join_funded(p2(), match_state(&new_game()), STAKE, POT),
+        "funded join",
+    );
+    assert_fail(
+        run_join_funded(p2(), match_state(&new_game()), STAKE, POT - 1),
+        "funded join one sompi short",
+    );
+}
+
+#[test]
+fn funded_move_advances_the_game() {
+    let fresh = new_game();
+    let next = apply_move(&fresh, 3);
+    assert_pass(
+        run_move_funded(&fresh, 3, p1(), match_state(&next), POT),
+        "funded move",
+    );
+    assert_fail(
+        run_move_funded(&fresh, 3, p1(), match_state(&next), POT - 1),
+        "funded move skimming the pot",
+    );
+    assert_fail(
+        run_move_funded(&fresh, 3, p2(), match_state(&next), POT),
+        "funded move out of turn",
+    );
+}
+
+#[test]
+fn funded_winning_move_pays_the_winner() {
+    let vertical = play(&[0, 1, 0, 1, 0, 1]);
+    let winner = pk(&p1());
+    let entry = |smuggle: bool| {
+        let signer = p1();
+        let entry = EntryCall::new("winning_move")
+            .args_with(move |tx, idx| args![sign_input(tx, idx, &signer), 0i64, 0i64, 0i64, N]);
+        let successor = smuggle.then(|| (match_state(&vertical), 1_000));
+        run_match_entry_funded(
+            entry,
+            match_state(&vertical),
+            POT,
+            0,
+            0,
+            vec![(p2pk_spk(&winner), POT)],
+            successor,
+        )
+    };
+    assert_pass(entry(false), "funded vertical win");
+    // The smuggled successor authorizes input 1, where the covenant actually
+    // sits — the compiled OpAuthOutputCount(activeInputIndex) must see it.
+    assert_fail(entry(true), "funded terminal claim smuggling a successor");
+}
+
+#[test]
+fn funded_forfeit_honors_the_clock() {
+    let begun = play(&[3]);
+    let claimant = pk(&p1());
+    let run = |sequence: u64| {
+        let signer = p1();
+        let entry = EntryCall::new("claim_forfeit")
+            .args_with(move |tx, idx| args![sign_input(tx, idx, &signer)]);
+        run_match_entry_funded(
+            entry,
+            match_state(&begun),
+            POT,
+            sequence,
+            0,
+            vec![(p2pk_spk(&claimant), POT), change_payout()],
+            None,
+        )
+    };
+    assert_pass(run(MOVE_TIMEOUT as u64), "funded forfeit at the deadline");
+    assert_fail(run(MOVE_TIMEOUT as u64 - 1), "funded forfeit one block early");
+}
+
+// The pinned-payout doors check tx.outputs[0]/[1] by absolute index and demand
+// zero AUTHORIZED covenant outputs — neither bounds the total output count, so
+// a plain wallet change output AFTER the pinned payouts is accepted. That is
+// the intended behavior (fees ride on a funding input, which implies change),
+// pinned here so a covenant change can't silently alter it; change ahead of
+// the pinned payouts shifts them and must still fail.
+
+fn with_change(mut payouts: Vec<(ScriptPublicKey, u64)>) -> Vec<(ScriptPublicKey, u64)> {
+    payouts.push(change_payout());
+    payouts
+}
+
+#[test]
+fn funded_dissolve_allows_trailing_change_only() {
+    let run = |signer: Keypair, payouts: Vec<(ScriptPublicKey, u64)>| {
+        let claimed = pk(&signer);
+        let entry = EntryCall::new("dissolve")
+            .args_with(move |tx, idx| args![sign_input(tx, idx, &signer), claimed]);
+        run_match_entry_funded(entry, match_state(&new_game()), POT, 0, 0, payouts, None)
+    };
+    assert_pass(
+        run(p1(), with_change(half_split())),
+        "funded dissolve with trailing change",
+    );
+    let p1_spk = p2pk_spk(&pk(&p1()));
+    let p2_spk = p2pk_spk(&pk(&p2()));
+    assert_fail(
+        run(
+            p1(),
+            with_change(vec![(p2_spk, POT / 2), (p1_spk, POT / 2)]),
+        ),
+        "funded dissolve with swapped refunds",
+    );
+    let mut change_first = vec![change_payout()];
+    change_first.extend(half_split());
+    assert_fail(
+        run(p1(), change_first),
+        "change ahead of the pinned payouts",
+    );
+}
+
+#[test]
+fn funded_claim_draw_allows_trailing_change_only() {
+    let run = |payouts: Vec<(ScriptPublicKey, u64)>| {
+        run_match_entry_funded(
+            EntryCall::new("claim_draw"),
+            match_state(&full_board()),
+            POT,
+            0,
+            0,
+            payouts,
+            None,
+        )
+    };
+    assert_pass(run(with_change(half_split())), "funded draw with trailing change");
+    let p1_spk = p2pk_spk(&pk(&p1()));
+    let p2_spk = p2pk_spk(&pk(&p2()));
+    assert_fail(
+        run(with_change(vec![
+            (p1_spk, POT / 2 + 1),
+            (p2_spk, POT / 2 - 1),
+        ])),
+        "funded draw with unequal split",
+    );
+    let mut change_first = vec![change_payout()];
+    change_first.extend(half_split());
+    assert_fail(run(change_first), "change ahead of the pinned payouts");
+}
+
+#[test]
+fn funded_sudden_death_allows_trailing_change_only() {
+    let run = |payouts: Vec<(ScriptPublicKey, u64)>, lock_time: u64| {
+        run_match_entry_funded(
+            EntryCall::new("sudden_death"),
+            match_state(&play(&[3, 3])),
+            POT,
+            0,
+            lock_time,
+            payouts,
+            None,
+        )
+    };
+    assert_pass(
+        run(with_change(half_split()), DEADLINE as u64),
+        "funded sudden death with trailing change",
+    );
+    assert_fail(
+        run(with_change(half_split()), DEADLINE as u64 - 1),
+        "funded sudden death before the deadline",
+    );
+    let mut change_first = vec![change_payout()];
+    change_first.extend(half_split());
+    assert_fail(
+        run(change_first, DEADLINE as u64),
+        "change ahead of the pinned payouts",
+    );
+}
+
+// -- compute budget --------------------------------------------------------
+
+/// Measures the compute budget the engine actually charges per classic entry,
+/// at each door's worst case. The app declares covenantBudget: 12 for classic
+/// covenant inputs (app/src/shared/modes/classic/engine.ts) — a node rejects
+/// any spend whose declared budget is below what execution uses, so every
+/// door must fit 12 or the app's transactions bounce off mainnet. Same
+/// measurement technique as simul_tests.rs compute_budget_probe.
+#[test]
+fn compute_budget_probe() {
+    /// The app's declared per-input budget for classic covenant spends.
+    const CLASSIC_COVENANT_BUDGET: u16 = 12;
+
+    let budget_of = |tx: &Transaction, input_idx: usize| match tx.inputs[input_idx].compute_commit {
+        ComputeCommit::ComputeBudget(b) => b.value(),
+        _ => panic!("v1 input carries a compute budget"),
+    };
+    let mut measured: Vec<(&str, u16)> = Vec::new();
+
+    // join (FourkLobby -> FourkMatch successor)
+    {
+        let builder = TxBuilder::new(artifact()).expect("builder");
+        let lobby = lobby_state();
+        let utxo = builder
+            .covenant_utxo(
+                "FourkLobby",
+                lobby.clone(),
+                STAKE,
+                0,
+                false,
+                Some(covenant_id()),
+            )
+            .expect("lobby utxo");
+        let joiner = p2();
+        let entry = EntryCall::new("join")
+            .args_with(move |tx, idx| args![sign_input(tx, idx, &joiner), pk(&p2())]);
+        let context = TxContext::new()
+            .actor_input("FourkLobby", lobby, entry, outpoint(), utxo.clone(), 0)
+            .actor_output(
+                "FourkMatch",
+                match_state(&new_game()),
+                CovenantBinding::new(0, covenant_id()),
+                POT,
+            );
+        let tx = build_executed_tx(context, vec![utxo]).expect("join executes");
+        measured.push(("join", budget_of(&tx, 0)));
+    }
+
+    // 41 discs, only column 6 open (height 5): the height scan and the
+    // successor board splice at their dearest. move_count 41 puts p2 on turn.
+    let nearly_full = {
+        let mut cells = Vec::new();
+        for col in 0..COLS {
+            let rows = if col == 6 { 5 } else { ROWS };
+            for row in 0..rows {
+                cells.push((col, row, ((col + row) % 2) as u8 + 1));
+            }
+        }
+        with_cells(&cells, 41)
+    };
+
+    // move on the nearly-full board
+    {
+        let next = apply_move(&nearly_full, 6);
+        let signer = p2();
+        let entry = EntryCall::new("move")
+            .args_with(move |tx, idx| args![sign_input(tx, idx, &signer), 6i64]);
+        let tx = run_match_entry(
+            entry,
+            match_state(&nearly_full),
+            POT,
+            0,
+            0,
+            vec![],
+            Some((match_state(&next), POT)),
+        )
+        .expect("move executes");
+        measured.push(("move", budget_of(&tx, 0)));
+    }
+
+    // winning_move on a nearly-full board with the SE diagonal witness — the
+    // height scan, board splice, and the dearest direction arm all at once.
+    // P1's SE line (0,3)->(3,0) sits in the fill; move_count 40 puts p1 on
+    // turn to play the one open column and point at the old line.
+    {
+        let mut cells = Vec::new();
+        for col in 0..COLS {
+            let rows = if col == 6 { 5 } else { ROWS };
+            for row in 0..rows {
+                let se_line = (col, row) == (0, 3)
+                    || (col, row) == (1, 2)
+                    || (col, row) == (2, 1)
+                    || (col, row) == (3, 0);
+                cells.push((col, row, if se_line { 1 } else { 2 }));
+            }
+        }
+        let board = with_cells(&cells, 40);
+        let winner = pk(&p1());
+        let signer = p1();
+        let entry = EntryCall::new("winning_move")
+            .args_with(move |tx, idx| args![sign_input(tx, idx, &signer), 6i64, 0i64, 3i64, SE]);
+        let tx = run_match_entry(
+            entry,
+            match_state(&board),
+            POT,
+            0,
+            0,
+            vec![(p2pk_spk(&winner), POT)],
+            None,
+        )
+        .expect("winning_move executes");
+        measured.push(("winning_move", budget_of(&tx, 0)));
+    }
+
+    // claim_draw on the full board
+    {
+        let tx = run_match_entry(
+            EntryCall::new("claim_draw"),
+            match_state(&full_board()),
+            POT,
+            0,
+            0,
+            half_split(),
+            None,
+        )
+        .expect("claim_draw executes");
+        measured.push(("claim_draw", budget_of(&tx, 0)));
+    }
+
+    // claim_forfeit on a begun game
+    {
+        let signer = p1();
+        let claimant = pk(&p1());
+        let entry = EntryCall::new("claim_forfeit")
+            .args_with(move |tx, idx| args![sign_input(tx, idx, &signer)]);
+        let tx = run_match_entry(
+            entry,
+            match_state(&play(&[3])),
+            POT,
+            MOVE_TIMEOUT as u64,
+            0,
+            vec![(p2pk_spk(&claimant), POT)],
+            None,
+        )
+        .expect("claim_forfeit executes");
+        measured.push(("claim_forfeit", budget_of(&tx, 0)));
+    }
+
+    // dissolve (p2's exit takes the age-gate branch too; p1's kick suffices —
+    // the branch is two extra compares, both bodies execute the same pins)
+    {
+        let signer = p1();
+        let claimed = pk(&p1());
+        let entry = EntryCall::new("dissolve")
+            .args_with(move |tx, idx| args![sign_input(tx, idx, &signer), claimed]);
+        let tx = run_match_entry(
+            entry,
+            match_state(&new_game()),
+            POT,
+            0,
+            0,
+            half_split(),
+            None,
+        )
+        .expect("dissolve executes");
+        measured.push(("dissolve", budget_of(&tx, 0)));
+    }
+
+    // sudden_death
+    {
+        let tx = run_match_entry(
+            EntryCall::new("sudden_death"),
+            match_state(&play(&[3, 3])),
+            POT,
+            0,
+            DEADLINE as u64,
+            half_split(),
+            None,
+        )
+        .expect("sudden_death executes");
+        measured.push(("sudden_death", budget_of(&tx, 0)));
+    }
+
+    println!("measured budgets: {measured:?}");
+    for (entry, budget) in measured {
+        assert!(
+            budget <= CLASSIC_COVENANT_BUDGET,
+            "{entry} needs budget {budget}, app declares {CLASSIC_COVENANT_BUDGET}"
+        );
+    }
 }

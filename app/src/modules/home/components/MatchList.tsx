@@ -1,4 +1,4 @@
-import { fmtKas, type Match } from "@shared/lib/match";
+import { fmtKas, isStaked, type Match } from "@shared/lib/match";
 import type { MatchGlance } from "../hooks";
 
 const GLANCE_LABEL: Record<MatchGlance, string> = {
@@ -34,7 +34,14 @@ export const MatchList = ({ matches, glances, busy, onOpen }: Props) => {
           >
             <span className="flex items-baseline justify-between gap-2">
               <span className="font-mono text-sm text-dim">#{m.covenantId.slice(0, 8)}</span>
-              <span className="text-sm">{fmtKas(m.value)} KAS</span>
+              <span className={`text-sm ${isStaked(m) ? "text-accent" : ""}`}>
+                {isStaked(m) && (
+                  <span className="mr-1.5 rounded-sm border border-accent px-1 text-[10px] font-semibold uppercase">
+                    staked
+                  </span>
+                )}
+                {fmtKas(m.value)} KAS
+              </span>
             </span>
             <span className={`mt-0.5 block text-sm ${urgent ? "text-accent" : "text-dim"}`}>
               {glance ? GLANCE_LABEL[glance] : "checking…"}

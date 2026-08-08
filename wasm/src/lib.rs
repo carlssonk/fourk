@@ -201,6 +201,7 @@ fn simul_match_state(
     commit2: &[u8],
     reveal1: i64,
     reveal2: i64,
+    pending_win: i64,
     move_timeout: i64,
     deadline: i64,
 ) -> BTreeMap<String, ArtifactValue> {
@@ -213,6 +214,7 @@ fn simul_match_state(
         commit2: commit2.to_vec(),
         reveal1: reveal1,
         reveal2: reveal2,
+        pending_win: pending_win,
         move_timeout: move_timeout,
         deadline: deadline,
     }
@@ -262,7 +264,7 @@ fn simul_entry_args(
 
     match function {
         "join" | "dissolve" => Ok(vec![sig_arg()?, pk_arg()?]),
-        "cancel" | "claim_timeout" => Ok(vec![sig_arg()?]),
+        "cancel" | "claim_timeout" | "sweep_win" => Ok(vec![sig_arg()?]),
         "commit" => Ok(vec![sig_arg()?, pk_arg()?, blob_arg("commitment")?]),
         "reveal" | "resolve" => {
             let mut v = vec![sig_arg()?, pk_arg()?];
@@ -305,6 +307,7 @@ pub fn simul_match_lock_script(
     commit2: &[u8],
     reveal1: i64,
     reveal2: i64,
+    pending_win: i64,
     move_timeout: i64,
     deadline: i64,
 ) -> Result<Vec<u8>, JsError> {
@@ -320,6 +323,7 @@ pub fn simul_match_lock_script(
                 commit2,
                 reveal1,
                 reveal2,
+                pending_win,
                 move_timeout,
                 deadline,
             ),
@@ -351,7 +355,7 @@ pub fn simul_lobby_sig_script(
 
 /// Full signature script for spending a fourk-mode match UTXO via `function`
 /// (dissolve, commit, reveal, resolve, claim_win, claim_split, claim_draw,
-/// claim_timeout, split_timeout, sudden_death).
+/// claim_timeout, split_timeout, sudden_death, sweep_win).
 #[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = simulMatchSigScript)]
 pub fn simul_match_sig_script(
@@ -363,6 +367,7 @@ pub fn simul_match_sig_script(
     commit2: &[u8],
     reveal1: i64,
     reveal2: i64,
+    pending_win: i64,
     move_timeout: i64,
     deadline: i64,
     function: &str,
@@ -384,6 +389,7 @@ pub fn simul_match_sig_script(
                 commit2,
                 reveal1,
                 reveal2,
+                pending_win,
                 move_timeout,
                 deadline,
             ),

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
+  DEADLINE_LIMIT,
+  MAX_MOVE_TIMEOUT_DAA,
   MIN_MOVE_TIMEOUT_DAA,
   MOVE_TIMEOUT_DAA,
   ZERO_PK,
@@ -18,11 +20,16 @@ import {
   suddenDeath,
   winningMove,
 } from "../src/rules.js";
-import { P1, P2, STAKE, STRANGER, ctx, fillBoard, game, play } from "./helpers.js";
+import { DEADLINE, P1, P2, STAKE, STRANGER, ctx, fillBoard, game, play } from "./helpers.js";
+
+/** A fresh open match with valid timing (join refuses uncapped genesis states). */
+function open(): ReturnType<typeof newMatch> {
+  return newMatch(P1, STAKE, MOVE_TIMEOUT_DAA, DEADLINE);
+}
 
 describe("open phase", () => {
   test("join sets p2 and preserves everything else", () => {
-    const s = join(newMatch(P1, STAKE), ctx(P2));
+    const s = join(open(), ctx(P2));
     expect(s.p2).toBe(P2);
     expect(s.p1).toBe(P1);
     expect(s.moveCount).toBe(0);
@@ -34,19 +41,19 @@ describe("open phase", () => {
   });
 
   test("joining with the zero pubkey fails", () => {
-    expect(() => join(newMatch(P1, STAKE), ctx(ZERO_PK))).toThrow("invalid joiner");
+    expect(() => join(open(), ctx(ZERO_PK))).toThrow("invalid joiner");
   });
 
   test("p1 cannot join their own match", () => {
-    expect(() => join(newMatch(P1, STAKE), ctx(P1))).toThrow("cannot join your own match");
+    expect(() => join(open(), ctx(P1))).toThrow("cannot join your own match");
   });
 
   test("p1 can cancel an open match and reclaim the stake", () => {
-    expect(cancel(newMatch(P1, STAKE), ctx(P1))).toEqual([{ to: P1, amount: STAKE }]);
+    expect(cancel(open(), ctx(P1))).toEqual([{ to: P1, amount: STAKE }]);
   });
 
   test("nobody else can cancel", () => {
-    expect(() => cancel(newMatch(P1, STAKE), ctx(STRANGER))).toThrow("only p1");
+    expect(() => cancel(open(), ctx(STRANGER))).toThrow("only p1");
   });
 
   test("cannot cancel after a join", () => {
@@ -54,7 +61,7 @@ describe("open phase", () => {
   });
 
   test("cannot move, draw, forfeit, or dissolve before a join", () => {
-    const s = newMatch(P1, STAKE);
+    const s = open();
     expect(() => move(s, ctx(P1), 0)).toThrow("not started");
     expect(() => claimDraw(s, ctx(P1))).toThrow("not started");
     expect(() => claimForfeit(s, ctx(P1, MOVE_TIMEOUT_DAA))).toThrow("not started");
@@ -62,18 +69,37 @@ describe("open phase", () => {
   });
 
   test("match creation rejects bad stakes, pubkeys, and timing", () => {
-    expect(() => newMatch(P1, 0n)).toThrow("stake");
-    expect(() => newMatch(P1, -1n)).toThrow("stake");
-    expect(() => newMatch(ZERO_PK, STAKE)).toThrow("pubkey");
-    expect(() => newMatch("nonsense", STAKE)).toThrow("pubkey");
-    expect(() => newMatch(P1, STAKE, MIN_MOVE_TIMEOUT_DAA - 1)).toThrow("timeout");
+    expect(() => newMatch(P1, 0n, MOVE_TIMEOUT_DAA, DEADLINE)).toThrow("stake");
+    expect(() => newMatch(P1, -1n, MOVE_TIMEOUT_DAA, DEADLINE)).toThrow("stake");
+    expect(() => newMatch(ZERO_PK, STAKE, MOVE_TIMEOUT_DAA, DEADLINE)).toThrow("pubkey");
+    expect(() => newMatch("nonsense", STAKE, MOVE_TIMEOUT_DAA, DEADLINE)).toThrow("pubkey");
+    expect(() => newMatch(P1, STAKE, MIN_MOVE_TIMEOUT_DAA - 1, DEADLINE)).toThrow("timeout");
+    expect(() => newMatch(P1, STAKE, MAX_MOVE_TIMEOUT_DAA + 1, DEADLINE)).toThrow("timeout");
     expect(() => newMatch(P1, STAKE, MOVE_TIMEOUT_DAA, -1)).toThrow("deadline");
+    expect(() => newMatch(P1, STAKE, MOVE_TIMEOUT_DAA, 0)).toThrow("deadline");
+    expect(() => newMatch(P1, STAKE, MOVE_TIMEOUT_DAA, DEADLINE_LIMIT)).toThrow("deadline");
   });
 
   test("a trap genesis with a below-floor move timeout is unjoinable", () => {
-    const trap = { ...newMatch(P1, STAKE), moveTimeout: MIN_MOVE_TIMEOUT_DAA - 1 };
+    const trap = { ...open(), moveTimeout: MIN_MOVE_TIMEOUT_DAA - 1 };
     expect(() => join(trap, ctx(P2))).toThrow("timeout below minimum");
     expect(join({ ...trap, moveTimeout: MIN_MOVE_TIMEOUT_DAA }, ctx(P2)).p2).toBe(P2);
+  });
+
+  test("a hostage genesis with an above-ceiling move timeout is unjoinable", () => {
+    const hostage = { ...open(), moveTimeout: MAX_MOVE_TIMEOUT_DAA + 1 };
+    expect(() => join(hostage, ctx(P2))).toThrow("timeout above maximum");
+    expect(join({ ...hostage, moveTimeout: MAX_MOVE_TIMEOUT_DAA }, ctx(P2)).p2).toBe(P2);
+  });
+
+  test("an uncapped or clock-flipping deadline is unjoinable", () => {
+    // No deadline: the pot could be stranded forever by two vanished players.
+    expect(() => join({ ...open(), deadline: 0 }, ctx(P2))).toThrow("no game deadline");
+    // At the consensus lock-time threshold, a "DAA score" reads as unix-ms.
+    expect(() => join({ ...open(), deadline: DEADLINE_LIMIT }, ctx(P2))).toThrow(
+      "deadline out of range",
+    );
+    expect(join({ ...open(), deadline: DEADLINE_LIMIT - 1 }, ctx(P2)).p2).toBe(P2);
   });
 });
 
@@ -320,13 +346,16 @@ describe("sudden death", () => {
   });
 
   test("uncapped games have no sudden death", () => {
-    expect(() => suddenDeath(game(), ctx(P1, 0, Number.MAX_SAFE_INTEGER))).toThrow(
+    // Unreachable via join (which demands a deadline), but the door must
+    // still refuse a deadline-0 state a covenant UTXO could carry directly.
+    const uncapped = { ...game(), deadline: 0 };
+    expect(() => suddenDeath(uncapped, ctx(P1, 0, Number.MAX_SAFE_INTEGER))).toThrow(
       "no game deadline",
     );
   });
 
   test("open matches cannot sudden-death (cancel covers them)", () => {
-    const s = { ...newMatch(P1, STAKE), deadline: DEADLINE };
+    const s = { ...open(), deadline: DEADLINE };
     expect(() => suddenDeath(s, ctx(P1, 0, DEADLINE))).toThrow("not started");
   });
 });

@@ -11,7 +11,16 @@ import {
   priorityPlayer,
   roundPhase,
 } from "../src/simul/state.js";
-import { claimWin, commit, legalSimulColumns, resolve, reveal } from "../src/simul/rules.js";
+import {
+  claimDraw,
+  claimWin,
+  commit,
+  legalSimulColumns,
+  resolve,
+  reveal,
+  splitTimeout,
+  suddenDeath,
+} from "../src/simul/rules.js";
 import { commitmentOf } from "../src/simul/hash.js";
 import { P1, P2, STAKE, STRANGER, ctx } from "./helpers.js";
 import { pkOf, salt, simulGame } from "./simul-helpers.js";
@@ -189,6 +198,41 @@ describe("witness scheme vs the naive oracle", () => {
             }
       }),
       { numRuns: 25 },
+    );
+  });
+});
+
+describe("liveness: no reachable state can strand the pot", () => {
+  test("every reachable state — every sub-phase included — has a permissionless exit", () => {
+    // The property that makes the mandatory join-time deadline sufficient in
+    // fourk mode, where one-sided states are the danger: claimTimeout pays
+    // one SPECIFIC player (who may be the one who vanished) and splitTimeout
+    // refuses asymmetric silence, so suddenDeath must cover everything.
+    // A stranger with no key must be able to return the pot to the players
+    // from any state once the clocks run out.
+    fc.assert(
+      fc.property(arbSeeds, arbStop, fc.nat(6), (seeds, stop, seed) => {
+        const s = intoRound(reachableSimul(seeds).s, stop, seed);
+        const exits = [
+          () => claimDraw(s, ctx(STRANGER)),
+          () => splitTimeout(s, ctx(STRANGER, s.moveTimeout)),
+          () => suddenDeath(s, ctx(STRANGER, 0, s.deadline)),
+        ];
+        const payouts = exits.flatMap((exit) => {
+          try {
+            return [exit()];
+          } catch {
+            return [];
+          }
+        });
+        expect(payouts.length).toBeGreaterThan(0);
+        for (const outs of payouts) {
+          const total = outs.reduce((sum, o) => sum + o.amount, 0n);
+          expect(total).toBe(2n * STAKE);
+          for (const o of outs) expect([s.p1, s.p2]).toContain(o.to);
+        }
+      }),
+      { numRuns: 200 },
     );
   });
 });

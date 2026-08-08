@@ -25,6 +25,16 @@ const int CELLS = 42;
 // Floor for the per-move clock (~1 minute at ~10 blocks/s). Join checks it,
 // so a trap genesis with an instant clock is unjoinable.
 const int MIN_MOVE_TIMEOUT = 600;
+// Ceiling for the per-move clock (~10 days): the sequence-lock field would
+// happily encode ~13 years, and a genesis with a decades-long clock turns
+// claim_forfeit into a hostage lock on the joiner's stake — join makes it
+// unjoinable instead.
+const int MAX_MOVE_TIMEOUT = 8640000;
+// Exclusive upper bound for deadlines, mirroring the consensus lock-time
+// threshold: at 500e9 a locktime stops meaning "DAA score" and becomes a
+// unix-ms timestamp (always already in the past). Join keeps every deadline
+// strictly in DAA-score territory.
+const int DEADLINE_LIMIT = 500000000000;
 
 // An open seat: p1's stake sits in the UTXO waiting for a joiner.
 state LobbyState {
@@ -54,6 +64,15 @@ actor FourkLobby owns LobbyState {
     // from their own inputs).
     entry join(sig s, pubkey pk) emits game: FourkMatch {
         require(move_timeout >= MIN_MOVE_TIMEOUT);
+        require(move_timeout <= MAX_MOVE_TIMEOUT);
+        // A deadline is mandatory: sudden_death is the one permissionless
+        // exit every match is guaranteed, so a pot can never be stranded by
+        // two vanished players (every other mid-game door needs a player's
+        // signature). What script CANNOT check is that the deadline is still
+        // in the future — a locktime proves time passed, never time
+        // remaining — so staleness is the joining client's check.
+        require(deadline > 0);
+        require(deadline < DEADLINE_LIMIT);
         // A same-key match is degenerate for every door keyed on "the other
         // player" — rule it out at the gate (mirrors rules.ts join).
         require(pk != p1);
@@ -305,6 +324,12 @@ state SimulMatchState {
     // ever set in a stored state: the second reveal resolves in-transition.
     int reveal1;
     int reveal2;
+    // The challenge window: 0 = normal play; 1/2 = that color's owner proved
+    // a line via claim_win and the pot is pending theirs. claim_split (the
+    // permissionless double-win contest) stays legal on a pending state for
+    // one move clock; then sweep_win pays the pending winner. This is what
+    // turns the double-win mempool race into a real contest window.
+    int pending_win;
     int move_timeout;
     int deadline;
 }
@@ -317,8 +342,15 @@ fn zero32() -> byte[32] {
 
 actor FourkSimulLobby owns SimulLobbyState {
     // Identical to classic join, but the successor is a pristine simul match.
+    // Same genesis gates: clock floor/ceiling and a mandatory in-range
+    // deadline (see FourkLobby.join; a strandable pot is even easier to
+    // reach here, because claim_timeout pays one SPECIFIC player, who may be
+    // the one who vanished).
     entry join(sig s, pubkey pk) emits game: FourkSimul {
         require(move_timeout >= MIN_MOVE_TIMEOUT);
+        require(move_timeout <= MAX_MOVE_TIMEOUT);
+        require(deadline > 0);
+        require(deadline < DEADLINE_LIMIT);
         require(pk != p1);
         require(checkSig(s, pk));
 
@@ -331,6 +363,7 @@ actor FourkSimulLobby owns SimulLobbyState {
             commit2: zero32(),
             reveal1: 0,
             reveal2: 0,
+            pending_win: 0,
             move_timeout: move_timeout,
             deadline: deadline,
         };
@@ -351,6 +384,9 @@ actor FourkSimul owns SimulMatchState {
     // obligation — that's claim_timeout's business). Same anti-grief shape
     // as classic: p2's exit waits out one clock, p1's kick is instant.
     entry dissolve(sig s, pubkey pk) emits none {
+        // Unreachable in honest play (a line needs rounds), but a directly-
+        // created covenant UTXO could carry it — belt and braces.
+        require(pending_win == 0);
         require(round == 0);
         require(commit1 == zero32() && commit2 == zero32());
         require(reveal1 == 0 && reveal2 == 0);
@@ -374,6 +410,7 @@ actor FourkSimul owns SimulMatchState {
     // opponent's visible hash is just a blind collision bet. Refused on a
     // full board (claim_draw's business) and once any reveal is on the table.
     entry commit(sig s, pubkey pk, byte[32] h) emits next: FourkSimul {
+        require(pending_win == 0);
         int full = 1;
         for (c, 0, COLS, COLS) {
             if (OpBin2Num(board[c * ROWS + ROWS - 1]) == 0) {
@@ -405,6 +442,7 @@ actor FourkSimul owns SimulMatchState {
             commit2: next_c2,
             reveal1: 0,
             reveal2: 0,
+            pending_win: 0,
             move_timeout: move_timeout,
             deadline: deadline,
         };
@@ -419,6 +457,7 @@ actor FourkSimul owns SimulMatchState {
     // was made) is enforced here, not at commit. The revealer's commitment
     // slot is zeroed so every stored state has one unambiguous sub-phase.
     entry reveal(sig s, pubkey pk, int col, byte[32] salt) emits next: FourkSimul {
+        require(pending_win == 0);
         require(reveal1 == 0 && reveal2 == 0);
         require(commit1 != zero32() && commit2 != zero32());
         require(pk == p1 || pk == p2);
@@ -460,6 +499,7 @@ actor FourkSimul owns SimulMatchState {
             commit2: next_c2,
             reveal1: next_r1,
             reveal2: next_r2,
+            pending_win: 0,
             move_timeout: move_timeout,
             deadline: deadline,
         };
@@ -475,6 +515,7 @@ actor FourkSimul owns SimulMatchState {
     // here are claimed through claim_win / claim_split — the game state
     // itself just continues, exactly as classic lets a win sit unclaimed.
     entry resolve(sig s, pubkey pk, int col, byte[32] salt) emits next: FourkSimul {
+        require(pending_win == 0);
         require(pk == p1 || pk == p2);
 
         int me = 0;
@@ -556,6 +597,7 @@ actor FourkSimul owns SimulMatchState {
             commit2: zero32(),
             reveal1: 0,
             reveal2: 0,
+            pending_win: 0,
             move_timeout: move_timeout,
             deadline: deadline,
         };
@@ -565,12 +607,20 @@ actor FourkSimul owns SimulMatchState {
         become next <- FourkSimul(next_match);
     }
 
-    // Terminal door 1: point at four-in-a-row on the CURRENT board. No disc
-    // is played — resolution already landed it — and the witness's first
-    // cell names the color, whose owner must sign: the resolver of a round
-    // need not be its winner. Signed by the pot's sole owner, so funds go
-    // wherever they direct.
-    entry claim_win(sig s, int wcol, int wrow, int wdir) emits none {
+    // Door: point at four-in-a-row on the CURRENT board and open the
+    // challenge window. The witness's first cell names the color, whose
+    // owner must sign: the resolver of a round need not be its winner.
+    //
+    // NOT terminal: the covenant cannot prove the OTHER line's absence (no
+    // board scan, by design), so an immediate payout would let a double-win
+    // owner race the honest claim_split in the mempool — a race a bot
+    // always wins. Instead the pot parks in a pending successor (round
+    // slots zeroed, pending_win = the color) for one move clock:
+    // claim_split converts a hidden double win into the fair split at
+    // leisure, and sweep_win pays the winner once the window lapses —
+    // consensus itself (the sweep's sequence lock) rejects an early sweep.
+    entry claim_win(sig s, int wcol, int wrow, int wdir) emits pending: FourkSimul {
+        require(pending_win == 0);
         require(wcol >= 0 && wcol < COLS && wrow >= 0 && wrow < ROWS);
         int disc_num = OpBin2Num(board[wcol * ROWS + wrow]);
         require(disc_num == 1 || disc_num == 2);
@@ -600,16 +650,33 @@ actor FourkSimul owns SimulMatchState {
         if (disc_num == 2) {
             owner_pk = p2;
         }
+
+        SimulMatchState next_match = {
+            p1: p1,
+            p2: p2,
+            board: board,
+            round: round,
+            commit1: zero32(),
+            commit2: zero32(),
+            reveal1: 0,
+            reveal2: 0,
+            pending_win: disc_num,
+            move_timeout: move_timeout,
+            deadline: deadline,
+        };
+
+        require(pending.value == self.value);
         require(checkSig(s, owner_pk));
+        become pending <- FourkSimul(next_match);
     }
 
-    // Terminal door 2: the double win — one round completed a line for BOTH
-    // colors, so the pot splits. Two witnesses in fixed color order (w1 for
-    // p1's discs, w2 for p2's); permissionless, payouts pinned. DOCUMENTED
-    // EDGE: the covenant cannot prove a line's ABSENCE without the board
-    // scan this design avoids, so a double-win owner racing claim_win with
-    // only their own line is accepted, like classic's unclaimed-win-lost-
-    // to-draw. Honest clients always submit the correct door immediately.
+    // Terminal door: the double win — BOTH colors have a line, so the pot
+    // splits. Two witnesses in fixed color order (w1 for p1's discs, w2 for
+    // p2's); permissionless, payouts pinned. Deliberately UNGATED on
+    // pending_win: this is the contest that keeps a one-sided claim_win
+    // honest, and since both witnesses are computable from the public
+    // board, anyone — the opponent's client, an altruistic observer — can
+    // fire it inside the challenge window.
     entry claim_split(int w1col, int w1row, int w1dir, int w2col, int w2row, int w2dir) emits none {
         require(w1dir >= 0 && w1dir <= 3);
         int dc1 = 1;
@@ -665,6 +732,10 @@ actor FourkSimul owns SimulMatchState {
     // make disc totals nonlinear — but the board still fills monotonically.
     // Commits are refused on a full board, so no obligation is pending here.
     entry claim_draw() emits none {
+        // A pending win outranks the draw: this door is permissionless, and
+        // on a full board it would otherwise race half the pot away from a
+        // winner whose challenge window is still open.
+        require(pending_win == 0);
         int full = 1;
         for (c, 0, COLS, COLS) {
             if (OpBin2Num(board[c * ROWS + ROWS - 1]) == 0) {
@@ -689,6 +760,7 @@ actor FourkSimul owns SimulMatchState {
     // or no reveals and exactly one commitment. Symmetric silence is
     // nobody's fault — that's split_timeout.
     entry claim_timeout(sig s) emits none {
+        require(pending_win == 0);
         int full = 1;
         for (c, 0, COLS, COLS) {
             if (OpBin2Num(board[c * ROWS + ROWS - 1]) == 0) {
@@ -730,6 +802,10 @@ actor FourkSimul owns SimulMatchState {
     // the other, so the pot splits, permissionless. (A mutual reveal
     // standoff cannot exist: reveals are one-sided by construction.)
     entry split_timeout() emits none {
+        // A pending-win state is slot-empty and symmetric-shaped — without
+        // this gate, the same clock that opens sweep_win would open a
+        // permissionless split of the winner's pot.
+        require(pending_win == 0);
         require(reveal1 == 0 && reveal2 == 0);
         int c1 = 0;
         if (commit1 != zero32()) {
@@ -753,7 +829,9 @@ actor FourkSimul owns SimulMatchState {
 
     // Terminal door 6: identical to classic sudden death — the game
     // outlived its creation-time cap, even split, permissionless, legal in
-    // any live state.
+    // any live state. Deliberately UNGATED on pending_win: the liveness
+    // exit outranks the window (a vanished pending winner must not strand
+    // the pot), and the cap dwarfs any honest sweep delay.
     entry sudden_death() emits none {
         require(deadline > 0);
         require(tx.time >= deadline);
@@ -765,6 +843,21 @@ actor FourkSimul owns SimulMatchState {
         require(tx.outputs[0].value == half);
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
         require(tx.outputs[1].value == half);
+    }
+
+    // Terminal door 7: sweep a pending win whose challenge window has
+    // lapsed unchallenged. Signed by the pot's sole owner, so funds go
+    // wherever they direct. Appended LAST so every earlier door keeps its
+    // selector index.
+    entry sweep_win(sig s) emits none {
+        require(pending_win == 1 || pending_win == 2);
+        require(this.age >= move_timeout);
+
+        pubkey winner_pk = p1;
+        if (pending_win == 2) {
+            winner_pk = p2;
+        }
+        require(checkSig(s, winner_pk));
     }
 }
 

@@ -15,6 +15,8 @@ contract FourkMatch(
     int constant ROWS = 6;
     int constant CELLS = 42;
     int constant MIN_MOVE_TIMEOUT = 600;
+    int constant MAX_MOVE_TIMEOUT = 8640000;
+    int constant DEADLINE_LIMIT = 500000000000;
 
     // :: state layouts
     struct LobbyState {
@@ -39,6 +41,7 @@ contract FourkMatch(
         byte[32] commit2;
         int reveal1;
         int reveal2;
+        int pending_win;
         int move_timeout;
         int deadline;
     }

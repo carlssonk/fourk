@@ -1,10 +1,12 @@
-import { State, newMatch } from "../src/state.js";
+import { MOVE_TIMEOUT_DAA, State, newMatch } from "../src/state.js";
 import { Ctx, join, move } from "../src/rules.js";
 
 export const P1 = "11".repeat(32);
 export const P2 = "22".repeat(32);
 export const STRANGER = "33".repeat(32);
 export const STAKE = 100_000_000n; // 1 KAS
+/** Canonical test deadline — join refuses uncapped genesis states. */
+export const DEADLINE = 5_000_000;
 
 export function ctx(signer: string, utxoAge = 0, txTime = 0): Ctx {
   return { signer, utxoAge, txTime };
@@ -12,7 +14,7 @@ export function ctx(signer: string, utxoAge = 0, txTime = 0): Ctx {
 
 /** A joined match, ready to play. */
 export function game(): State {
-  return join(newMatch(P1, STAKE), ctx(P2));
+  return join(newMatch(P1, STAKE, MOVE_TIMEOUT_DAA, DEADLINE), ctx(P2));
 }
 
 /** Play a sequence of columns with correct alternation. */

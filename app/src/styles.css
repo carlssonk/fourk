@@ -1,17 +1,23 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg: #191512;
-  --color-panel: #221d18;
-  --color-line: #3a332a;
+  /* The page is the darkest plane in the chrome; everything that sits
+   * above it (cards, dialogs, fields, wells) is a step lighter than it. */
+  --color-bg: #1a1613;
+  --color-panel: #282219;
+  --color-line: #453c30;
   --color-ink: #ece4d6;
   --color-dim: #a49882;
   --color-accent: #5aa08c;
   --color-red: #e0523f;
   --color-blue: #5b8de0;
-  --color-frame: #29231c;
-  --color-field: #14110e;
+  --color-frame: #2e2821;
+  --color-field: #181411;
   --color-ok: #6fb35f;
+
+  /* The wordmark's face (self-hosted; external font hosts are CSP-blocked).
+   * Display only — body text stays on the system stack. */
+  --font-display: "Baloo 2 Variable", ui-rounded, system-ui, sans-serif;
 }
 
 @layer base {
@@ -21,6 +27,13 @@
       15px/1.5 ui-rounded,
       system-ui,
       sans-serif;
+  }
+
+  /* Keyboard focus in the app's own colour — the browser's default ring is
+   * a bright blue that belongs to no part of this palette. */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
   }
 }
 
@@ -36,8 +49,9 @@
   }
 }
 
-/* The verdict overlay: the dim fades up, the card pops in with a little
- * overshoot. */
+/* Dialogs arrive fast and get out of the way: a short fade with a few
+ * pixels of rise. No bounce — the motion is there to say "this is new",
+ * not to perform. */
 @keyframes overlay-fade {
   from {
     opacity: 0;
@@ -46,7 +60,38 @@
 @keyframes overlay-pop {
   from {
     opacity: 0;
-    transform: translateY(12px) scale(0.95);
+    transform: translateY(8px) scale(0.985);
+  }
+}
+/* The home glow wanders: a slow, small orbit — far enough to feel alive
+ * over a minute, never enough to be watched. */
+@keyframes glow-drift {
+  0%,
+  100% {
+    transform: translate(0, 0) scale(1);
+  }
+  33% {
+    transform: translate(3%, -2%) scale(1.06);
+  }
+  66% {
+    transform: translate(-2%, 2%) scale(0.97);
+  }
+}
+/* A short shower of coins behind a winning verdict. */
+@keyframes coin-fall {
+  from {
+    transform: translateY(-15vh) rotate(0deg);
+    opacity: 0;
+  }
+  12% {
+    opacity: 1;
+  }
+  85% {
+    opacity: 1;
+  }
+  to {
+    transform: translateY(105vh) rotate(var(--spin));
+    opacity: 0;
   }
 }
 /* The winning four glow in a slow pulse. */
@@ -78,26 +123,97 @@
     @apply rounded-[10px] border border-line bg-panel/50 backdrop-blur-xs;
   }
 
+  /* Every button is a solid, opaque slab — no tinted glass, no coloured
+   * text on a coloured wash, no fading a live control to a ghost of itself.
+   * The four tiers share a shape and differ only in how bright the fill is,
+   * so hierarchy reads at a glance without any of them glowing. Feedback is
+   * a colour step, on a transition short enough to feel like a state rather
+   * than an animation.
+   *
+   * Dark ink on the accent rather than cream: 7:1 against the mid teal
+   * where cream managed 2.6:1. */
   .btn {
-    @apply cursor-pointer rounded-md bg-accent px-3.5 py-[0.45rem] font-semibold whitespace-nowrap text-[#fff8ee] disabled:cursor-default disabled:opacity-45;
+    @apply cursor-pointer rounded-lg px-4 py-2 font-semibold whitespace-nowrap disabled:cursor-default;
+    border: 1px solid transparent;
+    background: var(--color-accent);
+    color: #10201b;
+    transition:
+      background-color 0.12s ease,
+      border-color 0.12s ease,
+      color 0.12s ease;
+  }
+  .btn:enabled:hover {
+    background: color-mix(in srgb, var(--color-accent) 86%, #fff);
+  }
+  .btn:enabled:active {
+    background: color-mix(in srgb, var(--color-accent) 88%, #000);
   }
 
-  .btn-danger {
-    @apply border border-red bg-transparent text-red;
-  }
-
+  /* Secondary: a solid surface one step up from the page, in the app's own
+   * browns — full-strength text, no accent wash. */
   .btn-ghost {
-    @apply border border-accent bg-panel/50 text-ink backdrop-blur-xs enabled:hover:bg-accent/15;
+    border-color: var(--color-line);
+    background: var(--color-frame);
+    color: var(--color-ink);
+  }
+  .btn-ghost:enabled:hover {
+    border-color: color-mix(in srgb, var(--color-line) 70%, #fff);
+    background: color-mix(in srgb, var(--color-frame) 88%, #fff);
+  }
+  .btn-ghost:enabled:active {
+    background: color-mix(in srgb, var(--color-frame) 88%, #000);
   }
 
   /* Quiet exits: actions that just leave the screen and can be re-entered —
-   * no danger, so no red. */
+   * no danger, so no red. The same slab as secondary, a shade closer to the
+   * page it sits on. */
   .btn-muted {
-    @apply border border-line bg-transparent text-dim enabled:hover:bg-white/5 enabled:hover:text-ink;
+    border-color: color-mix(in srgb, var(--color-line) 70%, var(--color-bg));
+    background: color-mix(in srgb, var(--color-frame) 55%, var(--color-bg));
+    color: var(--color-dim);
+  }
+  .btn-muted:enabled:hover {
+    background: var(--color-frame);
+    color: var(--color-ink);
+  }
+  .btn-muted:enabled:active {
+    background: color-mix(in srgb, var(--color-frame) 75%, var(--color-bg));
   }
 
+  /* Destructive: filled outright, deepened from the board's red so white
+   * text clears contrast on it. */
+  .btn-danger {
+    border-color: transparent;
+    background: color-mix(in srgb, var(--color-red) 82%, #000);
+    color: #fff4f1;
+  }
+  .btn-danger:enabled:hover {
+    background: color-mix(in srgb, var(--color-red) 92%, #000);
+  }
+  .btn-danger:enabled:active {
+    background: color-mix(in srgb, var(--color-red) 72%, #000);
+  }
+
+  /* Nothing to press: a solid inactive slab, not a see-through ghost of the
+   * live button. */
+  .btn:disabled {
+    border-color: color-mix(in srgb, var(--color-line) 55%, var(--color-bg));
+    background: color-mix(in srgb, var(--color-frame) 70%, var(--color-bg));
+    color: color-mix(in srgb, var(--color-dim) 60%, var(--color-bg));
+  }
+
+  /* Fields are a flat tint of the surface they sit on, marked out by a
+   * hairline rather than by depth — which also means they read the same on
+   * the home card and on a dialog's darker floor. */
   .input {
-    @apply w-full flex-1 rounded-md border border-line bg-field px-2.5 py-[0.45rem] text-ink;
+    @apply w-full flex-1 rounded-lg px-3 py-2 text-ink;
+    border: 1px solid rgba(255, 255, 255, 0.11);
+    background: rgba(255, 255, 255, 0.04);
+  }
+  /* Focus is the border going accent — no halo around it. */
+  .input:focus {
+    outline: none;
+    border-color: var(--color-accent);
   }
 
   /* The board face: a flat, neutral slab a shade above the panel tone —
@@ -169,19 +285,99 @@
       inset 0 -2px 3px rgba(0, 0, 0, 0.25);
   }
 
-  .overlay-fade {
-    animation: overlay-fade 0.3s ease-out both;
+  /* Fast out of the gate, gentle at rest. */
+  .overlay-pop {
+    animation: overlay-pop 0.18s cubic-bezier(0.16, 1, 0.3, 1) both;
   }
 
-  .overlay-pop {
-    animation: overlay-pop 0.28s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+  /* The <dialog> element itself is only a centring frame in the top layer:
+   * transparent, viewport-sized, with the card as its one child. Clicks
+   * that land on it rather than on the card are the "beside the dialog"
+   * dismissal. */
+  .dlg {
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 1rem;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    overflow: auto;
+    display: grid;
+    place-items: center;
+  }
+  /* `display: grid` above would otherwise show a closed dialog. */
+  .dlg:not([open]) {
+    display: none;
+  }
+
+  /* The dim behind it: one flat wash plus a real blur, so the page reads as
+   * out of focus rather than as merely darker. */
+  .dlg::backdrop {
+    background: rgba(10, 8, 6, 0.4);
+    backdrop-filter: blur(10px) saturate(0.9);
+    animation: overlay-fade 0.18s ease-out both;
+    /* The shroud toggles on an already-open dialog (the account panel
+     * stepping into a phrase screen) — fade the darkness in rather than
+     * snapping it. */
+    transition:
+      background-color 0.3s ease,
+      backdrop-filter 0.3s ease;
+  }
+
+  /* Secrets on screen (a recovery phrase shown or typed): the backdrop
+   * doubles as a privacy screen, so it goes near-opaque — nothing behind
+   * distracts, and nothing on screen but the words that matter. */
+  .dlg-shroud::backdrop {
+    background: rgba(8, 6, 5, 0.8);
+    backdrop-filter: blur(14px) saturate(0.85);
+  }
+
+  /* A dialog is a single flat plane: one fill, one hairline, one soft
+   * shadow to place it above the page. The same opaque panel tone as the
+   * cards — every raised surface is the one material — a step lighter than
+   * the washed-out page behind it. */
+  .dlg-card {
+    position: relative;
+    overflow: clip;
+    border-radius: 16px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--color-panel);
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55);
+  }
+
+  /* The header is separated by a hairline and by space — no band, no fill. */
+  .dlg-head {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  }
+
+  /* Surfaces for what a dialog is showing rather than asking (a balance,
+   * the pot line, a recovery phrase): the same flat tint as a field, so
+   * every inset surface in the app is the one material. */
+  .well {
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    background: rgba(255, 255, 255, 0.04);
+  }
+
+  .coin-fall {
+    animation-name: coin-fall;
+    animation-timing-function: linear;
+    animation-fill-mode: both;
   }
 
   @media (prefers-reduced-motion: reduce) {
     .disc-win,
-    .overlay-fade,
-    .overlay-pop {
-      animation: none;
+    .overlay-pop,
+    .dlg::backdrop,
+    .btn {
+      transition: none;
+    }
+    .coin-fall {
+      display: none;
     }
   }
 }

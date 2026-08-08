@@ -397,6 +397,50 @@ function fullP2pkSigScript(sig: Uint8Array): string {
   return "41" + toHex(sig);
 }
 
+/**
+ * Plain wallet send — cash-outs and retired-key sweeps. A fixed `amount`
+ * arrives exactly, fee paid from change; `"all"` sweeps every UTXO into one
+ * output with the fee taken out of it, leaving the wallet empty.
+ */
+export async function sendTo(
+  rpc: Rpc,
+  key: PrivateKey,
+  dest: string,
+  amount: bigint | "all",
+): Promise<{ txid: string; amount: bigint }> {
+  const myPrefix = walletAddress(key).split(":")[0]!;
+  if (!kaspa.Address.validate(dest) || new kaspa.Address(dest).prefix !== myPrefix)
+    throw new Error("BAD_ADDRESS");
+  const destSpk = kaspa.payToAddressScript(new kaspa.Address(dest));
+
+  const sweep = amount === "all";
+  if (!sweep && amount < DUST) throw new Error("LOW_BALANCE");
+  const funding = sweep
+    ? await utxosAt(rpc, walletAddress(key))
+    : await pickFunding(rpc, key, amount + FEE_HEADROOM);
+  const total = fundingTotal(funding);
+  if (sweep && total < DUST) throw new Error("LOW_BALANCE");
+  const changeSpk = kaspa.payToAddressScript(new kaspa.Address(walletAddress(key)));
+
+  let sent = 0n;
+  const build: Build = (fee, sigs) => {
+    sent = sweep ? total - fee : (amount as bigint);
+    if (sent < DUST) throw new Error("LOW_BALANCE"); // fee ate the sweep
+    const inputs = funding.map((f, i) => fundingInput(f, fullP2pkSigScript(sigs.get(i)!)));
+    const outputs = sweep
+      ? [new kaspa.TransactionOutput(sent, destSpk)]
+      : withChange([new kaspa.TransactionOutput(sent, destSpk)], changeSpk, total - sent - fee);
+    return makeTx(inputs, outputs);
+  };
+
+  const txid = await send(
+    rpc,
+    build,
+    funding.map((_, i): [number, PrivateKey] => [i, key]),
+  );
+  return { txid, amount: sent };
+}
+
 // --- The four door shapes -----------------------------------------------------
 
 export interface MatchTiming {
@@ -710,7 +754,11 @@ function tokenToSmallInt(t: ScriptToken): number | null {
 }
 
 /** DAA-block age of the current game UTXO, for the forfeit countdown. */
-export async function gameUtxoAge(rpc: Rpc, mode: ModeEngine, match: Match): Promise<number | null> {
+export async function gameUtxoAge(
+  rpc: Rpc,
+  mode: ModeEngine,
+  match: Match,
+): Promise<number | null> {
   const entry = await fetchGameUtxo(rpc, mode, match);
   if (!entry) return null;
   const daaScore = BigInt(entry.blockDaaScore ?? entry.utxoEntry?.blockDaaScore ?? 0n);

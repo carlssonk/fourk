@@ -1,4 +1,5 @@
 export {
+  FEE_MARGIN,
   advanceConnecting,
   busyAtom,
   clearError,
@@ -9,6 +10,7 @@ export {
   reportError,
   runAction,
   startConnecting,
+  switchAccount,
   takeSeat,
   type Connecting,
 } from "./actions";
@@ -20,26 +22,39 @@ export {
   openMatch,
   pendingInviteAtom,
   removeMatch,
+  unfinishedGamesOn,
   showMatch,
   updateMatch,
 } from "./matches";
 export {
-  gameCapAtom,
+  discColorAtom,
   gameModeAtom,
+  getDiscColor,
   getGameMode,
-  getHostColor,
   getMatchTiming,
   getProfile,
-  hostColorAtom,
+  getStake,
   moveTimeoutAtom,
   profileAtom,
-  saveGameCap,
+  saveDiscColor,
   saveGameMode,
-  saveHostColor,
   saveMoveTimeout,
   saveProfile,
+  saveStake,
+  stakeAtom,
   type GameMode,
 } from "./profile";
+export { balanceAtom, getBalance, refreshBalance } from "./balance";
+export { accountPanelAtom, type AccountView } from "./account";
+export { askConfirm, confirmAtom } from "./confirm";
 export { RESET_RESULT, clearNetworkReset, networkResetAtom } from "./network";
-export { getRpc, reconnectingAtom, rpcClientAtom } from "./rpc";
-export { getWallet } from "./wallet";
+export { getRpc, initRpc, reconnectingAtom, rpcClientAtom, rpcFailuresAtom } from "./rpc";
+export {
+  activeAccount,
+  freeWallet,
+  hasOwnedAccount,
+  matchWallet,
+  ownedWallet,
+  phraseWallet,
+  signingWallet,
+} from "./wallet";

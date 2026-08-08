@@ -183,3 +183,20 @@ export interface GameMode extends ModeEngine {
    * covenant ids — a mode GCs any local per-match secrets. */
   onMatchesPruned?(keptCovenantIds: string[]): void;
 }
+
+// A GameMode is assembled from three files (see modes/<mode>/index.ts):
+// engine.ts + view.ts + actions.ts. These name each half so the parts can
+// be checked where they're written, instead of only at the join.
+
+/** What a mode's view.ts supplies: everything the UI reads. */
+export type ModeViewSurface = Pick<
+  GameMode,
+  "roundStarted" | "inLobby" | "view" | "describeEnd" | "finalSnapshot"
+>;
+
+/** What a mode's engine.ts supplies: script derivation, successor
+ * enumeration, spend classification — the chain-facing half. */
+export type ModeChainSurface = Omit<
+  GameMode,
+  "meta" | "actions" | "autoActions" | keyof ModeViewSurface
+>;

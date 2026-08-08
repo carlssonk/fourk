@@ -40,13 +40,20 @@ async function as2<T>(fn: () => Promise<T>): Promise<T> {
 import kaspaInit, * as kaspa from "kaspa-wasm";
 import fourkInit from "fourk-wasm";
 import * as cov from "../src/shared/lib/covenant";
-import { claimTimeoutMatch, claimWinMatch, commitMatch, revealMatch } from "../src/shared/modes/fourk/actions";
+import {
+  claimSplitMatch,
+  claimTimeoutMatch,
+  claimWinMatch,
+  commitMatch,
+  revealMatch,
+  sweepWinMatch,
+} from "../src/shared/modes/fourk/actions";
 import { moveMatch, winMatch } from "../src/shared/modes/classic/actions";
 import type { Match } from "../src/shared/lib/match";
 import { loadSalt } from "../src/shared/modes/fourk/saltStore";
 import { ZERO_CORE, ZERO_HASH, roundPhase, toSimulState } from "../src/shared/modes/fourk/core";
 import { cellIndex } from "../src/shared/lib/game";
-import { decodeShareCode, encodeShareCode } from "../src/shared/lib/match";
+import { decodeShareCode, encodeShareCode, isStaked } from "../src/shared/lib/match";
 
 const NODE_URL = "ws://127.0.0.1:17510";
 const NETWORK_TYPE = "simnet";
@@ -120,7 +127,13 @@ async function waitGone(rpc: cov.Rpc, m: Match) {
     const { rpc, p1, p2 } = await setup();
 
     // Open (fourk mode) and join.
-    let m = await cov.openMatch(rpc, p1, 1n * KAS, { moveTimeout: 600, totalCap: 0 }, "fourk");
+    let m = await cov.openMatch(
+      rpc,
+      p1,
+      1n * KAS,
+      { moveTimeout: 600, totalCap: 864_000 },
+      "fourk",
+    );
     expect(m.mode).toBe("fourk");
     expect(m.state.p2).toBe("00".repeat(32));
     m = await cov.joinMatch(rpc, p2, m);
@@ -171,9 +184,26 @@ async function waitGone(rpc: cov.Rpc, m: Match) {
     for (const c of [3, 4, 5, 6]) expect(m.state.board[cellIndex(c, 0)]).toBe(1);
 
     // The winner's line is claimed on the CURRENT board — even though p2
-    // resolved the final round. Pot goes to p1.
+    // resolved the final round. The claim opens the CHALLENGE WINDOW: a
+    // pending-win continuation, not a payout.
     const before = await cov.walletBalance(rpc, cov.walletAddress(p1));
-    await claimWinMatch(rpc, p1, m, { col: 3, row: 0, dir: 0 });
+    m = await as1(() => claimWinMatch(rpc, p1, m, { col: 3, row: 0, dir: 0 }));
+    expect(core(m).pendingWin).toBe(1);
+    expect(core(m).commit1).toBe(ZERO_HASH);
+    expect(cov.isActionable(m, cov.walletPubkey(p2))).toBe(false);
+
+    // The sweep is sequence-locked for one move clock: an early attempt is
+    // rejected by CONSENSUS, not just policy.
+    await expect(sweepWinMatch(rpc, p1, m)).rejects.toThrow();
+
+    // Wait out the window (~600 DAA ≈ one minute of simnet mining), then
+    // the winner sweeps the pot.
+    for (let i = 0; i < 240; i++) {
+      const age = await cov.gameUtxoAge(rpc, m);
+      if (age !== null && age >= 600) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    await sweepWinMatch(rpc, p1, m);
     await waitGone(rpc, m);
     for (let i = 0; i < 40; i++) {
       const after = await cov.walletBalance(rpc, cov.walletAddress(p1));
@@ -184,9 +214,73 @@ async function waitGone(rpc: cov.Rpc, m: Match) {
     expect(after).toBeGreaterThan(before + 2n * KAS - KAS / 10n); // pot minus fee
   }, 600_000);
 
+  test("challenge window: a greedy double-win claim is contested into the fair split", async () => {
+    const { rpc, p1, p2 } = await setup();
+    let m = await cov.openMatch(
+      rpc,
+      p1,
+      1n * KAS,
+      { moveTimeout: 600, totalCap: 864_000 },
+      "fourk",
+    );
+    m = await cov.joinMatch(rpc, p2, m);
+
+    // Build a genuine on-chain double win: collisions stack p1-under-p2 on
+    // even (p1-priority) rounds, so cols 3..6 fill row 0 with p1 and row 1
+    // with p2 — the LAST collision (col 6, round 6) completes both lines in
+    // one resolve. Odd rounds burn on col 0/1 fillers (p2 low — harmless).
+    const rounds: Array<[number, number]> = [
+      [3, 3],
+      [0, 0],
+      [4, 4],
+      [1, 1],
+      [5, 5],
+      [0, 0],
+      [6, 6],
+    ];
+    for (const [colP1, colP2] of rounds) {
+      m = await as1(() => commitMatch(rpc, p1, m, colP1));
+      m = await as2(() => commitMatch(rpc, p2, m, colP2));
+      m = await as1(() => revealMatch(rpc, p1, m));
+      m = await as2(() => revealMatch(rpc, p2, m));
+    }
+    for (const c of [3, 4, 5, 6]) {
+      expect(m.state.board[cellIndex(c, 0)]).toBe(1);
+      expect(m.state.board[cellIndex(c, 1)]).toBe(2);
+    }
+
+    // P1 greedily claims with only their own line — the old mempool-race
+    // theft. Now it just opens the window...
+    m = await as1(() => claimWinMatch(rpc, p1, m, { col: 3, row: 0, dir: 0 }));
+    expect(core(m).pendingWin).toBe(1);
+
+    // ...and P2 contests at leisure with both witnesses. Pinned payouts:
+    // each player gets exactly their stake back.
+    const p1Before = await cov.walletBalance(rpc, cov.walletAddress(p1));
+    const p2Before = await cov.walletBalance(rpc, cov.walletAddress(p2));
+    await as2(() =>
+      claimSplitMatch(rpc, p2, m, { col: 3, row: 0, dir: 0 }, { col: 3, row: 1, dir: 0 }),
+    );
+    await waitGone(rpc, m);
+    for (let i = 0; i < 40; i++) {
+      if ((await cov.walletBalance(rpc, cov.walletAddress(p1))) > p1Before) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    expect(await cov.walletBalance(rpc, cov.walletAddress(p1))).toBe(p1Before + 1n * KAS);
+    expect(await cov.walletBalance(rpc, cov.walletAddress(p2))).toBeGreaterThan(
+      p2Before + 1n * KAS - KAS / 10n, // their stake back, minus the contest fee
+    );
+  }, 600_000);
+
   test("claim_timeout: the lone committer collects after the round clock", async () => {
     const { rpc, p1, p2 } = await setup();
-    let m = await cov.openMatch(rpc, p1, 1n * KAS, { moveTimeout: 600, totalCap: 0 }, "fourk");
+    let m = await cov.openMatch(
+      rpc,
+      p1,
+      1n * KAS,
+      { moveTimeout: 600, totalCap: 864_000 },
+      "fourk",
+    );
     m = await cov.joinMatch(rpc, p2, m);
     m = await as1(() => commitMatch(rpc, p1, m, 0));
     // The salt store holds the round's pick (survives-a-refresh equivalent).
@@ -210,7 +304,9 @@ async function waitGone(rpc: cov.Rpc, m: Match) {
 
     // Host opens; the pre-open checkpoint is what the app saves at creation.
     const cp0 = await cov.chainCheckpoint(rpc);
-    let A = await as1(() => cov.openMatch(rpc, p1, 1n * KAS, { moveTimeout: 600, totalCap: 0 }, "fourk"));
+    let A = await as1(() =>
+      cov.openMatch(rpc, p1, 1n * KAS, { moveTimeout: 600, totalCap: 864_000 }, "fourk"),
+    );
 
     // Joiner takes the seat from the share code (the invite-link path).
     let B = decodeShareCode(encodeShareCode(A));
@@ -266,7 +362,7 @@ async function waitGone(rpc: cov.Rpc, m: Match) {
 
   test("claim_draw: a full classic board splits the pot", async () => {
     const { rpc, p1, p2 } = await setup();
-    let m = await cov.openMatch(rpc, p1, 1n * KAS, { moveTimeout: 600, totalCap: 0 });
+    let m = await cov.openMatch(rpc, p1, 1n * KAS, { moveTimeout: 600, totalCap: 864_000 });
     m = await cov.joinMatch(rpc, p2, m);
     // Fill all 42 cells column by column. Plain moves never check wins —
     // unclaimed lines just sit there, and the covenant's documented edge is
@@ -312,7 +408,7 @@ async function waitGone(rpc: cov.Rpc, m: Match) {
 
   test("classic mode still works end to end (regression)", async () => {
     const { rpc, p1, p2 } = await setup();
-    let m = await cov.openMatch(rpc, p1, 1n * KAS, { moveTimeout: 600, totalCap: 0 });
+    let m = await cov.openMatch(rpc, p1, 1n * KAS, { moveTimeout: 600, totalCap: 864_000 });
     expect(m.mode).toBeUndefined();
     m = await cov.joinMatch(rpc, p2, m);
     // p1 stacks column 0, p2 column 1; p1's fourth disc is a winning_move.
@@ -328,5 +424,71 @@ async function waitGone(rpc: cov.Rpc, m: Match) {
     }
     await winMatch(rpc, p1, m, 0, { col: 0, row: 0, dir: 1 });
     await waitGone(rpc, m);
+  }, 600_000);
+
+  test("staked game: the stake says so on-chain, the pot pays the winner, cash-out sweeps", async () => {
+    const { rpc, p1, p2 } = await setup();
+    const stake = 5n * KAS;
+
+    let m = await cov.openMatch(rpc, p1, stake, { moveTimeout: 600, totalCap: 864_000 }, "classic");
+    expect(isStaked(m)).toBe(true);
+
+    // Nothing marks the game staked: the stake itself does, and it is the
+    // covenant's own, so an invite cannot claim otherwise.
+    const invite = decodeShareCode(encodeShareCode(m));
+    expect(invite.state.stake).toBe(stake);
+    expect(isStaked(invite)).toBe(true);
+
+    // The join doubles the pot; the stake per seat is unchanged.
+    m = await cov.joinMatch(rpc, p2, invite);
+    expect(m.value).toBe(2n * stake);
+    expect(isStaked(m)).toBe(true);
+
+    // p1 stacks column 0 to a winning_move; the pot lands in p1's balance.
+    for (const [key, col] of [
+      [p1, 0],
+      [p2, 1],
+      [p1, 0],
+      [p2, 1],
+      [p1, 0],
+      [p2, 1],
+    ] as const) {
+      m = await moveMatch(rpc, key, m, col);
+      expect(isStaked(m)).toBe(true);
+    }
+    const before = await cov.walletBalance(rpc, cov.walletAddress(p1));
+    await winMatch(rpc, p1, m, 0, { col: 0, row: 0, dir: 1 });
+    await waitGone(rpc, m);
+    let after = before;
+    for (let i = 0; i < 40 && after <= before; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      after = await cov.walletBalance(rpc, cov.walletAddress(p1));
+    }
+    expect(after).toBeGreaterThan(before + 2n * stake - KAS / 10n); // pot minus fees
+
+    // Cash out: sweep the whole balance to a fresh address; the wallet ends
+    // empty and the destination holds exactly what sendTo reported.
+    const dest = new kaspa.PrivateKey(kaspa.Keypair.random().privateKey)
+      .toAddress(NETWORK_TYPE)
+      .toString();
+    const res = await cov.sendTo(rpc, p1, dest, "all");
+    expect(res.amount).toBeGreaterThan(0n);
+    let landed = 0n;
+    for (let i = 0; i < 40 && landed === 0n; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      landed = await cov.walletBalance(rpc, dest);
+    }
+    expect(landed).toBe(res.amount);
+    expect(await cov.walletBalance(rpc, cov.walletAddress(p1))).toBe(0n);
+
+    // A wrong-network destination is refused before anything is spent.
+    await expect(
+      cov.sendTo(
+        rpc,
+        p2,
+        "kaspa:qqd6e65yefepe9wk0m9vuxdufxd80sphy67gwwd0vdaumzdt4tc9s3qt0lqeh",
+        KAS,
+      ),
+    ).rejects.toThrow("BAD_ADDRESS");
   }, 600_000);
 });

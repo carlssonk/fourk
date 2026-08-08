@@ -37,8 +37,10 @@ const MOVE_TIMEOUT: u64 = 36_000;
 
 const OPEN: i64 = 0;
 const LIVE: i64 = 1;
-// Must match MIN_MOVE_TIMEOUT in fourk.sil.
+// Must match MIN_MOVE_TIMEOUT / MAX_MOVE_TIMEOUT / DEADLINE_LIMIT in fourk.sil.
 const MIN_MOVE_TIMEOUT: i64 = 600;
+const MAX_MOVE_TIMEOUT: i64 = 8_640_000;
+const DEADLINE_LIMIT: i64 = 500_000_000_000;
 
 // Witness directions, matching the contract: 0 = E, 1 = N, 2 = NE, 3 = SE.
 const E: i64 = 0;
@@ -85,6 +87,11 @@ fn stranger() -> &'static Player {
     P.get_or_init(|| player_from_seed(3))
 }
 
+fn funder() -> &'static Player {
+    static P: OnceLock<Player> = OnceLock::new();
+    P.get_or_init(|| player_from_seed(4))
+}
+
 fn covenant_id() -> Hash {
     Hash::from_bytes([0xab; 32])
 }
@@ -99,7 +106,9 @@ fn open_start() -> GameState {
         move_count: 0,
         phase: OPEN,
         move_timeout: MOVE_TIMEOUT as i64,
-        deadline: 0,
+        // Join refuses an uncapped genesis, so the canonical test state
+        // carries a real deadline like every joinable match.
+        deadline: DEADLINE as i64,
     }
 }
 
@@ -202,22 +211,33 @@ fn game_utxo(compiled: &CompiledContract<'_>, value: u64) -> UtxoEntry {
     UtxoEntry::new(value, pay_to_script_hash_script(&compiled.script), 0, false, Some(covenant_id()))
 }
 
-fn successor_output(compiled: &CompiledContract<'_>, value: u64) -> TransactionOutput {
+/// A covenant successor output authorized by the input at `authorizing_input`
+/// — 0 for the single-input shape, 1 when a funding input precedes the
+/// covenant (see run_entry_funded_at).
+fn successor_output_for(compiled: &CompiledContract<'_>, value: u64, authorizing_input: u16) -> TransactionOutput {
     TransactionOutput {
         value,
         script_public_key: pay_to_script_hash_script(&compiled.script),
-        covenant: Some(CovenantBinding { authorizing_input: 0, covenant_id: covenant_id() }),
+        covenant: Some(CovenantBinding { authorizing_input, covenant_id: covenant_id() }),
     }
+}
+
+fn successor_output(compiled: &CompiledContract<'_>, value: u64) -> TransactionOutput {
+    successor_output_for(compiled, value, 0)
 }
 
 /// 34-byte P2PK lock: OP_DATA_32 <x-only pubkey> OP_CHECKSIG — the shape the
 /// contract's `new ScriptPubKeyP2PK(...)` builds.
-fn p2pk_output(pk: &[u8; 32], value: u64) -> TransactionOutput {
+fn p2pk_script(pk: &[u8; 32]) -> ScriptPublicKey {
     let mut script = Vec::with_capacity(34);
     script.push(0x20);
     script.extend_from_slice(pk);
     script.push(0xac);
-    TransactionOutput { value, script_public_key: ScriptPublicKey::from_vec(0, script), covenant: None }
+    ScriptPublicKey::from_vec(0, script)
+}
+
+fn p2pk_output(pk: &[u8; 32], value: u64) -> TransactionOutput {
+    TransactionOutput { value, script_public_key: p2pk_script(pk), covenant: None }
 }
 
 fn sign_input(tx: &Transaction, entries: &[UtxoEntry], input_idx: usize, signer: &Keypair) -> Vec<u8> {
@@ -287,6 +307,91 @@ fn run_entry(
     sequence: u64,
 ) -> Result<(), TxScriptError> {
     run_entry_at(active_state, function, args, signer, in_value, outputs, sequence, 0)
+}
+
+// --- Multi-input plumbing ----------------------------------------------------
+//
+// Real transactions are never single-input: continuations preserve the pot, so
+// fees ride on a plain P2PK wallet input, and terminal spends carry wallet
+// change. The funded runners below put that funding input BEFORE the covenant,
+// pushing the covenant to input index 1 — which exercises every
+// `this.activeInputIndex` path (OpAuthOutputCount / OpAuthOutputIdx /
+// tx.inputs[...].value) off the index-0 fast case the single-input tests use.
+
+/// Fee money on the funding input. No engine rule inspects fees; the value
+/// only has to exist so the wallet spend verifies.
+const FEE_FUND: u64 = 5_000_000;
+
+fn funding_utxo() -> UtxoEntry {
+    UtxoEntry::new(FEE_FUND, p2pk_script(&funder().pk), 0, false, None)
+}
+
+fn funding_input() -> TransactionInput {
+    TransactionInput {
+        previous_outpoint: TransactionOutpoint { transaction_id: TransactionId::from_bytes([0x02; 32]), index: 0 },
+        signature_script: Vec::new(),
+        sequence: 0,
+        compute_commit: SigopCount(1).into(),
+    }
+}
+
+/// Plain P2PK signature script: a single push of the 65-byte signature.
+fn p2pk_sigscript(sig: Vec<u8>) -> Vec<u8> {
+    let mut script = Vec::with_capacity(66);
+    script.push(sig.len() as u8);
+    script.extend_from_slice(&sig);
+    script
+}
+
+/// run_entry_at in the real wallet shape: P2PK funding input at index 0,
+/// covenant input at index 1. Successor outputs must authorize input 1 (see
+/// successor_output_for). Signatures are produced only after the full
+/// transaction shape is fixed — the sighash commits to every input's outpoint
+/// and every output, so adding the funding input changes both sighashes —
+/// and BOTH inputs execute: the wallet spend with its real Schnorr signature,
+/// then the covenant door.
+fn run_entry_funded_at(
+    active_state: &GameState,
+    function: &str,
+    args: &dyn Fn(Vec<u8>) -> Vec<Expr<'static>>,
+    signer: Option<&Keypair>,
+    in_value: u64,
+    outputs: Vec<TransactionOutput>,
+    sequence: u64,
+    lock_time: u64,
+) -> Result<(), TxScriptError> {
+    let active = compile_state(active_state);
+    let entries = vec![funding_utxo(), game_utxo(&active, in_value)];
+    let sig_ops = if signer.is_some() { 1 } else { 0 };
+    let placeholder = entry_sigscript(&active, function, args(vec![0u8; 65]));
+    let mut tx = Transaction::new(
+        1,
+        vec![funding_input(), game_input(placeholder, sequence, sig_ops)],
+        outputs,
+        lock_time,
+        Default::default(),
+        0,
+        vec![],
+    );
+    tx.inputs[0].signature_script = p2pk_sigscript(sign_input(&tx, &entries, 0, &funder().keypair));
+    if let Some(keypair) = signer {
+        let sig = sign_input(&tx, &entries, 1, keypair);
+        tx.inputs[1].signature_script = entry_sigscript(&active, function, args(sig));
+    }
+    execute(tx.clone(), entries.clone(), 0)?;
+    execute(tx, entries, 1)
+}
+
+fn run_entry_funded(
+    active_state: &GameState,
+    function: &str,
+    args: &dyn Fn(Vec<u8>) -> Vec<Expr<'static>>,
+    signer: Option<&Keypair>,
+    in_value: u64,
+    outputs: Vec<TransactionOutput>,
+    sequence: u64,
+) -> Result<(), TxScriptError> {
+    run_entry_funded_at(active_state, function, args, signer, in_value, outputs, sequence, 0)
 }
 
 fn run_move(state: &GameState, col: i64, signer: &Player, next: &GameState, out_value: u64) -> Result<(), TxScriptError> {
@@ -402,6 +507,46 @@ fn join_rejects_trap_timeout() {
 }
 
 #[test]
+fn join_rejects_hostage_timeout() {
+    let mut hostage = open_start();
+    hostage.move_timeout = MAX_MOVE_TIMEOUT + 1;
+    let mut next = live_start();
+    next.move_timeout = MAX_MOVE_TIMEOUT + 1;
+    assert_fail(run_join(&hostage, p2(), &next, STAKE, POT), "join into an above-ceiling move clock");
+
+    let mut ceiling = open_start();
+    ceiling.move_timeout = MAX_MOVE_TIMEOUT;
+    let mut ceiling_next = live_start();
+    ceiling_next.move_timeout = MAX_MOVE_TIMEOUT;
+    assert_pass(run_join(&ceiling, p2(), &ceiling_next, STAKE, POT), "join at the timeout ceiling");
+}
+
+#[test]
+fn join_rejects_uncapped_or_clock_flipping_deadline() {
+    // No deadline at all: the pot could be stranded forever by two vanished
+    // players — unjoinable.
+    let mut uncapped = open_start();
+    uncapped.deadline = 0;
+    let mut uncapped_next = live_start();
+    uncapped_next.deadline = 0;
+    assert_fail(run_join(&uncapped, p2(), &uncapped_next, STAKE, POT), "join into an uncapped game");
+
+    // At/past the consensus lock-time threshold a "DAA score" is read as a
+    // unix-ms timestamp — unjoinable.
+    let mut flipped = open_start();
+    flipped.deadline = DEADLINE_LIMIT;
+    let mut flipped_next = live_start();
+    flipped_next.deadline = DEADLINE_LIMIT;
+    assert_fail(run_join(&flipped, p2(), &flipped_next, STAKE, POT), "join into a timestamp-flavored deadline");
+
+    let mut edge = open_start();
+    edge.deadline = DEADLINE_LIMIT - 1;
+    let mut edge_next = live_start();
+    edge_next.deadline = DEADLINE_LIMIT - 1;
+    assert_pass(run_join(&edge, p2(), &edge_next, STAKE, POT), "join just under the deadline limit");
+}
+
+#[test]
 fn join_preserves_timing_fields() {
     let mut capped = open_start();
     capped.move_timeout = 3000;
@@ -489,6 +634,15 @@ fn cancel_rejects_live_match() {
         0,
     );
     assert_fail(result, "cancel on a live match");
+}
+
+#[test]
+fn cancel_must_end_the_lineage() {
+    // `emits none` compiles to OpAuthOutputCount == 0: a cancel that smuggles
+    // out a covenant successor would resurrect the match with p1's refund gone.
+    let outputs = vec![p2pk_output(&p1().pk, STAKE), successor_output(&compile_state(&open_start()), 1_000)];
+    let result = run_entry(&open_start(), "cancel", &|sig| vec![Expr::bytes(sig)], Some(&p1().keypair), STAKE, outputs, 0);
+    assert_fail(result, "cancel smuggling a covenant successor");
 }
 
 // --- Dissolve ----------------------------------------------------------------
@@ -770,6 +924,14 @@ fn claim_draw_rejects_bad_payouts() {
     );
 }
 
+#[test]
+fn claim_draw_must_end_the_lineage() {
+    let state = full_board();
+    let mut outputs = vec![p2pk_output(&p1().pk, STAKE), p2pk_output(&p2().pk, STAKE)];
+    outputs.push(successor_output(&compile_state(&state), 1_000));
+    assert_fail(run_draw(&state, outputs), "draw smuggling a covenant successor");
+}
+
 // --- Forfeit -----------------------------------------------------------------
 
 #[test]
@@ -816,6 +978,15 @@ fn forfeit_uses_the_match_clock() {
     assert_fail(run_forfeit(&state, p1(), MIN_MOVE_TIMEOUT as u64 - 1), "blitz forfeit one block early");
 }
 
+#[test]
+fn claim_forfeit_must_end_the_lineage() {
+    let state = play(&live_start(), &[0]);
+    let outputs = vec![p2pk_output(&p1().pk, POT), successor_output(&compile_state(&state), 1_000)];
+    let result =
+        run_entry(&state, "claim_forfeit", &|sig| vec![Expr::bytes(sig)], Some(&p1().keypair), POT, outputs, MOVE_TIMEOUT);
+    assert_fail(result, "forfeit smuggling a covenant successor");
+}
+
 // --- Sudden death ------------------------------------------------------------
 
 const DEADLINE: u64 = 5_000_000;
@@ -840,7 +1011,11 @@ fn sudden_death_splits_past_the_deadline() {
 #[test]
 fn sudden_death_rejects_early_uncapped_or_open() {
     assert_fail(run_sudden_death(&capped_live(), refund_outputs(), DEADLINE - 1), "split before the deadline");
-    assert_fail(run_sudden_death(&live_start(), refund_outputs(), 400_000_000_000), "uncapped game sudden-deathed");
+    // A deadline-0 match is unreachable via join now, but the door must
+    // still refuse one (a directly-created covenant UTXO could carry it).
+    let mut uncapped = live_start();
+    uncapped.deadline = 0;
+    assert_fail(run_sudden_death(&uncapped, refund_outputs(), 400_000_000_000), "uncapped game sudden-deathed");
     let mut open = open_start();
     open.deadline = DEADLINE as i64;
     assert_fail(run_sudden_death(&open, vec![p2pk_output(&p1().pk, STAKE)], DEADLINE), "sudden death on an open match");
@@ -854,7 +1029,176 @@ fn sudden_death_rejects_bad_payouts() {
         run_sudden_death(&state, vec![p2pk_output(&p2().pk, STAKE), p2pk_output(&p1().pk, STAKE)], DEADLINE),
         "split swapped",
     );
+}
+
+#[test]
+fn sudden_death_must_end_the_lineage() {
+    let state = capped_live();
     let mut smuggle = refund_outputs();
     smuggle.push(successor_output(&compile_state(&state), 1_000));
-    assert_fail(run_sudden_death(&state, smuggle, DEADLINE), "sudden death smuggling a successor");
+    assert_fail(run_sudden_death(&state, smuggle, DEADLINE), "sudden death smuggling a covenant successor");
+}
+
+// --- Multi-input transaction shapes ------------------------------------------
+//
+// Funded variants of every classic door (run_entry_funded_at): a P2PK wallet
+// input at index 0 pays fees, the covenant sits at input index 1, and the
+// pinned-payout doors carry a trailing wallet change output. Same pass/fail
+// outcomes as the single-input tests above.
+
+fn run_join_funded(state: &GameState, joiner: &Player, next: &GameState, in_value: u64, out_value: u64) -> Result<(), TxScriptError> {
+    let joiner_pk = joiner.pk.to_vec();
+    run_entry_funded(
+        state,
+        "join",
+        &move |sig| vec![Expr::bytes(sig), Expr::bytes(joiner_pk.clone())],
+        Some(&joiner.keypair),
+        in_value,
+        vec![successor_output_for(&compile_state(next), out_value, 1)],
+        0,
+    )
+}
+
+fn run_move_funded(state: &GameState, col: i64, signer: &Player, next: &GameState, out_value: u64) -> Result<(), TxScriptError> {
+    run_entry_funded(
+        state,
+        "move",
+        &move |sig| vec![Expr::bytes(sig), Expr::int(col)],
+        Some(&signer.keypair),
+        POT,
+        vec![successor_output_for(&compile_state(next), out_value, 1)],
+        0,
+    )
+}
+
+/// The wallet's change, appended AFTER whatever outputs the door pins.
+fn change_output() -> TransactionOutput {
+    p2pk_output(&funder().pk, FEE_FUND - 1_000)
+}
+
+#[test]
+fn funded_join_succeeds_and_doubles_pot() {
+    assert_pass(run_join_funded(&open_start(), p2(), &live_start(), STAKE, POT), "funded join");
+    assert_fail(run_join_funded(&open_start(), p2(), &live_start(), STAKE, POT - 1), "funded join one sompi short");
+}
+
+#[test]
+fn funded_move_advances_the_game() {
+    let state = live_start();
+    let next = apply_move(&state, 3);
+    assert_pass(run_move_funded(&state, 3, p1(), &next, POT), "funded move");
+    assert_fail(run_move_funded(&state, 3, p1(), &next, POT - 1), "funded move skimming the pot");
+    assert_fail(run_move_funded(&state, 3, p2(), &next, POT), "funded move out of turn");
+}
+
+#[test]
+fn funded_winning_move_pays_the_winner() {
+    let state = play(&live_start(), &[0, 1, 0, 1, 0, 1]);
+    let win = vec![p2pk_output(&p1().pk, POT), change_output()];
+    let result = run_entry_funded(
+        &state,
+        "winning_move",
+        &|sig| vec![Expr::bytes(sig), Expr::int(0), Expr::int(0), Expr::int(0), Expr::int(N)],
+        Some(&p1().keypair),
+        POT,
+        win,
+        0,
+    );
+    assert_pass(result, "funded vertical win");
+
+    // The smuggled successor authorizes input 1, where the covenant actually
+    // sits — OpAuthOutputCount(this.activeInputIndex) must still see it.
+    let mut smuggle = vec![p2pk_output(&p1().pk, POT)];
+    smuggle.push(successor_output_for(&compile_state(&state), 1_000, 1));
+    let result = run_entry_funded(
+        &state,
+        "winning_move",
+        &|sig| vec![Expr::bytes(sig), Expr::int(0), Expr::int(0), Expr::int(0), Expr::int(N)],
+        Some(&p1().keypair),
+        POT,
+        smuggle,
+        0,
+    );
+    assert_fail(result, "funded terminal claim smuggling a covenant successor");
+}
+
+#[test]
+fn funded_forfeit_honors_the_clock() {
+    let state = play(&live_start(), &[0]);
+    let outputs = || vec![p2pk_output(&p1().pk, POT), change_output()];
+    let run = |sequence| {
+        run_entry_funded(&state, "claim_forfeit", &|sig| vec![Expr::bytes(sig)], Some(&p1().keypair), POT, outputs(), sequence)
+    };
+    assert_pass(run(MOVE_TIMEOUT), "funded forfeit at the deadline");
+    assert_fail(run(MOVE_TIMEOUT - 1), "funded forfeit one block early");
+}
+
+// The pinned-payout doors check tx.outputs[0]/[1] by absolute index and demand
+// zero AUTHORIZED covenant outputs — neither bounds the total output count, so
+// a plain wallet change output AFTER the pinned payouts is accepted. That is
+// the intended behavior (fees ride on a funding input, which implies change),
+// pinned here so a covenant change can't silently alter it; change ahead of
+// the pinned payouts shifts them and must still fail.
+
+fn run_dissolve_funded(state: &GameState, signer: &Player, outputs: Vec<TransactionOutput>, sequence: u64) -> Result<(), TxScriptError> {
+    let signer_pk = signer.pk.to_vec();
+    run_entry_funded(
+        state,
+        "dissolve",
+        &move |sig| vec![Expr::bytes(sig), Expr::bytes(signer_pk.clone())],
+        Some(&signer.keypair),
+        POT,
+        outputs,
+        sequence,
+    )
+}
+
+#[test]
+fn funded_dissolve_allows_trailing_change_only() {
+    let mut with_change = refund_outputs();
+    with_change.push(change_output());
+    assert_pass(run_dissolve_funded(&live_start(), p1(), with_change, 0), "funded dissolve with trailing change");
+
+    let mut swapped = vec![p2pk_output(&p2().pk, STAKE), p2pk_output(&p1().pk, STAKE)];
+    swapped.push(change_output());
+    assert_fail(run_dissolve_funded(&live_start(), p1(), swapped, 0), "funded dissolve with swapped refunds");
+
+    let mut change_first = vec![change_output()];
+    change_first.extend(refund_outputs());
+    assert_fail(run_dissolve_funded(&live_start(), p1(), change_first, 0), "change ahead of the pinned payouts");
+}
+
+#[test]
+fn funded_claim_draw_allows_trailing_change_only() {
+    let state = full_board();
+    let run = |outputs| run_entry_funded(&state, "claim_draw", &|_| vec![], None, POT, outputs, 0);
+
+    let mut with_change = refund_outputs();
+    with_change.push(change_output());
+    assert_pass(run(with_change), "funded draw with trailing change");
+
+    let mut unequal = vec![p2pk_output(&p1().pk, STAKE + 1), p2pk_output(&p2().pk, STAKE - 1)];
+    unequal.push(change_output());
+    assert_fail(run(unequal), "funded draw with unequal split");
+
+    let mut change_first = vec![change_output()];
+    change_first.extend(refund_outputs());
+    assert_fail(run(change_first), "change ahead of the pinned payouts");
+}
+
+#[test]
+fn funded_sudden_death_allows_trailing_change_only() {
+    let state = capped_live();
+    let run = |outputs, lock_time| {
+        run_entry_funded_at(&state, "sudden_death", &|_| vec![], None, POT, outputs, 0, lock_time)
+    };
+
+    let mut with_change = refund_outputs();
+    with_change.push(change_output());
+    assert_pass(run(with_change.clone(), DEADLINE), "funded sudden death with trailing change");
+    assert_fail(run(with_change, DEADLINE - 1), "funded sudden death before the deadline");
+
+    let mut change_first = vec![change_output()];
+    change_first.extend(refund_outputs());
+    assert_fail(run(change_first, DEADLINE), "change ahead of the pinned payouts");
 }

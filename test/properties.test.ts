@@ -14,7 +14,16 @@ import {
   playerToMove,
   pubkeyOf,
 } from "../src/state.js";
-import { DIRS, LineWitness, claimForfeit, move, verifyLine, winningMove } from "../src/rules.js";
+import {
+  DIRS,
+  LineWitness,
+  claimDraw,
+  claimForfeit,
+  move,
+  suddenDeath,
+  verifyLine,
+  winningMove,
+} from "../src/rules.js";
 import { P1, P2, STAKE, ctx, game } from "./helpers.js";
 
 /**
@@ -198,6 +207,41 @@ describe("forfeit over random states", () => {
         expect(claim(pubkeyOf(s, playerToMove(s)))).toThrow(
           s.moveCount === 0 ? "dissolve instead" : "waiting player",
         );
+      }),
+    );
+  });
+});
+
+describe("liveness: no reachable state can strand the pot", () => {
+  test("every reachable state has a PERMISSIONLESS exit once the clocks run out", () => {
+    // The guarantee that makes the mandatory join-time deadline sufficient:
+    // whatever state a match reaches, a stranger with no key can eventually
+    // return the pot to the players — claimDraw on a full board, suddenDeath
+    // everywhere else (join refuses deadline == 0, so every reachable state
+    // carries one). Signature-holding doors (move, forfeit) don't count here:
+    // this is the property that survives BOTH players vanishing.
+    fc.assert(
+      fc.property(arbSeeds, (seeds) => {
+        const s = reachableState(seeds);
+        const stranger = "33".repeat(32);
+        const exits = [
+          () => claimDraw(s, ctx(stranger)),
+          () => suddenDeath(s, ctx(stranger, 0, s.deadline)),
+        ];
+        const payouts = exits.flatMap((exit) => {
+          try {
+            return [exit()];
+          } catch {
+            return [];
+          }
+        });
+        expect(payouts.length).toBeGreaterThan(0);
+        // And the exit returns the whole pot to the players, nobody else.
+        for (const outs of payouts) {
+          const total = outs.reduce((sum, o) => sum + o.amount, 0n);
+          expect(total).toBe(2n * STAKE);
+          for (const o of outs) expect([s.p1, s.p2]).toContain(o.to);
+        }
       }),
     );
   });

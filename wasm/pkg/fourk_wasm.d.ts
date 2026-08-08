@@ -12,9 +12,9 @@ export function simulLobbyLockScript(p1: Uint8Array, move_timeout: bigint, deadl
 /**
  * Full signature script for spending a fourk-mode match UTXO via `function`
  * (dissolve, commit, reveal, resolve, claim_win, claim_split, claim_draw,
- * claim_timeout, split_timeout, sudden_death).
+ * claim_timeout, split_timeout, sudden_death, sweep_win).
  */
-export function simulMatchSigScript(p1: Uint8Array, p2: Uint8Array, board: Uint8Array, round: bigint, commit1: Uint8Array, commit2: Uint8Array, reveal1: bigint, reveal2: bigint, move_timeout: bigint, deadline: bigint, _function: string, sig?: Uint8Array | null, pk?: Uint8Array | null, blob?: Uint8Array | null, ints?: BigInt64Array | null): Uint8Array;
+export function simulMatchSigScript(p1: Uint8Array, p2: Uint8Array, board: Uint8Array, round: bigint, commit1: Uint8Array, commit2: Uint8Array, reveal1: bigint, reveal2: bigint, pending_win: bigint, move_timeout: bigint, deadline: bigint, _function: string, sig?: Uint8Array | null, pk?: Uint8Array | null, blob?: Uint8Array | null, ints?: BigInt64Array | null): Uint8Array;
 /**
  * Artifact sanity info for the UI's about box / debugging.
  */
@@ -36,7 +36,7 @@ export function simulLobbySigScript(p1: Uint8Array, move_timeout: bigint, deadli
 /**
  * The redeem script for a live fourk-mode game state.
  */
-export function simulMatchLockScript(p1: Uint8Array, p2: Uint8Array, board: Uint8Array, round: bigint, commit1: Uint8Array, commit2: Uint8Array, reveal1: bigint, reveal2: bigint, move_timeout: bigint, deadline: bigint): Uint8Array;
+export function simulMatchLockScript(p1: Uint8Array, p2: Uint8Array, board: Uint8Array, round: bigint, commit1: Uint8Array, commit2: Uint8Array, reveal1: bigint, reveal2: bigint, pending_win: bigint, move_timeout: bigint, deadline: bigint): Uint8Array;
 /**
  * The redeem script for a live game state.
  */
@@ -318,8 +318,8 @@ export interface InitOutput {
   readonly matchSigScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: bigint, i: bigint, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => [number, number, number, number];
   readonly simulLobbyLockScript: (a: number, b: number, c: bigint, d: bigint) => [number, number, number, number];
   readonly simulLobbySigScript: (a: number, b: number, c: bigint, d: bigint, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
-  readonly simulMatchLockScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: number, i: number, j: number, k: number, l: bigint, m: bigint, n: bigint, o: bigint) => [number, number, number, number];
-  readonly simulMatchSigScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: number, i: number, j: number, k: number, l: bigint, m: bigint, n: bigint, o: bigint, p: number, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number) => [number, number, number, number];
+  readonly simulMatchLockScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: number, i: number, j: number, k: number, l: bigint, m: bigint, n: bigint, o: bigint, p: bigint) => [number, number, number, number];
+  readonly simulMatchSigScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: number, i: number, j: number, k: number, l: bigint, m: bigint, n: bigint, o: bigint, p: bigint, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number) => [number, number, number, number];
   readonly __wbg_get_networkid_suffix: (a: number) => number;
   readonly __wbg_get_networkid_type: (a: number) => number;
   readonly __wbg_networkid_free: (a: number, b: number) => void;

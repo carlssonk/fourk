@@ -6,8 +6,15 @@ import {
   decodeMatchBinary,
   encodeMatchBinary,
 } from "../app/src/shared/lib/sharecode";
-import type { Match } from "../app/src/shared/lib/match";
-import { CELLS, ZERO_PK, type State } from "../app/src/shared/lib/game";
+import { FREE_STAKE, isStaked, type Match } from "../app/src/shared/lib/match";
+import {
+  CELLS,
+  DEADLINE_LIMIT,
+  MAX_MOVE_TIMEOUT_DAA,
+  MIN_MOVE_TIMEOUT_DAA,
+  ZERO_PK,
+  type State,
+} from "../app/src/shared/lib/game";
 
 const P1 = "11".repeat(32);
 const P2 = "22".repeat(32);
@@ -74,10 +81,18 @@ describe("binary share codes", () => {
     expectEqual(m, roundTrip(m));
   });
 
-  test("unusual value and moveCount fall back to stored fields", () => {
+  test("a value diverging from the stake is rejected — it is what the join debits", () => {
+    // A forged invite could otherwise show one price (stake) and spend
+    // another (value). Both derivations are covenant-enforced invariants,
+    // so divergence describes a match that cannot exist on-chain.
     const m = match({ p2: P2 }, 123_456_789n); // pot != 2*stake
+    expect(() => roundTrip(m)).toThrow("value does not match the stake");
+  });
+
+  test("a moveCount diverging from the disc count is rejected", () => {
+    const m = match({ p2: P2 });
     m.state = { ...m.state, moveCount: 7 }; // != disc count (0)
-    expectEqual(m, roundTrip(m));
+    expect(() => roundTrip(m)).toThrow("move count does not match the board");
   });
 
   test("random states round-trip (property)", () => {
@@ -180,8 +195,28 @@ describe("profiles in share codes", () => {
     // The extension flags byte directly follows the v0 payload; bits 5-7 are
     // the remaining reserved escape hatch (bit 4 became the mode section).
     const pfIndex = encodeMatchBinary(match({})).length;
-    const bad = Uint8Array.from(good.map((x, i) => (i === pfIndex ? x | 0x20 : x)));
-    expect(() => decodeMatchBinary(bad)).toThrow("unknown share-code format version");
+    for (const bit of [0x20, 0x40, 0x80]) {
+      const bad = Uint8Array.from(good.map((x, i) => (i === pfIndex ? x | bit : x)));
+      expect(() => decodeMatchBinary(bad)).toThrow("unknown share-code format version");
+    }
+  });
+});
+
+describe("stakes in share codes", () => {
+  test("the stake is the only thing that says whether a game is staked", () => {
+    // Nothing in the code marks a game staked: a link is written by whoever
+    // sends it, and believing a flag in one is what would let a forged
+    // "this game is free" invite spend dispenser funds on a real wager.
+    const staked = match({ stake: 25n * 100_000_000n });
+    expect(isStaked(roundTrip(staked))).toBe(true);
+    expect(roundTrip(staked).state.stake).toBe(staked.state.stake);
+
+    const free = match({ stake: FREE_STAKE });
+    expect(isStaked(roundTrip(free))).toBe(false);
+  });
+
+  test("a staked game needs no extension section of its own", () => {
+    expect(encodeMatchBinary(match({ p2: P2, stake: 25n * 100_000_000n }))[0]! & 0x80).toBe(0);
   });
 });
 
@@ -189,7 +224,14 @@ describe("fourk mode in share codes", () => {
   const ZERO_HASH = "00".repeat(32);
   const H1 = "a1".repeat(32);
   const H2 = "b2".repeat(32);
-  const zeroCore = { round: 0, commit1: ZERO_HASH, commit2: ZERO_HASH, reveal1: 0, reveal2: 0 };
+  const zeroCore = {
+    round: 0,
+    commit1: ZERO_HASH,
+    commit2: ZERO_HASH,
+    reveal1: 0,
+    reveal2: 0,
+    pendingWin: 0,
+  };
 
   test("an open fourk lobby round-trips with its mode", () => {
     const m: Match = { ...match({}), mode: "fourk", simul: zeroCore };
@@ -223,6 +265,29 @@ describe("fourk mode in share codes", () => {
       simul: { ...zeroCore, round: 3, commit2: H2, reveal1: 4 },
     };
     expectEqual(halfRevealed, roundTrip(halfRevealed));
+  });
+
+  test("a pending win travels — and never alongside round slots", () => {
+    const board = new Uint8Array(CELLS);
+    for (let c = 0; c < 4; c++) {
+      board[c * 6] = 1; // p1's bottom-row line
+      if (c < 3) board[c * 6 + 1] = 2;
+    }
+    const pending: Match = {
+      ...match({ p2: P2, board, moveCount: 7 }),
+      mode: "fourk",
+      simul: { ...zeroCore, round: 4, pendingWin: 1 },
+    };
+    expectEqual(pending, roundTrip(pending));
+
+    // claimWin zeroes the slots; a code carrying both describes a state
+    // that cannot exist on-chain.
+    const contradictory: Match = {
+      ...match({ p2: P2, board, moveCount: 7 }),
+      mode: "fourk",
+      simul: { ...zeroCore, round: 4, pendingWin: 2, commit1: H1 },
+    };
+    expect(() => roundTrip(contradictory)).toThrow("pending win with round slots");
   });
 
   test("mode composes with profiles, colour, and timing", () => {
@@ -287,9 +352,23 @@ describe("share-code hardening", () => {
     expect(() => roundTrip(m)).toThrow("bad move count");
   });
 
-  test("zero move timeout is rejected", () => {
-    const m = match({ p2: P2, moveTimeout: 0 }); // forces the timing extension
-    expect(() => roundTrip(m)).toThrow("zero move timeout");
+  test("out-of-range timing is rejected: trap clock, hostage clock, clock-flipping deadline", () => {
+    // The covenant's join gates, applied at the decoder.
+    const zero = match({ p2: P2, moveTimeout: 0 }); // forces the timing extension
+    expect(() => roundTrip(zero)).toThrow("bad move timeout");
+    const trap = match({ p2: P2, moveTimeout: MIN_MOVE_TIMEOUT_DAA - 1 });
+    expect(() => roundTrip(trap)).toThrow("bad move timeout");
+    const hostage = match({ p2: P2, moveTimeout: MAX_MOVE_TIMEOUT_DAA + 1 });
+    expect(() => roundTrip(hostage)).toThrow("bad move timeout");
+    const flipped = match({ p2: P2, deadline: DEADLINE_LIMIT });
+    expect(() => roundTrip(flipped)).toThrow("bad deadline");
+    // The extremes that remain legal round-trip cleanly.
+    const edges = match({
+      p2: P2,
+      moveTimeout: MAX_MOVE_TIMEOUT_DAA,
+      deadline: DEADLINE_LIMIT - 1,
+    });
+    expectEqual(edges, roundTrip(edges));
   });
 
   test("joined flag with an all-zero p2 is rejected", () => {

@@ -250,7 +250,7 @@ function passArray64ToWasm0(arg, malloc) {
 /**
  * Full signature script for spending a fourk-mode match UTXO via `function`
  * (dissolve, commit, reveal, resolve, claim_win, claim_split, claim_draw,
- * claim_timeout, split_timeout, sudden_death).
+ * claim_timeout, split_timeout, sudden_death, sweep_win).
  * @param {Uint8Array} p1
  * @param {Uint8Array} p2
  * @param {Uint8Array} board
@@ -259,6 +259,7 @@ function passArray64ToWasm0(arg, malloc) {
  * @param {Uint8Array} commit2
  * @param {bigint} reveal1
  * @param {bigint} reveal2
+ * @param {bigint} pending_win
  * @param {bigint} move_timeout
  * @param {bigint} deadline
  * @param {string} _function
@@ -268,7 +269,7 @@ function passArray64ToWasm0(arg, malloc) {
  * @param {BigInt64Array | null} [ints]
  * @returns {Uint8Array}
  */
-export function simulMatchSigScript(p1, p2, board, round, commit1, commit2, reveal1, reveal2, move_timeout, deadline, _function, sig, pk, blob, ints) {
+export function simulMatchSigScript(p1, p2, board, round, commit1, commit2, reveal1, reveal2, pending_win, move_timeout, deadline, _function, sig, pk, blob, ints) {
     const ptr0 = passArray8ToWasm0(p1, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passArray8ToWasm0(p2, wasm.__wbindgen_malloc);
@@ -289,7 +290,7 @@ export function simulMatchSigScript(p1, p2, board, round, commit1, commit2, reve
     var len8 = WASM_VECTOR_LEN;
     var ptr9 = isLikeNone(ints) ? 0 : passArray64ToWasm0(ints, wasm.__wbindgen_malloc);
     var len9 = WASM_VECTOR_LEN;
-    const ret = wasm.simulMatchSigScript(ptr0, len0, ptr1, len1, ptr2, len2, round, ptr3, len3, ptr4, len4, reveal1, reveal2, move_timeout, deadline, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, ptr9, len9);
+    const ret = wasm.simulMatchSigScript(ptr0, len0, ptr1, len1, ptr2, len2, round, ptr3, len3, ptr4, len4, reveal1, reveal2, pending_win, move_timeout, deadline, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, ptr9, len9);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }
@@ -418,11 +419,12 @@ export function simulLobbySigScript(p1, move_timeout, deadline, _function, sig, 
  * @param {Uint8Array} commit2
  * @param {bigint} reveal1
  * @param {bigint} reveal2
+ * @param {bigint} pending_win
  * @param {bigint} move_timeout
  * @param {bigint} deadline
  * @returns {Uint8Array}
  */
-export function simulMatchLockScript(p1, p2, board, round, commit1, commit2, reveal1, reveal2, move_timeout, deadline) {
+export function simulMatchLockScript(p1, p2, board, round, commit1, commit2, reveal1, reveal2, pending_win, move_timeout, deadline) {
     const ptr0 = passArray8ToWasm0(p1, wasm.__wbindgen_malloc);
     const len0 = WASM_VECTOR_LEN;
     const ptr1 = passArray8ToWasm0(p2, wasm.__wbindgen_malloc);
@@ -433,7 +435,7 @@ export function simulMatchLockScript(p1, p2, board, round, commit1, commit2, rev
     const len3 = WASM_VECTOR_LEN;
     const ptr4 = passArray8ToWasm0(commit2, wasm.__wbindgen_malloc);
     const len4 = WASM_VECTOR_LEN;
-    const ret = wasm.simulMatchLockScript(ptr0, len0, ptr1, len1, ptr2, len2, round, ptr3, len3, ptr4, len4, reveal1, reveal2, move_timeout, deadline);
+    const ret = wasm.simulMatchLockScript(ptr0, len0, ptr1, len1, ptr2, len2, round, ptr3, len3, ptr4, len4, reveal1, reveal2, pending_win, move_timeout, deadline);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }
