@@ -17,8 +17,9 @@ interface Props {
   actionLabel: string;
   busy: boolean;
   onSubmit: () => void;
-  /** Placeholder headline action (e.g. matchmaking): rendered first with
-   * primary styling but disabled, demoting the submit button to a ghost. */
+  /** Placeholder headline action (e.g. matchmaking): rendered first but
+   * disabled. The submit button keeps primary styling — the live action
+   * stays the green one. */
   headlineLabel?: string;
   /** What kind of game to start (mode, clock, stake), rendered inside the
    * card below the identity section — create flow only; the join flow
@@ -182,7 +183,7 @@ export const PlayerSetup = ({
           </button>
         )}
         <button
-          className={`btn ${headlineLabel ? "btn-ghost" : ""} ${noName ? "btn-inert" : ""} px-8 py-2.5 text-lg`}
+          className={`btn ${noName ? "btn-inert" : ""} px-8 py-2.5 text-lg`}
           disabled={busy}
           aria-disabled={noName || undefined}
           onClick={() => {

@@ -1,16 +1,14 @@
 @import "tailwindcss";
 
 @theme {
-  /* The page is the darkest plane in the chrome; everything that sits
-   * above it (cards, dialogs, fields, wells) is a step lighter than it. */
-  --color-bg: #1a1613;
-  --color-panel: #282219;
+  --color-bg: #15100a;
+  --color-panel: #2a2115;
   --color-line: #453c30;
   --color-ink: #ece4d6;
   --color-dim: #a49882;
   --color-accent: #5aa08c;
   --color-red: #e0523f;
-  --color-blue: #5b8de0;
+  --color-blue: #4785eb;
   --color-frame: #2e2821;
   --color-field: #181411;
   --color-ok: #6fb35f;
@@ -130,23 +128,26 @@
    * a colour step, on a transition short enough to feel like a state rather
    * than an animation.
    *
-   * Dark ink on the accent rather than cream: 7:1 against the mid teal
-   * where cream managed 2.6:1. */
+   * Warm white on the accent — the same ink the danger slab uses, so the
+   * two filled buttons share one text tone. The slab is the accent
+   * deepened to 77% toward black (#457b6c): the exact point where the
+   * warm white clears WCAG AA at 4.52:1. Feedback steps go DARKER, never
+   * lighter, so contrast only improves under the pointer. */
   .btn {
     @apply cursor-pointer rounded-lg px-4 py-2 font-semibold whitespace-nowrap disabled:cursor-default;
     border: 1px solid transparent;
-    background: var(--color-accent);
-    color: #10201b;
+    background: color-mix(in srgb, var(--color-accent) 77%, #000);
+    color: #fff4f1;
     transition:
       background-color 0.12s ease,
       border-color 0.12s ease,
       color 0.12s ease;
   }
   .btn:enabled:hover {
-    background: color-mix(in srgb, var(--color-accent) 86%, #fff);
+    background: color-mix(in srgb, var(--color-accent) 68%, #000);
   }
   .btn:enabled:active {
-    background: color-mix(in srgb, var(--color-accent) 88%, #000);
+    background: color-mix(in srgb, var(--color-accent) 60%, #000);
   }
 
   /* Secondary: a solid surface one step up from the page, in the app's own

@@ -1,6 +1,28 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { KASPA_K_PATH, KASPA_RING_PATH } from "@shared/lib/kaspaMark";
 import { useChainPulse } from "../hooks";
+
+/** How a freshly mined disc arrives: falling with a bounce, or popping in
+ * like a bubble. A standing preference — cycled by the little switcher in
+ * the corner, remembered like the other fourk.* settings. Each disc keeps
+ * the mode it spawned under, so switching mid-flight never rewinds
+ * anyone. */
+type BackdropMode = "drops" | "bubbles";
+const MODES: readonly BackdropMode[] = ["drops", "bubbles"];
+const MODE_KEY = "fourk.backdrop";
+const MODE_LABELS: Record<BackdropMode, string> = {
+  drops: "discs drop in",
+  bubbles: "discs pop in",
+};
+
+function loadBackdropMode(): BackdropMode {
+  try {
+    const v = localStorage.getItem(MODE_KEY) as BackdropMode;
+    return MODES.includes(v) ? v : "drops";
+  } catch {
+    return "drops";
+  }
+}
 
 /** Grid pitch in px — the zoom knob. Smaller = more, smaller cells on
  * screen (zoomed out); disc size and spacing scale with it. */
@@ -18,20 +40,39 @@ const GRAVITY = 4000;
 /** Restitution variants, deadest to liveliest. */
 const BOUNCE_E = [0.12, 0.18, 0.24, 0.3] as const;
 
+/** Bubble pop length, seconds. */
+const POP_S = 0.4;
+
+/** Standard ease-out-back: grows from 0, overshoots ~10%, settles at 1 —
+ * the bubble's pop. */
+function easeOutBack(u: number): number {
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + c3 * (u - 1) ** 3 + c1 * (u - 1) ** 2;
+}
+
 interface Disc {
   col: number;
   /** Row from the bottom of the screen. */
   row: number;
   blue: boolean;
-  /** Restitution of the landing bounce. */
+  /** Restitution of the landing bounce (drops mode). */
   e: number;
-  /** Fall distance in px, from above the viewport to rest. */
+  /** Fall distance in px, from above the viewport to rest (drops mode). */
   drop: number;
-  /** performance.now() when the drop started. */
+  /** performance.now() when the arrival animation started. */
   start: number;
+  /** The animation this disc arrived under. */
+  mode: BackdropMode;
 }
 
 const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/** How far a backdrop disc sinks toward the page colour. Full-strength
+ * disc tokens belong to the live board; back here they'd compete with it,
+ * so the sprite face (stamp included) is washed this far toward the page
+ * and the rain reads as texture instead of foreground. */
+const MUTE = 0.6;
 
 /**
  * A backdrop disc, pre-rendered once per colour: the flat coin fill with
@@ -41,17 +82,18 @@ const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").match
  * keep the stamp free per frame — the board can hold thousands of discs,
  * and blitting a cached bitmap is cheaper than even a plain arc fill.
  */
-function renderDisc(color: string, dpr: number) {
+function renderDisc(color: string, bg: string, dpr: number) {
   const layer = document.createElement("canvas");
   layer.width = layer.height = Math.ceil(DISC * dpr);
   const ctx = layer.getContext("2d")!;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const r = DISC / 2;
+  const face = new Path2D();
+  face.arc(r, r, r, 0, 2 * Math.PI);
   ctx.fillStyle = color;
-  ctx.beginPath();
-  ctx.arc(r, r, r, 0, 2 * Math.PI);
-  ctx.fill();
+  ctx.fill(face);
   // The stamp's viewBox (36.3 36.3 124 124) mapped onto the disc face.
+  ctx.save();
   const s = DISC / 124;
   ctx.scale(s, s);
   ctx.translate(-36.3, -36.3);
@@ -60,6 +102,10 @@ function renderDisc(color: string, dpr: number) {
   ctx.stroke(new Path2D(KASPA_RING_PATH));
   ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
   ctx.fill(new Path2D(KASPA_K_PATH));
+  ctx.restore();
+  ctx.globalAlpha = MUTE;
+  ctx.fillStyle = bg;
+  ctx.fill(face);
   return layer;
 }
 
@@ -107,6 +153,20 @@ function renderBoard(w: number, h: number, dpr: number, ink: string, bg: string)
 export const BoardBackdrop = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const spawn = useRef<(blocks: number) => void>(() => {});
+  const [mode, setMode] = useState<BackdropMode>(loadBackdropMode);
+  // Read by the spawn/draw closures below without re-running the effect.
+  const modeRef = useRef(mode);
+  modeRef.current = mode;
+
+  const cycleMode = () => {
+    const next = MODES[(MODES.indexOf(modeRef.current) + 1) % MODES.length]!;
+    setMode(next);
+    try {
+      localStorage.setItem(MODE_KEY, next);
+    } catch {
+      /* lockdown storage — the pick still holds for this visit */
+    }
+  };
 
   // The chain is the only driver: every BLOCKS_PER_DISC freshly mined blocks
   // drop one disc, so the board stays empty until the subscription flows.
@@ -143,23 +203,36 @@ export const BoardBackdrop = () => {
       let flying = false;
       for (const d of discs) {
         const t = (now - d.start) / 1000;
-        const t1 = Math.sqrt((2 * d.drop) / GRAVITY);
-        let off = 0;
-        if (t < t1) {
-          off = 0.5 * GRAVITY * t * t - d.drop;
+        const img = d.blue ? blueDisc : redDisc;
+        const x = d.col * CELL + PAD;
+        const y = h - (d.row * CELL + CELL / 2) - DISC / 2;
+        if (d.mode === "drops") {
+          const t1 = Math.sqrt((2 * d.drop) / GRAVITY);
+          let off = 0;
+          if (t < t1) {
+            off = 0.5 * GRAVITY * t * t - d.drop;
+            flying = true;
+          } else if (t < t1 * (1 + 2 * d.e)) {
+            const tb = t - t1;
+            off = -(d.e * GRAVITY * t1 * tb - 0.5 * GRAVITY * tb * tb);
+            flying = true;
+          }
+          ctx.drawImage(img, x, y + off, DISC, DISC);
+        } else if (d.mode === "bubbles" && t < POP_S) {
+          // Inflating in place: the pop is a scale, not a translation.
+          const s = Math.max(0, easeOutBack(t / POP_S));
           flying = true;
-        } else if (t < t1 * (1 + 2 * d.e)) {
-          const tb = t - t1;
-          off = -(d.e * GRAVITY * t1 * tb - 0.5 * GRAVITY * tb * tb);
-          flying = true;
+          ctx.drawImage(
+            img,
+            x + (DISC * (1 - s)) / 2,
+            y + (DISC * (1 - s)) / 2,
+            DISC * s,
+            DISC * s,
+          );
+        } else {
+          // Settled.
+          ctx.drawImage(img, x, y, DISC, DISC);
         }
-        ctx.drawImage(
-          d.blue ? blueDisc : redDisc,
-          d.col * CELL + PAD,
-          h - (d.row * CELL + CELL / 2) + off - DISC / 2,
-          DISC,
-          DISC,
-        );
       }
       ctx.globalAlpha = 1;
       ctx.drawImage(board, 0, 0, w, h);
@@ -200,6 +273,7 @@ export const BoardBackdrop = () => {
         e,
         drop,
         start: performance.now(),
+        mode: modeRef.current,
       });
       return true;
     };
@@ -226,8 +300,8 @@ export const BoardBackdrop = () => {
       canvas.height = Math.round(h * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       board = renderBoard(w, h, dpr, color("--color-ink"), color("--color-bg"));
-      redDisc = renderDisc(color("--color-red"), dpr);
-      blueDisc = renderDisc(color("--color-blue"), dpr);
+      redDisc = renderDisc(color("--color-red"), color("--color-bg"), dpr);
+      blueDisc = renderDisc(color("--color-blue"), color("--color-bg"), dpr);
       if (draw(performance.now())) kick();
     };
     resize();
@@ -253,6 +327,21 @@ export const BoardBackdrop = () => {
         className="pointer-events-none fixed inset-0 -z-10 h-full w-full"
         style={{ maskImage: mask, WebkitMaskImage: mask }}
       />
+      {/* The backdrop's one control, tucked where the backdrop lives: cycle
+       * how fresh discs arrive. The label is the tooltip — the discs
+       * themselves are the demo. Crossing shuffle arrows, not the reroll
+       * ↻ — that glyph promises a board reset this button doesn't do. */}
+      <button
+        type="button"
+        onClick={cycleMode}
+        title={`backdrop: ${MODE_LABELS[mode]} — click to change`}
+        aria-label={`backdrop animation: ${MODE_LABELS[mode]}; click to change`}
+        className="fixed right-3 bottom-3 cursor-pointer rounded-md border border-line/60 bg-panel/40 p-1.5 text-dim backdrop-blur-xs hover:border-accent hover:text-ink"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <path d="M10.59 9.17 5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z" />
+        </svg>
+      </button>
     </>
   );
 };

@@ -116,7 +116,9 @@ export const Home = () => {
   return (
     <div className="pt-8 pb-8 text-center">
       <BoardBackdrop />
-      <h2 className="mb-1.5 font-display text-4xl font-extrabold tracking-tight">
+      {/* The wordmark wears the accent — Kaspa's own teal — so the page has
+       * one identity colour from title to primary button. */}
+      <h2 className="mb-1.5 font-display text-4xl font-extrabold tracking-tight text-accent">
         fourk<span className="text-base font-medium tracking-normal text-dim"> .io</span>
       </h2>
       <p className="text-sm text-dim">
