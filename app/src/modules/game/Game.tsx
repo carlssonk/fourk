@@ -183,9 +183,8 @@ export const Game = ({ match }: Props) => {
     runAction(async () => {
       const key = seatKey();
       const rpc = await getRpc();
-      const age = await cov.gameUtxoAge(rpc, match);
-      if (age !== null && age < s.moveTimeout) {
-        const mins = Math.ceil((s.moveTimeout - age) / 600);
+      const mins = await cov.moveClockRemaining(rpc, match);
+      if (mins) {
         throw new Error(
           `Your opponent still has about ${mins} minute${mins === 1 ? "" : "s"} to move.`,
         );
@@ -253,9 +252,8 @@ export const Game = ({ match }: Props) => {
       // the age on-chain so a slightly-early click gets minutes, not a
       // sequence-lock rejection.
       if (role === "p2") {
-        const age = await cov.gameUtxoAge(rpc, match);
-        if (age !== null && age < s.moveTimeout) {
-          const mins = Math.ceil((s.moveTimeout - age) / 600);
+        const mins = await cov.moveClockRemaining(rpc, match);
+        if (mins) {
           throw new Error(
             `You can withdraw in about ${mins} minute${mins === 1 ? "" : "s"} — the short wait stops join-and-run griefing.`,
           );

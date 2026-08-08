@@ -37,6 +37,19 @@ export async function gameUtxoAge(rpc: Rpc, match: Match): Promise<number | null
   return engine.gameUtxoAge(rpc, modeOf(match), match);
 }
 
+/**
+ * Minutes still on the move clock, asked of the chain: 0 means the clock has
+ * elapsed and a timeout door is open; null means the game UTXO wasn't found.
+ * The on-screen countdown can lag an age-fetch — callers gate timeout/dissolve
+ * doors on this so a slightly-early click gets minutes, not a sequence-lock
+ * rejection.
+ */
+export async function moveClockRemaining(rpc: Rpc, match: Match): Promise<number | null> {
+  const age = await gameUtxoAge(rpc, match);
+  if (age === null) return null;
+  return Math.max(0, Math.ceil((match.state.moveTimeout - age) / 600));
+}
+
 /** Does pkHex owe this match an action right now? (Classic: my turn; fourk:
  * I owe the round a commit/reveal/resolve.) */
 export function isActionable(match: Match, pkHex: string): boolean {
