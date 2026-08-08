@@ -19,9 +19,10 @@ import {
   heightOf,
   isOpen,
   playerToMove,
+  pubkeyOf,
   type State,
 } from "../../../../src/state";
-import { DIRS, verifyLine, type LineWitness } from "../../../../src/rules";
+import { DIRS, move, verifyLine, type LineWitness } from "../../../../src/rules";
 
 export {
   CELLS,
@@ -46,14 +47,11 @@ export function legalColumns(s: State): number[] {
   return [...Array(COLS).keys()].filter((c) => heightOf(s.board, c) < ROWS);
 }
 
-/** Apply a move without signature checks — used to enumerate successors. */
+/** Apply a move without signature checks — used to enumerate successors.
+ * The mover's own key stands in as signer, so only the rulebook's board
+ * legality applies. */
 export function applyMove(s: State, col: number): State {
-  const h = heightOf(s.board, col);
-  if (isOpen(s) || s.moveCount >= CELLS || h >= ROWS)
-    throw new Error(`illegal move in column ${col}`);
-  const board = s.board.slice();
-  board[cellIndex(col, h)] = discOf(playerToMove(s));
-  return { ...s, board, moveCount: s.moveCount + 1 };
+  return move(s, { signer: pubkeyOf(s, playerToMove(s)), utxoAge: 0, txTime: 0 }, col);
 }
 
 /** First four-in-a-row witness for `disc`, or null. */
