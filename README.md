@@ -4,10 +4,13 @@ Three layers, one rulebook:
 
 - `src/` — TypeScript reference implementation of the transition system, the
   single source of truth for the rules.
-- `contracts/fourk.sil` — the Silverscript covenant, a require-for-require port
-  of `src/rules.ts`. Compiles to ~1.4 KB of script (smaller than the simplest
-  chess contract in the silverscript repo). Compile with:
-  `silverc contracts/fourk.sil --ctor contracts/genesis_args.json`
+- `contracts/fourk.ag` — the Argent covenant, a require-for-require port of
+  `src/rules.ts` (classic) and `src/simul/rules.ts` (fourk mode): four actors,
+  `FourkLobby`/`FourkMatch` and `FourkSimulLobby`/`FourkSimul`. Rebuild with
+  `argentc build contracts/fourk.ag`, which regenerates `contracts/build/`
+  (`sil/*.sil` + `artifact.json`) — the artifacts the harness, the wasm
+  crate, and the app all consume. (An earlier hand-ported Silverscript
+  covenant, `fourk.sil`, is retired — see `docs/adr/0001`.)
 - `harness/` — Rust integration tests that execute the *compiled contract*
   against the real rusty-kaspa script engine with real Schnorr signatures and
   covenant bindings (KIP-20). This is the suite that audits the machine that
@@ -40,9 +43,11 @@ cd harness && cargo test        # compiled covenant vs the real engine
 SIMNET_E2E=1 VITE_NETWORK_ID=simnet npx vitest run app/e2e/simul-live.test.ts
 ```
 
-The harness needs the sibling [silverscript](https://github.com/kaspanet/silverscript)
-repo checked out at `../silverscript` (path dependency) and pins rusty-kaspa
-v2.0.1, matching the silverscript workspace.
+The harness needs two sibling checkouts (path dependencies): the
+[silverscript](https://github.com/kaspanet/silverscript) repo at
+`../silverscript` (it compiles `contracts/drip.sil`) and the Argent toolchain
+at `../argent-lang` (`argent-runtime` drives `contracts/fourk.ag`'s committed
+artifact). It pins rusty-kaspa v2.0.1, matching the silverscript workspace.
 
 The prebuilt browser artifacts are committed so the app builds with no Rust
 toolchain at all: `wasm/pkg/` (fourk-wasm; rebuild with
@@ -337,9 +342,8 @@ mode — and with it the guest tier — is what a mainnet deployment loses. Stak
 are gated by tier, not by network, so staked play stays testable on simnet and
 testnet.
 
-`fourk-wasm` is verified against the other stacks at runtime: identical script
-bytes to silverc/the Python SDK, identical sigscript sizes for all six
-entrypoints.
+`fourk-wasm` embeds the same argentc artifact the harness executes, so the
+scripts a browser builds are byte-identical to the engine-verified ones.
 
 ## Status / next steps
 
@@ -366,6 +370,9 @@ entrypoints.
   reset detection, multi-input + all-door-lineage + budget-probe harness
   coverage, CI for the TS side, security headers + deploy notes
   (`app/DEPLOY.md`), dispenser status + runbook (`faucet/RUNBOOK.md`)
+- [x] Single covenant source: the hand-ported `fourk.sil` and its parallel
+  suite retired in favor of the Argent contract (`docs/adr/0001`);
+  genesis-gate constants pinned across TS/.ag/harness by a cross-source test
 - [ ] Live browser-vs-browser game on testnet-10 through every terminal path
 - [ ] Pin/vendor the `argent-lang` + `silverscript` toolchains so the harness
   and artifact rebuilds run in CI; external audit of the compiler lowering

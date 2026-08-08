@@ -4,10 +4,12 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
-# Test harness for the Fourk covenant: compiles contracts/fourk.sil with the
-# Silverscript compiler and executes real signed transactions against the
-# rusty-kaspa script engine. Same pattern as silverscript-lang's
-# chess_apps_tests.rs. Dependency tags must match the silverscript workspace.
+# Test harness for the Fourk covenants: drives the Argent contract
+# (contracts/fourk.ag, via its committed artifact) and the Silverscript drip
+# dispenser (contracts/drip.sil, compiled here) through real signed
+# transactions against the rusty-kaspa script engine. Same pattern as
+# silverscript-lang's chess_apps_tests.rs. Dependency tags must match the
+# silverscript workspace.
 
 [lib]
 path = "src/lib.rs"
