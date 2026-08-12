@@ -1,5 +1,5 @@
 import { atom, getDefaultStore } from "jotai";
-import { friendlyError } from "../lib/errors";
+import { friendlyCatch } from "../lib/errors";
 import { ZERO_PK } from "../lib/game";
 import { FREE_STAKE, SOMPI_PER_KAS, isStaked, saveCheckpoint, type Match } from "../lib/match";
 import { fresherOf } from "../modes/registry";
@@ -44,7 +44,7 @@ export function clearError(): void {
 
 /** Route any thrown value into the error banner, translated for players. */
 export function reportError(e: unknown): void {
-  store.set(errorAtom, friendlyError((e as any)?.message ?? String(e)));
+  store.set(errorAtom, friendlyCatch(e));
 }
 
 /** One user action at a time; failures land in the error banner. */
@@ -104,57 +104,6 @@ export async function createGame(deps: Deps = realDeps): Promise<void> {
 
 /** Open a fresh game with the free stake. */
 export const newGame = (): Promise<void> => runAction(createGame);
-
-/** Below this, moving the balance costs more in fees than it rescues. */
-const SWEEP_FLOOR = SOMPI_PER_KAS / 20n;
-
-/**
- * Switch to the account behind `phrase`, moving the current account's
- * balance across first.
- *
- * The move happens here, in the open, because adopting the new phrase drops
- * the only reference to the old key: there is no drawer of retired keys to
- * come back to. A failed transfer therefore aborts the switch — better to
- * stay signed in and retry than to strand funds on a key we've forgotten.
- *
- * Returns false if it's already the active account (no reload).
- */
-export async function switchAccount(phrase: string, deps: Deps = realDeps): Promise<boolean> {
-  const outgoing = deps.account.ownedWallet();
-  const incoming = deps.account.phraseWallet(phrase);
-  if (outgoing?.myPk === incoming.myPk) return false;
-  // If this browser can't persist the new account, find out BEFORE the
-  // balance moves toward it — a sweep followed by a failed save would leave
-  // the funds on a phrase the app immediately forgot it was adopting.
-  deps.account.assertStorageWritable();
-  if (outgoing) {
-    const balance = await deps.chain.walletBalance(outgoing.key);
-    if (balance >= SWEEP_FLOOR) {
-      try {
-        await deps.chain.sendTo(outgoing.key, incoming.key, "all");
-      } catch (e) {
-        // A throw here does NOT mean the sweep didn't land — a dropped
-        // socket can eat the response after the node accepted the tx. Ask
-        // the chain what actually happened rather than trusting the error:
-        // the outgoing balance dropping is the sweep in flight.
-        let after: bigint | null = null;
-        for (let attempt = 0; attempt < 3 && after === null; attempt++) {
-          await new Promise((r) => setTimeout(r, 1500));
-          try {
-            after = await deps.chain.walletBalance(outgoing.key);
-          } catch {
-            /* still unreachable — try again */
-          }
-        }
-        if (after === null) throw new Error("MOVE_UNCERTAIN", { cause: e });
-        if (after >= balance) throw new Error("MOVE_FAILED", { cause: e });
-        // Balance dropped: the sweep landed — funds are heading to the
-        // incoming account, so finishing the switch is the safe direction.
-      }
-    }
-  }
-  return deps.account.adoptAccount(phrase); // reloads
-}
 
 /** Sit down at an invite — or reopen a known game, or spectate. */
 export const takeSeat = (invite: Match, deps: Deps = realDeps): Promise<void> =>

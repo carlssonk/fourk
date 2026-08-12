@@ -2,22 +2,24 @@ import { useState } from "react";
 import { useAtom, useAtomValue } from "jotai";
 import { Dialog } from "@shared/components/Dialog";
 import * as cov from "@shared/lib/covenant";
-import { friendlyError } from "@shared/lib/errors";
+import { friendlyCatch } from "@shared/lib/errors";
 import { generatePhrase, parsePhrase } from "@shared/lib/mnemonic";
 import { fmtKas, parseKas } from "@shared/lib/match";
 import {
   FEE_MARGIN,
   accountPanelAtom,
   activeAccount,
-  askConfirm,
+  adoptAccount,
   balanceAtom,
+  forgetAccount,
+  phraseWallet,
   getRpc,
   hasOwnedAccount,
+  listAccounts,
   ownedWallet,
   matchesAtom,
   refreshBalance,
   unfinishedGamesOn,
-  switchAccount,
   type AccountView,
 } from "@shared/state";
 
@@ -70,18 +72,10 @@ export const AccountPanel = () => {
       title={TITLES[view]}
       className="text-left"
       shroud={shroud}
+      {...(!isRoot(view) && { onBack: () => setView(rootView()) })}
       {...(dismissable && { onDismiss: () => setView(null) })}
     >
       <PanelBody view={view} setView={setView} />
-      {/* Its own row: the screens above end in their own action, and a
-       * "Back" tucked alongside one reads as part of it. */}
-      {!isRoot(view) && (
-        <div className="mt-4">
-          <button className="btn btn-muted" onClick={() => setView(rootView())}>
-            Back
-          </button>
-        </div>
-      )}
     </Dialog>
   );
 };
@@ -96,6 +90,7 @@ const TITLES: Record<AccountView, string> = {
   "cash-out": "Cash out",
   backup: "Back up your account",
   "sign-in": "Use a different account",
+  remove: "Remove from this device",
 };
 
 /** The panel's home screen depends on who's looking: a guest has no money
@@ -125,6 +120,8 @@ const PanelBody = ({
       return <Backup />;
     case "sign-in":
       return <SignIn />;
+    case "remove":
+      return <Remove setView={setView} />;
   }
 };
 
@@ -133,9 +130,8 @@ const PanelBody = ({
 const GetStarted = ({ setView }: { setView: (v: AccountView) => void }) => (
   <>
     <p className="mb-4 text-sm text-dim">
-      You're all set for free games — nothing to sign up for. An account is only needed to play for
-      stakes: it's what holds your funds, and it comes with a recovery phrase so you can get back to
-      it from any device.
+      An account is only needed to play for stakes: it's what holds your funds, and it comes with a
+      recovery phrase so you can get back to it from any device.
     </p>
     <div className="flex flex-col items-stretch gap-2">
       <button className="btn" onClick={() => setView("new-phrase")}>
@@ -164,10 +160,12 @@ const NewPhrase = () => {
   const done = () => {
     setNote(null);
     setBusy(true);
-    switchAccount(phrase).catch((e) => {
-      setNote(friendlyError(String((e as Error)?.message ?? e)));
+    try {
+      adoptAccount(phrase); // reloads the page
+    } catch (e) {
+      setNote(friendlyCatch(e));
       setBusy(false);
-    });
+    }
   };
 
   return (
@@ -204,6 +202,23 @@ const NewPhrase = () => {
   );
 };
 
+/** One line of the overview's management list: navigation dressed as
+ * navigation — left-aligned, quiet, a chevron promising another screen —
+ * so the two money buttons above stay the only things shaped like
+ * actions. */
+const NavRow = ({ label, onClick }: { label: string; onClick: () => void }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    className="flex w-full cursor-pointer items-center justify-between py-2.5 text-sm text-dim transition-colors hover:text-ink"
+  >
+    {label}
+    <span aria-hidden className="text-dim/60">
+      ›
+    </span>
+  </button>
+);
+
 const Overview = ({ setView }: { setView: (v: AccountView) => void }) => {
   const balance = useAtomValue(balanceAtom);
   return (
@@ -216,19 +231,20 @@ const Overview = ({ setView }: { setView: (v: AccountView) => void }) => {
           {balance === null ? "…" : `${fmtKas(balance)} KAS`}
         </div>
       </div>
-      <div className="flex flex-col items-stretch gap-2">
-        <button className="btn" onClick={() => setView("add-funds")}>
+      {/* The screen's two verbs, side by side; everything below is just
+       * somewhere to go. */}
+      <div className="mb-2 flex gap-2">
+        <button className="btn flex-1" onClick={() => setView("add-funds")}>
           Add funds
         </button>
-        <button className="btn btn-ghost" onClick={() => setView("cash-out")}>
+        <button className="btn btn-ghost flex-1" onClick={() => setView("cash-out")}>
           Cash out
         </button>
-        <button className="btn btn-ghost" onClick={() => setView("backup")}>
-          Back up account
-        </button>
-        <button className="btn btn-muted" onClick={() => setView("sign-in")}>
-          Use a different account
-        </button>
+      </div>
+      <div className="divide-y divide-white/8">
+        <NavRow label="Back up account" onClick={() => setView("backup")} />
+        <NavRow label="Use a different account" onClick={() => setView("sign-in")} />
+        <NavRow label="Remove from this device" onClick={() => setView("remove")} />
       </div>
     </>
   );
@@ -283,7 +299,7 @@ const CashOut = () => {
       setAmount("");
       void refreshBalance();
     } catch (e) {
-      setError(friendlyError(String((e as Error)?.message ?? e)));
+      setError(friendlyCatch(e));
     } finally {
       setBusy(false);
     }
@@ -382,53 +398,64 @@ const Backup = () => {
   );
 };
 
+const shortAddress = (a: string) => `${a.slice(0, 14)}…${a.slice(-6)}`;
+
 const SignIn = () => {
-  const matches = useAtomValue(matchesAtom);
   const [input, setInput] = useState("");
-  const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
-  // Switching forgets the current account's key, so any game it is sitting
-  // in becomes unplayable — worth a word before, not an apology after.
-  const ownedPk = ownedWallet()?.myPk;
-  const leaving = ownedPk ? unfinishedGamesOn(matches, ownedPk).length : 0;
+  // Switching is a pointer change: every account stays saved on this
+  // device, funds stay where they are, and games seated by any of them
+  // stay playable — so nothing here needs a warning or a confirmation.
+  const accounts = listAccounts();
+  const others = accounts.filter((a) => !a.active);
 
-  const submit = async () => {
+  const switchTo = (phrase: string) => {
+    setNote(null);
+    try {
+      // adoptAccount reloads the page; false = already the active one.
+      if (!adoptAccount(phrase)) setNote("You're already using that account.");
+    } catch (e) {
+      setNote(friendlyCatch(e));
+    }
+  };
+
+  const submit = () => {
     setNote(null);
     let phrase: string;
     try {
       phrase = parsePhrase(input);
     } catch (e) {
-      setNote(friendlyError(String((e as Error)?.message ?? e)));
+      setNote(friendlyCatch(e));
       return;
     }
-    if (
-      leaving &&
-      !(await askConfirm({
-        title: `You have ${leaving} unfinished game${leaving === 1 ? "" : "s"}`,
-        body:
-          "Switching accounts means you can't play them out, and your opponent can claim the pot " +
-          "once your clock runs out.",
-        confirm: "Switch anyway",
-        danger: true,
-      }))
-    )
-      return;
-    setBusy(true);
-    // switchAccount reloads the page on success; false = already active.
-    switchAccount(phrase)
-      .then((switched) => {
-        if (!switched) setNote("You're already using that account.");
-      })
-      .catch((e) => setNote(friendlyError(String((e as Error)?.message ?? e))))
-      .finally(() => setBusy(false));
+    switchTo(phrase);
   };
 
   return (
     <>
+      {others.length > 0 && (
+        <>
+          <p className="mb-2 text-sm text-dim">Accounts saved on this device — pick one:</p>
+          <div className="mb-4 flex flex-col items-stretch gap-1.5">
+            {others.map((a) => (
+              <button
+                key={a.address}
+                className="btn btn-ghost font-mono text-sm"
+                title={a.address}
+                onClick={() => switchTo(a.phrase)}
+              >
+                {shortAddress(a.address)}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       <p className="mb-3 text-sm text-dim">
-        Paste the recovery phrase (12 or 24 words) of the account you want to use. Any balance left
-        on this one moves over before the switch.
+        {others.length > 0 ? "Or paste" : "Paste"} the recovery phrase (12 or 24 words) of the
+        account you want to use.
+        {accounts.length > 0 &&
+          " The account you're using now stays saved here — switch back any time."}
       </p>
       <textarea
         className="input mb-2 h-20 resize-none"
@@ -437,9 +464,72 @@ const SignIn = () => {
         onChange={(e) => setInput(e.target.value)}
       />
       {note && <p className="mb-2 text-sm text-red">{note}</p>}
-      <button className="btn" disabled={busy || !input.trim()} onClick={() => void submit()}>
-        {busy ? "Moving your balance…" : "Sign in"}
+      <button className="btn" disabled={!input.trim()} onClick={submit}>
+        Sign in
       </button>
+    </>
+  );
+};
+
+/** The panel's one destructive act: this device forgets the active
+ * account's phrase. The account still exists wherever the phrase does, so
+ * the gate is holding another copy — a checkbox, with Back up alongside for
+ * anyone who skipped it — rather than a retype ceremony. */
+const Remove = ({ setView }: { setView: (v: AccountView) => void }) => {
+  const matches = useAtomValue(matchesAtom);
+  const [confirmed, setConfirmed] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
+  const account = activeAccount();
+  if (!account) return null; // guests have nothing to remove
+  // Forgetting the key mid-game turns that seat into a spectator view while
+  // its move timer keeps running — worth its own warning, not a surprise.
+  const open = unfinishedGamesOn(matches, phraseWallet(account.phrase).myPk).length;
+
+  const remove = () => {
+    setNote(null);
+    setBusy(true);
+    try {
+      forgetAccount(account.phrase); // reloads the page
+    } catch (e) {
+      setNote(friendlyCatch(e));
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <p className="mb-3 text-sm text-dim">
+        This device will forget the recovery phrase of{" "}
+        <span className="font-mono text-ink">{shortAddress(account.address)}</span>. The account
+        itself isn't deleted — signing in with the phrase brings it back, balance and all — but
+        nobody can restore a lost phrase. If your only copy is on this device, the balance is gone
+        with it.
+      </p>
+      {open > 0 && (
+        <p className="mb-3 text-sm text-red">
+          This account is still seated in{" "}
+          {open === 1 ? "an unfinished game" : `${open} unfinished games`} — after removal this
+          device can't play {open === 1 ? "it" : "them"} out, and the move timers keep running.
+        </p>
+      )}
+      <label className="mb-3 flex cursor-pointer items-center gap-2 text-sm">
+        <input
+          type="checkbox"
+          checked={confirmed}
+          onChange={(e) => setConfirmed(e.target.checked)}
+        />
+        My recovery phrase is saved somewhere else
+      </label>
+      {note && <p className="mb-2 text-sm text-red">{note}</p>}
+      <div className="flex flex-wrap gap-2">
+        <button className="btn btn-danger" disabled={!confirmed || busy} onClick={remove}>
+          {busy ? "Removing…" : "Remove"}
+        </button>
+        <button className="btn btn-ghost" onClick={() => setView("backup")}>
+          Back up first
+        </button>
+      </div>
     </>
   );
 };

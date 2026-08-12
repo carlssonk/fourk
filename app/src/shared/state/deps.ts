@@ -3,10 +3,9 @@
  *
  * ChainOps owns the connection: `connect()` is the explicit "Connecting to
  * the Kaspa network" step, and every other call resolves it internally — no
- * RpcClient appears in the interface. AccountOps carries the account store,
- * including `adoptAccount`'s page reload, so a test can observe the adoption
- * instead of suffering it. Two adapters make the seam real: the covenant
- * facade bound to the live RPC here, and in-memory fakes in the tests.
+ * RpcClient appears in the interface. AccountOps answers which key signs
+ * what. Two adapters make the seam real: the covenant facade bound to the
+ * live RPC here, and in-memory fakes in the tests.
  */
 
 import * as cov from "../lib/covenant";
@@ -14,16 +13,7 @@ import { ensureFunds } from "../lib/dispenser";
 import type { Match, PlayerProfile } from "../lib/match";
 import type { GameModeKey } from "../modes/types";
 import { getRpc } from "./rpc";
-import {
-  adoptAccount,
-  assertStorageWritable,
-  hasOwnedAccount,
-  matchWallet,
-  ownedWallet,
-  phraseWallet,
-  signingWallet,
-  type Wallet,
-} from "./wallet";
+import { hasOwnedAccount, matchWallet, signingWallet, type Wallet } from "./wallet";
 import type { MatchTiming, PrivateKey } from "../lib/covenant";
 
 export interface ChainOps {
@@ -41,20 +31,12 @@ export interface ChainOps {
   ): Promise<Match>;
   joinMatch(key: PrivateKey, invite: Match, profile: PlayerProfile): Promise<Match>;
   assertJoinableDeadline(invite: Match): Promise<void>;
-  walletBalance(key: PrivateKey): Promise<bigint>;
-  /** Move `amount` (or everything) from one key's address to another's. */
-  sendTo(from: PrivateKey, to: PrivateKey, amount: bigint | "all"): Promise<void>;
 }
 
 export interface AccountOps {
   hasOwnedAccount(): boolean;
-  ownedWallet(): Wallet | undefined;
-  phraseWallet(phrase: string): Wallet;
   signingWallet(opts: { staked?: boolean }): Wallet;
   matchWallet(m: Match): Wallet | undefined;
-  assertStorageWritable(): void;
-  /** Persists the phrase and reloads the page. */
-  adoptAccount(phrase: string): boolean;
 }
 
 export interface Deps {
@@ -81,22 +63,12 @@ export const realChain: ChainOps = {
   async assertJoinableDeadline(invite) {
     await cov.assertJoinableDeadline(await getRpc(), invite);
   },
-  async walletBalance(key) {
-    return cov.walletBalance(await getRpc(), cov.walletAddress(key));
-  },
-  async sendTo(from, to, amount) {
-    await cov.sendTo(await getRpc(), from, cov.walletAddress(to), amount);
-  },
 };
 
 export const realAccount: AccountOps = {
   hasOwnedAccount,
-  ownedWallet,
-  phraseWallet,
   signingWallet,
   matchWallet,
-  assertStorageWritable,
-  adoptAccount,
 };
 
 export const realDeps: Deps = { chain: realChain, account: realAccount };

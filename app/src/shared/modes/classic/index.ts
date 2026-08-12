@@ -8,7 +8,7 @@ export const classicMode: GameMode = {
   meta: {
     key: "classic",
     label: "Classic",
-    blurb: "Traditional turns: players alternate dropping discs.",
+    blurb: "Traditional turns, players alternate dropping discs.",
     inviteBlurb: "Connect four discs in a row to win — you play ",
     moveNoun: "move",
   },

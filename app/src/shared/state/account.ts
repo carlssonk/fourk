@@ -13,6 +13,9 @@ export type AccountView =
   /** The freshly generated phrase, and nothing else, until the player
    * confirms they've written it down — confirming is what creates the
    * account. */
-  | "new-phrase";
+  | "new-phrase"
+  /** This device forgets the active account's phrase — the one act in the
+   * panel that can cost money if the player holds no other copy. */
+  | "remove";
 
 export const accountPanelAtom = atom<AccountView | null>(null);

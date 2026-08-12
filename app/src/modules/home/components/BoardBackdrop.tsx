@@ -2,16 +2,17 @@ import { useEffect, useRef, useState } from "react";
 import { KASPA_K_PATH, KASPA_RING_PATH } from "@shared/lib/kaspaMark";
 import { useChainPulse } from "../hooks";
 
-/** How a freshly mined disc arrives: falling with a bounce, or popping in
- * like a bubble. A standing preference — cycled by the little switcher in
- * the corner, remembered like the other fourk.* settings. Each disc keeps
- * the mode it spawned under, so switching mid-flight never rewinds
- * anyone. */
-type BackdropMode = "drops" | "bubbles";
-const MODES: readonly BackdropMode[] = ["drops", "bubbles"];
+/** How a freshly mined disc arrives: falling with a bounce, sinking at a
+ * steady drift like digital rain, or popping in like a bubble. A standing
+ * preference — cycled by the little switcher in the corner, remembered like
+ * the other fourk.* settings. Each disc keeps the mode it spawned under, so
+ * switching mid-flight never rewinds anyone. */
+type BackdropMode = "drops" | "rain" | "bubbles";
+const MODES: readonly BackdropMode[] = ["drops", "rain", "bubbles"];
 const MODE_KEY = "fourk.backdrop";
 const MODE_LABELS: Record<BackdropMode, string> = {
   drops: "discs drop in",
+  rain: "discs rain down",
   bubbles: "discs pop in",
 };
 
@@ -39,6 +40,11 @@ const GRAVITY = 4000;
 
 /** Restitution variants, deadest to liveliest. */
 const BOUNCE_E = [0.12, 0.18, 0.24, 0.3] as const;
+
+/** Rain mode's constant fall, px/s — slow enough that a full-viewport
+ * descent takes several seconds, so the chain's ~10 discs/s pile up as
+ * many columns falling at once. */
+const RAIN_SPEED = 150;
 
 /** Bubble pop length, seconds. */
 const POP_S = 0.4;
@@ -218,6 +224,10 @@ export const BoardBackdrop = () => {
             flying = true;
           }
           ctx.drawImage(img, x, y + off, DISC, DISC);
+        } else if (d.mode === "rain" && t < d.drop / RAIN_SPEED) {
+          // Constant rate, no impact: the disc simply arrives.
+          flying = true;
+          ctx.drawImage(img, x, y + RAIN_SPEED * t - d.drop, DISC, DISC);
         } else if (d.mode === "bubbles" && t < POP_S) {
           // Inflating in place: the pop is a scale, not a translation.
           const s = Math.max(0, easeOutBack(t / POP_S));

@@ -28,7 +28,8 @@ function load(): PlayerProfile {
   } catch {
     /* absent or corrupt — start fresh */
   }
-  // A face from day one; the empty name is what forces the setup prompt.
+  // A face from day one; the name stays empty until first submit, where an
+  // untouched field gets a generated one (PlayerSetup).
   return { name: "", avatar: genesToCode(randomGenes()) };
 }
 

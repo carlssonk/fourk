@@ -13,6 +13,11 @@ interface Props {
   /** Escape and a click beside the card. Leave it off for a dialog that has
    * to be answered rather than waved away. */
   onDismiss?: () => void;
+  /** A ‹ in the header: step back inside the dialog without closing it.
+   * Navigation lives up here so it never sits in the body dressed like one
+   * of the screen's own actions. Standard header only — headline dialogs
+   * are verdicts, they have nowhere to go back to. */
+  onBack?: () => void;
   /** A near-opaque backdrop for dialogs with a secret on screen (recovery
    * phrase); the default backdrop stays light enough to keep the page in
    * view. */
@@ -49,6 +54,7 @@ export const Dialog = ({
   tone = "accent",
   headline = false,
   onDismiss,
+  onBack,
   shroud = false,
   width = "max-w-110",
   className = "",
@@ -136,14 +142,26 @@ export const Dialog = ({
         <div ref={inner}>
           <div
             className={`dlg-head ${
-              headline
-                ? "px-6 py-6 text-center"
-                : "flex items-center justify-between gap-3 px-6 py-4"
+              headline ? "px-5 py-5 text-center" : "flex items-center gap-2 px-5 py-3.5"
             }`}
           >
+            {!headline && onBack && (
+              <button
+                type="button"
+                aria-label="Back"
+                onClick={onBack}
+                className="-ml-1.5 cursor-pointer rounded-md px-1 py-0.5 text-dim transition-colors hover:bg-white/8 hover:text-ink"
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+                  <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
+                </svg>
+              </button>
+            )}
             <h2
               className={
-                headline ? `text-3xl font-bold ${TONE_TEXT[tone]}` : "font-semibold text-ink"
+                headline
+                  ? `text-3xl font-bold ${TONE_TEXT[tone]}`
+                  : "flex-1 font-semibold text-ink"
               }
             >
               {title}
@@ -161,7 +179,7 @@ export const Dialog = ({
               </button>
             )}
           </div>
-          <div className={`px-6 py-5 ${className}`}>{children}</div>
+          <div className={`px-5 py-4 ${className}`}>{children}</div>
         </div>
       </div>
     </dialog>

@@ -3,13 +3,25 @@ import { Dialog } from "@shared/components/Dialog";
 /** What this site is, for the player who wants to know what's under it. */
 export const AboutDialog = ({ onDismiss }: { onDismiss: () => void }) => (
   <Dialog
-    title="About fourk"
+    title="About fourk.io"
     onDismiss={onDismiss}
     width="max-w-130"
     className="space-y-3 text-left"
   >
     <p className="text-sm text-dim">
-      Fourk is Connect Four played on{" "}
+      <b>fourk.io</b> is free online Connect Four. You can just play, or stake{" "}
+      <a
+        href="https://www.google.com/finance/beta/quote/KAS-USD"
+        target="_blank"
+        rel="noreferrer"
+        className="font-medium text-ink underline"
+      >
+        $KAS
+      </a>{" "}
+      on a match. The winner takes the pot.
+    </p>
+    <p className="text-sm text-dim">
+      The game runs on{" "}
       <a
         href="https://kaspa.org"
         target="_blank"
@@ -18,27 +30,20 @@ export const AboutDialog = ({ onDismiss }: { onDismiss: () => void }) => (
       >
         Kaspa
       </a>
-      , a real-time, decentralized proof-of-work blockDAG. Each match is a small contract on the
-      chain: every move is a transaction, and the chain itself enforces the rules. Whose turn it is,
-      where a disc can land, who takes the pot: none of it can be cheated, not even by us.
+      . Every match is a small contract on the chain and every move is a transaction, which means
+      the chain itself enforces the rules: whose turn it is, where a disc can land, who gets the
+      pot. Nobody can cheat, including us.
     </p>
     <p className="text-sm text-dim">
-      There is no server behind this. The site is static files, your key is created and kept in your
-      browser, and the players' browsers talk only to the Kaspa network. Games are shared as invite
-      links.
+      There's no server behind it. The site is just static files, your key is generated and stored
+      in your browser, and both players' browsers talk directly to the Kaspa network. To start a
+      game you send someone an invite link.
     </p>
     <p className="text-sm text-dim">
-      Free games cost nothing and fund themselves. With an account you can stake KAS on a match
-      instead: the pot sits locked in the contract while you play and pays out to the winner. For
-      now everything runs on Kaspa's testnet, so the money is test money.
+      While we're in beta, everything runs on Kaspa's testnet, so any stakes are test money.
     </p>
     <p className="text-sm text-dim">
-      Two ways to play: <b className="font-medium text-ink">Classic</b> is the usual alternating
-      turns. <b className="font-medium text-ink">Fourk</b> is simultaneous: both players pick a
-      column in secret, then the discs drop together.
-    </p>
-    <p className="text-sm text-dim">
-      The whole thing is open source:{" "}
+      The code is open source at{" "}
       <a
         href="https://github.com/carlssonk/fourk"
         target="_blank"
@@ -47,6 +52,10 @@ export const AboutDialog = ({ onDismiss }: { onDismiss: () => void }) => (
       >
         github.com/carlssonk/fourk
       </a>
+      .
+    </p>
+    <p className="ml-auto w-fit text-xs text-dim">
+      Version: <span className="font-mono">{__COMMIT_HASH__}</span>
     </p>
   </Dialog>
 );

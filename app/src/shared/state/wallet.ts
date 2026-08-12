@@ -12,11 +12,11 @@
  * what stops dispenser float from funding a wager or leaving as a cash-out.
  *
  * An owned account IS its recovery phrase — the key is derived on use,
- * never stored — so there is exactly one secret to write down. Switching
- * accounts sweeps the old key's balance across and forgets it (see
- * switchAccount in state/actions.ts); nothing accumulates a drawer of
- * retired private keys. The guest key never changes: free play keeps using
- * it forever.
+ * never stored — so each account is exactly one secret to write down. Every
+ * account this browser has created or been given stays in the stored list;
+ * switching only changes which one is active. Funds never move on a switch,
+ * and a game seated by any stored account stays playable (see matchWallet).
+ * The guest key never changes: free play keeps using it forever.
  */
 
 import type { PrivateKey } from "kaspa-wasm";
@@ -39,9 +39,11 @@ interface OwnedAccount {
 
 interface StoredAccount {
   /** Shape marker: anything else is treated as absent and starts fresh. */
-  v: 2;
+  v: 3;
   guest: string;
-  owned?: OwnedAccount;
+  /** Every account this browser knows, most recently used first — owned[0]
+   * is the active one. */
+  owned: OwnedAccount[];
 }
 
 let stored: StoredAccount | undefined;
@@ -114,16 +116,26 @@ function freshGuestKey(): string {
   }
 }
 
+/** Phrases salvaged from an `owned` field in any shape this app has ever
+ * written: the v3 list, or the single v2 object. Order preserved, deduped. */
+function salvagePhrases(owned: any): string[] {
+  const entries = Array.isArray(owned) ? owned : [owned];
+  const phrases = entries
+    .map((o) => (typeof o?.phrase === "string" && o.phrase ? (o.phrase as string) : undefined))
+    .filter((p): p is string => !!p);
+  return [...new Set(phrases)];
+}
+
 /**
  * The stored account. Lazy because the wasm SDK must be initialized before
  * any key is constructed; re-persisted on read so a hand-edited or
  * partially-written record is normalized to the shape above exactly once.
  *
- * Salvage over destroy, field by field: `owned.phrase` is the only copy of
- * the player's money and survives whatever happened to the rest of the
+ * Salvage over destroy, field by field: the owned phrases are the only copy
+ * of the player's money and survive whatever happened to the rest of the
  * record (a corrupt guest, a version we don't know, half-written JSON), and
  * the guest seat likewise survives an unreadable `owned`. A record that
- * isn't pristine v2 is backed up before the normalized shape replaces it —
+ * isn't pristine v3 is backed up before the normalized shape replaces it —
  * this loader must never be the thing that loses a key.
  */
 function loadAccount(): StoredAccount {
@@ -144,15 +156,19 @@ function loadAccount(): StoredAccount {
   }
 
   const guestOk = isHex64(raw?.guest);
-  const phrase: string | undefined =
-    typeof raw?.owned?.phrase === "string" && raw.owned.phrase ? raw.owned.phrase : undefined;
-  const pristine = raw?.v === 2 && guestOk;
+  const phrases = salvagePhrases(raw?.owned);
+  const pristine =
+    raw?.v === 3 &&
+    guestOk &&
+    Array.isArray(raw.owned) &&
+    raw.owned.length === phrases.length &&
+    raw.owned.every((o: any, i: number) => o?.phrase === phrases[i]);
   if (!pristine && rawText) backupRecord(rawText);
 
   persist({
-    v: 2,
+    v: 3,
     guest: guestOk ? raw.guest : freshGuestKey(),
-    ...(phrase && { owned: { phrase } }),
+    owned: phrases.map((phrase) => ({ phrase })),
   });
   return stored!;
 }
@@ -162,14 +178,31 @@ export function freeWallet(): Wallet {
   return cachedWallet(loadAccount().guest);
 }
 
-/** The player's own account, once they've made or imported one. */
+/** The player's active account, once they've made or imported one. */
 export function ownedWallet(): Wallet | undefined {
-  const { owned } = loadAccount();
-  return owned ? phraseWallet(owned.phrase) : undefined;
+  const active = loadAccount().owned[0];
+  return active ? phraseWallet(active.phrase) : undefined;
 }
 
 export function hasOwnedAccount(): boolean {
-  return !!loadAccount().owned;
+  return loadAccount().owned.length > 0;
+}
+
+/** A stored account as the UI sees it: the derived address, plus the phrase
+ * so it can be handed straight back to adoptAccount to switch. */
+export interface AccountRow {
+  address: string;
+  phrase: string;
+}
+
+function accountRow(o: OwnedAccount): AccountRow {
+  return { address: walletAddress(phraseWallet(o.phrase).key), phrase: o.phrase };
+}
+
+/** Every account stored on this device, active first — what the sign-in
+ * screen lists. */
+export function listAccounts(): (AccountRow & { active: boolean })[] {
+  return loadAccount().owned.map((o, i) => ({ ...accountRow(o), active: i === 0 }));
 }
 
 /**
@@ -185,15 +218,17 @@ export function signingWallet(opts: { staked?: boolean }): Wallet {
 }
 
 /**
- * The wallet seated in this match: the owned key or the guest key.
+ * The wallet seated in this match: any stored account's key or the guest
+ * key — a game stays playable however many times the player has switched
+ * accounts since starting it.
  *
- * Undefined means neither holds a seat here: we're spectating, and there is
- * nothing to sign with. Callers must say which they mean rather than being
- * handed a key that can only produce a rejected transaction.
+ * Undefined means none of them holds a seat here: we're spectating, and
+ * there is nothing to sign with. Callers must say which they mean rather
+ * than being handed a key that can only produce a rejected transaction.
  */
 export function matchWallet(m: Match): Wallet | undefined {
   const account = loadAccount();
-  const candidates = [...(account.owned ? [phraseWallet(account.owned.phrase)] : []), freeWallet()];
+  const candidates = [...account.owned.map((o) => phraseWallet(o.phrase)), freeWallet()];
   for (const w of candidates) {
     if (w.myPk === m.state.p1 || w.myPk === m.state.p2) return w;
   }
@@ -201,40 +236,28 @@ export function matchWallet(m: Match): Wallet | undefined {
 }
 
 /** What the money UI shows — undefined while the player is still a guest. */
-export function activeAccount(): { address: string; phrase: string } | undefined {
-  const { owned } = loadAccount();
-  if (!owned) return undefined;
-  return { address: walletAddress(phraseWallet(owned.phrase).key), phrase: owned.phrase };
+export function activeAccount(): AccountRow | undefined {
+  const active = loadAccount().owned[0];
+  return active ? accountRow(active) : undefined;
 }
 
 /**
- * Adopt a phrase as the owned account, forgetting the previous one, and
- * reload — every consumer captured its wallet synchronously, so a reload is
- * the one reliable reset. Returns false (no reload) when it is already the
- * owned account.
+ * Make `phrase` the active account — adding it to the front of the stored
+ * list if it's new — and reload: every consumer captured its wallet
+ * synchronously, so a reload is the one reliable reset. Returns false (no
+ * reload) when it is already the active account.
  *
- * The only way an account is ever set, whether freshly generated or typed
- * in: there is no separate "create" that could leave a half-made account
- * behind, and no path that overwrites a funded one without moving its money
- * first. Whatever the old account held must already have been swept — this
- * drops the only reference to it — so go through `switchAccount`.
+ * The only way an account is ever set or switched, whether freshly
+ * generated or typed in: there is no separate "create" that could leave a
+ * half-made account behind. The previously active account stays in the
+ * list, funds and seats untouched — switching is a pointer change, not a
+ * move of money.
  */
-/** Refuse up front when this browser can't persist an account — before any
- * money moves toward a record that would evaporate on reload. */
-export function assertStorageWritable(): void {
-  try {
-    const probe = `${ACCOUNT_STORAGE}.probe`;
-    localStorage.setItem(probe, "1");
-    localStorage.removeItem(probe);
-  } catch {
-    throw new Error("ACCOUNT_NOT_SAVED: this browser is not persisting data");
-  }
-}
-
 export function adoptAccount(phrase: string): boolean {
   const account = loadAccount();
-  if (phrase === account.owned?.phrase) return false;
-  persist({ ...account, owned: { phrase } });
+  if (phrase === account.owned[0]?.phrase) return false;
+  const others = account.owned.filter((o) => o.phrase !== phrase);
+  persist({ ...account, owned: [{ phrase }, ...others] });
   // The reload below drops every in-memory reference, so the write MUST have
   // stuck — a storage-less browser (private mode, quota) would otherwise
   // come back up as a guest with the player believing they're signed in.
@@ -248,6 +271,50 @@ export function adoptAccount(phrase: string): boolean {
     throw new Error("ACCOUNT_NOT_SAVED: this browser is not persisting data");
   location.reload();
   return true;
+}
+
+/**
+ * Make this device forget `phrase`: it comes off the stored list (and out
+ * of any backup record), the next stored account — or the guest seat —
+ * takes over on the reload. The account itself is untouched: the phrase
+ * still opens it, from here or anywhere. The UI's job is making sure the
+ * player holds another copy before this runs; ours is making sure the
+ * forgetting actually happened — a browser that won't persist the removal
+ * gets an error, not a reload that quietly brings the account back.
+ * Returns false when the phrase isn't stored here.
+ */
+export function forgetAccount(phrase: string): boolean {
+  const account = loadAccount();
+  if (!account.owned.some((o) => o.phrase === phrase)) return false;
+  persist({ ...account, owned: account.owned.filter((o) => o.phrase !== phrase) });
+  scrubBackups(phrase);
+  let readBack: string | null = null;
+  try {
+    readBack = localStorage.getItem(ACCOUNT_STORAGE);
+  } catch {
+    /* no storage at all — then it never held the phrase past this session */
+  }
+  if (readBack?.includes(phrase))
+    throw new Error("ACCOUNT_NOT_REMOVED: this browser did not persist the removal");
+  location.reload();
+  return true;
+}
+
+/** Backup records exist so damage never costs a phrase (see backupRecord) —
+ * but a phrase the player asked this device to forget must not outlive the
+ * removal in one. Best effort: where enumeration fails, storage generally
+ * has too, and the main record's read-back check above still decides
+ * whether the removal counts. */
+function scrubBackups(phrase: string): void {
+  try {
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (!k?.startsWith(`${ACCOUNT_STORAGE}.bak.`)) continue;
+      if (localStorage.getItem(k)?.includes(phrase)) localStorage.removeItem(k);
+    }
+  } catch {
+    /* best effort only */
+  }
 }
 
 /** Cross-tab (called once from initStateLayer): another tab changed

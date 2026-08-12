@@ -16,10 +16,6 @@ export function friendlyError(message: string): string {
     return "Your balance can't cover that — add funds to your account and try again.";
   if (message.includes("BAD_SECRET"))
     return "That doesn't look like a recovery phrase — it should be 12 or 24 words. Check for typos and try again.";
-  if (message.includes("MOVE_FAILED"))
-    return "Couldn't move your balance to the other account — nothing has changed, so check your connection and try again.";
-  if (message.includes("MOVE_UNCERTAIN"))
-    return "The connection dropped while your balance was moving, so it may be on either account — you stay signed in here and nothing is lost. Wait a minute, then try the switch again.";
   if (message.includes("BAD_ADDRESS"))
     return "That doesn't look like a valid address — double-check it and try again.";
   if (message.includes("DEADLINE_TOO_CLOSE"))
@@ -28,11 +24,18 @@ export function friendlyError(message: string): string {
     return "That invite is for a different Kaspa network than this app is connected to.";
   if (message.includes("ACCOUNT_NOT_SAVED"))
     return "This browser isn't saving data (private mode?), so an account can't survive here — nothing was changed. Try a regular window.";
+  if (message.includes("ACCOUNT_NOT_REMOVED"))
+    return "This browser wouldn't save the change, so the account is still on this device — nothing was removed.";
   if (message.includes("cannot cover") || message.includes("no UTXOs"))
     return "Your balance can't quite cover that right now — free games top themselves up in a minute; staked games need added funds.";
   if (isStaleMatchError(message))
     return "That move crossed with another update — the board has refreshed, try again.";
   return message;
+}
+
+/** friendlyError for a caught value: unwrap the message, then translate. */
+export function friendlyCatch(e: unknown): string {
+  return friendlyError(String((e as Error)?.message ?? e));
 }
 
 /** The action was built on a game UTXO that no longer exists — it raced

@@ -15,6 +15,35 @@ import {
   rpcFailuresAtom,
 } from "@shared/state";
 
+/** Notice with an explicit × — the banner itself stays inert so the text
+ * can be selected (error messages get pasted into bug reports) and a stray
+ * click can't eat a message before it's read. */
+const Banner = ({
+  tone,
+  onDismiss,
+  children,
+}: {
+  tone: "red" | "accent";
+  onDismiss: () => void;
+  children: React.ReactNode;
+}) => (
+  <div
+    className={`mx-auto mb-4 flex max-w-175 items-start gap-3 rounded-lg border px-3.5 py-2.5 ${
+      tone === "red" ? "border-red bg-red/10" : "border-accent bg-accent/10"
+    }`}
+  >
+    <p className="flex-1">{children}</p>
+    <button
+      type="button"
+      aria-label="dismiss"
+      onClick={onDismiss}
+      className="cursor-pointer text-lg leading-none text-dim hover:text-ink"
+    >
+      ×
+    </button>
+  </div>
+);
+
 export default function App() {
   const current = useAtomValue(currentMatchAtom);
   const error = useAtomValue(errorAtom);
@@ -48,21 +77,15 @@ export default function App() {
           </div>
         )}
         {networkReset && (
-          <div
-            className="mx-auto mb-4 max-w-175 cursor-pointer rounded-lg border border-accent bg-accent/10 px-3.5 py-2.5"
-            onClick={clearNetworkReset}
-          >
+          <Banner tone="accent" onDismiss={clearNetworkReset}>
             The test network was reset — games and balances from before it are gone. New games work
             normally.
-          </div>
+          </Banner>
         )}
         {error && (
-          <div
-            className="mx-auto mb-4 max-w-175 cursor-pointer rounded-lg border border-red bg-red/10 px-3.5 py-2.5"
-            onClick={clearError}
-          >
+          <Banner tone="red" onDismiss={clearError}>
             {error}
-          </div>
+          </Banner>
         )}
         {connecting ? (
           <ConnectingScreen connecting={connecting} />

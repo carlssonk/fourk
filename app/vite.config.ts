@@ -65,7 +65,7 @@ export default defineConfig(({ mode, command }) => {
       },
     },
     define: {
-      __COMMIT_HASH__: JSON.stringify(getCommitHash()),
+      __COMMIT_HASH__: JSON.stringify(command === "serve" ? "local" : getCommitHash()),
     },
     esbuild: {
       // Strip debug-level console output from production bundles

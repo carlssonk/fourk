@@ -10,7 +10,6 @@ export {
   reportError,
   runAction,
   startConnecting,
-  switchAccount,
   takeSeat,
   type Connecting,
 } from "./actions";
@@ -53,8 +52,11 @@ export { initStateLayer } from "./init";
 export { realDeps, type AccountOps, type ChainOps, type Deps } from "./deps";
 export {
   activeAccount,
+  adoptAccount,
+  forgetAccount,
   freeWallet,
   hasOwnedAccount,
+  listAccounts,
   matchWallet,
   ownedWallet,
   phraseWallet,

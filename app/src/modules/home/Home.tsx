@@ -120,9 +120,12 @@ export const Home = () => {
        * one identity colour from title to primary button. */}
       <h2 className="mb-1.5 font-display text-4xl font-extrabold tracking-tight text-accent">
         fourk<span className="text-base font-medium tracking-normal text-dim"> .io</span>
+        <span className="ml-2 rounded-full border border-line px-2 py-0.5 align-middle text-xs font-medium tracking-normal text-dim">
+          beta
+        </span>
       </h2>
       <p className="text-sm text-dim">
-        connect four on Kaspa.{" "}
+        connect four on Kaspa •{" "}
         <button className="cursor-pointer underline" onClick={() => setAbout(true)}>
           about
         </button>

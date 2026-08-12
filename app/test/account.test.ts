@@ -32,6 +32,10 @@ const shim = {
     getItem: (k: string) => bag.get(k) ?? null,
     setItem: (k: string, v: string) => void bag.set(k, String(v)),
     removeItem: (k: string) => void bag.delete(k),
+    key: (i: number) => [...bag.keys()][i] ?? null,
+    get length() {
+      return bag.size;
+    },
   },
   location: { reload: () => void reloads++ },
   // wasm-bindgen's entropy shim treats a defined `window` as "this is a
@@ -172,8 +176,8 @@ describe("guest and owned keys", () => {
     expect(w.activeAccount()).toBeUndefined();
     expect(w.freeWallet().myPk).toMatch(/^[0-9a-f]{64}$/);
     const stored = readStored();
-    expect(stored.v).toBe(2);
-    expect(stored.owned).toBeUndefined();
+    expect(stored.v).toBe(3);
+    expect(stored.owned).toEqual([]);
     expect(stored.guest).toMatch(/^[0-9a-f]{64}$/);
   });
 
@@ -185,11 +189,19 @@ describe("guest and owned keys", () => {
 
   test("a stored account is its phrase; the key is derived, never kept", async () => {
     const w = await freshWallet({
-      "fourk.account": JSON.stringify({ v: 2, guest: GUEST, owned: { phrase: VECTOR_PHRASE } }),
+      "fourk.account": JSON.stringify({ v: 3, guest: GUEST, owned: [{ phrase: VECTOR_PHRASE }] }),
     });
     expect(w.ownedWallet()!.key.toString()).toBe(VECTOR_KEY);
     expect(w.activeAccount()?.phrase).toBe(VECTOR_PHRASE);
     expect(JSON.stringify(readStored())).not.toContain(VECTOR_KEY);
+  });
+
+  test("a v2 record (single owned object) migrates: the account survives as the list", async () => {
+    const w = await freshWallet({
+      "fourk.account": JSON.stringify({ v: 2, guest: GUEST, owned: { phrase: VECTOR_PHRASE } }),
+    });
+    expect(w.activeAccount()?.phrase).toBe(VECTOR_PHRASE);
+    expect(readStored()).toEqual({ v: 3, guest: GUEST, owned: [{ phrase: VECTOR_PHRASE }] });
   });
 
   test.each([
@@ -231,7 +243,7 @@ describe("guest and owned keys", () => {
     expect(readStored().guest).toBe(GUEST); // the valid guest is salvaged too
   });
 
-  test("a record that isn't pristine v2 is backed up before being replaced", async () => {
+  test("a record that isn't pristine v3 is backed up before being replaced", async () => {
     const strange = JSON.stringify({ v: 9, guest: GUEST, owned: { phrase: VECTOR_PHRASE } });
     await freshWallet({ "fourk.account": strange });
     expect(backups()).toContain(strange); // the original bytes, untouched
@@ -243,7 +255,7 @@ describe("guest and owned keys", () => {
 
   test("a pristine record is normalized in place, no backup noise", async () => {
     await freshWallet({
-      "fourk.account": JSON.stringify({ v: 2, guest: GUEST, owned: { phrase: VECTOR_PHRASE } }),
+      "fourk.account": JSON.stringify({ v: 3, guest: GUEST, owned: [{ phrase: VECTOR_PHRASE }] }),
     });
     expect(backups()).toEqual([]);
   });
@@ -266,13 +278,13 @@ describe("guest and owned keys", () => {
     expect(w.adoptAccount(VECTOR_PHRASE)).toBe(true);
     expect(w.hasOwnedAccount()).toBe(true);
     expect(readStored().guest).toBe(guestBefore);
-    expect(readStored().owned).toEqual({ phrase: VECTOR_PHRASE });
+    expect(readStored().owned).toEqual([{ phrase: VECTOR_PHRASE }]);
     expect(w.signingWallet({ staked: true }).myPk).toBe(w.ownedWallet()!.myPk);
     expect(w.signingWallet({}).myPk).toBe(w.freeWallet().myPk);
     expect(w.ownedWallet()!.myPk).not.toBe(w.freeWallet().myPk);
   });
 
-  test("adopting another phrase forgets the old account but never the guest", async () => {
+  test("adopting another phrase keeps the old account in the list — nothing is forgotten", async () => {
     const w = await freshWallet();
     const first = generatePhrase();
     w.adoptAccount(first);
@@ -284,10 +296,23 @@ describe("guest and owned keys", () => {
     expect(w.ownedWallet()!.key.toString()).toBe(VECTOR_KEY);
     expect(w.ownedWallet()!.myPk).not.toBe(firstOwned);
     expect(readStored().guest).toBe(guest);
-    // Nothing keeps a retired key around — the whole record is one phrase
-    // and one guest seat.
-    expect(Object.keys(readStored()).sort()).toEqual(["guest", "owned", "v"]);
-    expect(JSON.stringify(readStored())).not.toContain(first);
+    // The previous account stays behind the active one: switching must never
+    // be the thing that loses a key.
+    expect(readStored().owned).toEqual([{ phrase: VECTOR_PHRASE }, { phrase: first }]);
+  });
+
+  test("switching back to a stored account reorders the list, never duplicates", async () => {
+    const w = await freshWallet();
+    const first = generatePhrase();
+    w.adoptAccount(first);
+    w.adoptAccount(VECTOR_PHRASE);
+
+    expect(w.adoptAccount(first)).toBe(true);
+    expect(readStored().owned).toEqual([{ phrase: first }, { phrase: VECTOR_PHRASE }]);
+    const listed = w.listAccounts();
+    expect(listed.map((a) => a.active)).toEqual([true, false]);
+    expect(listed.map((a) => a.phrase)).toEqual([first, VECTOR_PHRASE]);
+    expect(listed.every((a) => a.address.includes(":"))).toBe(true);
   });
 
   test("adopting the account you already have is a no-op", async () => {
@@ -298,11 +323,65 @@ describe("guest and owned keys", () => {
     expect(reloads).toBe(0);
   });
 
-  test("both live seats stay signable; a stranger's game is spectated", async () => {
+  test("forgetting the active account hands the seat to the next stored one", async () => {
+    const w = await freshWallet();
+    const first = generatePhrase();
+    w.adoptAccount(first);
+    w.adoptAccount(VECTOR_PHRASE);
+    const guest = readStored().guest;
+    reloads = 0;
+
+    expect(w.forgetAccount(VECTOR_PHRASE)).toBe(true);
+    expect(reloads).toBe(1);
+    expect(readStored()).toEqual({ v: 3, guest, owned: [{ phrase: first }] });
+    // The promise this feature makes: the phrase is gone from this device.
+    expect([...bag.values()].join()).not.toContain(VECTOR_PHRASE);
+    expect(w.ownedWallet()!.myPk).toBe(w.phraseWallet(first).myPk);
+  });
+
+  test("forgetting the last account leaves a guest; the guest seat survives", async () => {
+    const w = await freshWallet({
+      "fourk.account": JSON.stringify({ v: 3, guest: GUEST, owned: [{ phrase: VECTOR_PHRASE }] }),
+    });
+    expect(w.forgetAccount(VECTOR_PHRASE)).toBe(true);
+    expect(w.hasOwnedAccount()).toBe(false);
+    expect(w.activeAccount()).toBeUndefined();
+    expect(readStored()).toEqual({ v: 3, guest: GUEST, owned: [] });
+    expect(w.freeWallet().key.toString()).toBe(GUEST);
+  });
+
+  test("forgetting a phrase this device doesn't hold changes nothing", async () => {
     const w = await freshWallet();
     w.adoptAccount(VECTOR_PHRASE);
+    reloads = 0;
+    expect(w.forgetAccount(generatePhrase())).toBe(false);
+    expect(reloads).toBe(0);
+    expect(readStored().owned).toEqual([{ phrase: VECTOR_PHRASE }]);
+  });
 
-    for (const pk of [w.ownedWallet()!.myPk, w.freeWallet().myPk])
+  test("forgetting scrubs the phrase from backup records too", async () => {
+    // A damaged record was backed up on load, phrase included (see THE
+    // INVARIANT above) — but a phrase this device was told to forget must
+    // not outlive the removal in a backup.
+    const strange = JSON.stringify({ v: 9, guest: GUEST, owned: { phrase: VECTOR_PHRASE } });
+    const w = await freshWallet({ "fourk.account": strange });
+    expect(backups().join()).toContain(VECTOR_PHRASE);
+
+    w.forgetAccount(VECTOR_PHRASE);
+    expect([...bag.values()].join()).not.toContain(VECTOR_PHRASE);
+    expect(readStored().guest).toBe(GUEST); // the guest seat is not collateral
+  });
+
+  test("every stored seat stays signable; a stranger's game is spectated", async () => {
+    const w = await freshWallet();
+    const first = generatePhrase();
+    w.adoptAccount(first);
+    const firstPk = w.ownedWallet()!.myPk;
+    w.adoptAccount(VECTOR_PHRASE);
+
+    // The active account, the guest seat — and the account switched away
+    // from: its games must not become spectator views.
+    for (const pk of [w.ownedWallet()!.myPk, w.freeWallet().myPk, firstPk])
       expect(w.matchWallet(seatedBy(pk))?.myPk).toBe(pk);
     expect(w.matchWallet(seatedBy("99".repeat(32)))).toBeUndefined();
   });

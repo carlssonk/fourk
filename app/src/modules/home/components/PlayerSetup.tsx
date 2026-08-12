@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAtomValue } from "jotai";
 import { Avatar } from "@shared/components/Avatar";
 import { KaspaStamp } from "@shared/components/KaspaStamp";
@@ -11,6 +11,7 @@ import {
   type Genes,
 } from "@shared/lib/avatar";
 import { MAX_NAME_LEN } from "@shared/lib/match";
+import { anonName } from "@shared/lib/names";
 import { discColorAtom, profileAtom, saveDiscColor, saveProfile } from "@shared/state";
 
 interface Props {
@@ -58,12 +59,15 @@ export const PlayerSetup = ({
   const [name, setName] = useState(profile.name);
   const [genes, setGenes] = useState<Genes>(() => codeToGenes(profile.avatar));
   const [batch, setBatch] = useState<Genes[]>(rollBatch);
-  /** Submit was pressed without a username: highlight the input until typed. */
-  const [nudged, setNudged] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  // A returning player's name is already filled — only an empty field is
+  // worth stealing focus for.
+  useEffect(() => {
+    if (!inputRef.current?.value) inputRef.current?.focus();
+  }, []);
+
   const code = genesToCode(genes);
-  const noName = !name.trim();
 
   const rerollGene = (k: GeneKey) => {
     setGenes({ ...genes, [k]: randomGenes()[k] });
@@ -91,7 +95,7 @@ export const PlayerSetup = ({
               <input
                 ref={inputRef}
                 id="username"
-                className={`input ${nudged && noName ? "border-red" : ""}`}
+                className="input"
                 maxLength={MAX_NAME_LEN}
                 value={name}
                 placeholder="Username"
@@ -183,27 +187,19 @@ export const PlayerSetup = ({
           </button>
         )}
         <button
-          className={`btn ${noName ? "btn-inert" : ""} px-8 py-2.5 text-lg`}
+          className="btn px-8 py-2.5 text-lg"
           disabled={busy}
-          aria-disabled={noName || undefined}
           onClick={() => {
-            if (noName) {
-              setNudged(true);
-              inputRef.current?.focus();
-              return;
-            }
-            saveProfile({ name, avatar: code });
+            // An empty field is fine — the player gets a generated name
+            // rather than a nag; it's saved, so it shows up editable next
+            // time instead of being rerolled per game.
+            saveProfile({ name: name.trim() || anonName(), avatar: code });
             onSubmit();
           }}
         >
           {actionLabel}
         </button>
       </div>
-      {noName && (
-        <p className={`mt-1.5 text-center text-xs ${nudged ? "text-red" : "text-dim"}`}>
-          pick a username first
-        </p>
-      )}
     </div>
   );
 };

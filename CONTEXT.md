@@ -14,10 +14,11 @@ conversation reveals it was fuzzy.
   step (it is what the "Connecting to the Kaspa network" UI step ticks on);
   no `RpcClient` appears in the interface. Distinct from **ModeChainSurface**.
 
-- **AccountOps** — the account-store surface behind the same seam:
-  `ownedWallet`, `phraseWallet`, `assertStorageWritable`, `adoptAccount`.
-  `adoptAccount` ends in a page reload; it crosses the seam precisely so a
-  test can observe the adoption instead of suffering the reload.
+- **AccountOps** — the account-store surface behind the same seam: which key
+  signs what (`hasOwnedAccount`, `signingWallet`, `matchWallet`). Account
+  creation and switching stay outside it: `adoptAccount` ends in a page
+  reload and is called straight from the account UI — no match action ever
+  adopts, so the seam doesn't carry it.
 
 - **ModeChainSurface** — a game mode's script/successor surface
   (`modes/types.ts`): state → lock script, successor enumeration, spend

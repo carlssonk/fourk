@@ -1,15 +1,15 @@
 /**
  * The match actions through the ChainOps/AccountOps seam (state/deps.ts) —
  * the money-safety branches that previously only ran against a live chain:
- * switchAccount's sweep outcomes, takeSeat's refuse-before-funds-move
- * guards, and createGame's guest/staked split. No node, no wasm: the fakes
- * are the seam's second adapter. Lives under app/ because the modules
- * resolve "kaspa-wasm" from the app workspace.
+ * takeSeat's refuse-before-funds-move guards and createGame's guest/staked
+ * split. No node, no wasm: the fakes are the seam's second adapter. Lives
+ * under app/ because the modules resolve "kaspa-wasm" from the app
+ * workspace.
  */
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { getDefaultStore } from "jotai";
-import { createGame, errorAtom, switchAccount, takeSeat } from "../src/shared/state/actions";
+import { createGame, errorAtom, takeSeat } from "../src/shared/state/actions";
 import { currentMatchAtom, matchesAtom } from "../src/shared/state/matches";
 import { stakeAtom } from "../src/shared/state/profile";
 import type { AccountOps, ChainOps, Deps } from "../src/shared/state/deps";
@@ -30,7 +30,6 @@ vi.stubGlobal("localStorage", {
 });
 
 const OWNED_PK = "11".repeat(32);
-const INCOMING_PK = "22".repeat(32);
 const GUEST_PK = "33".repeat(32);
 const HOST_PK = "44".repeat(32);
 
@@ -71,8 +70,6 @@ function fakeChain(over: Partial<ChainOps> = {}): ChainOps {
       value: invite.state.stake * 2n,
     })),
     assertJoinableDeadline: vi.fn(async () => {}),
-    walletBalance: vi.fn(async () => 0n),
-    sendTo: vi.fn(async () => {}),
     ...over,
   };
 }
@@ -81,12 +78,8 @@ function fakeAccount(over: Partial<AccountOps> = {}): AccountOps {
   const owned = walletOf("owned", OWNED_PK);
   return {
     hasOwnedAccount: () => true,
-    ownedWallet: () => owned,
-    phraseWallet: () => walletOf("incoming", INCOMING_PK),
     signingWallet: (opts) => (opts.staked ? owned : walletOf("guest", GUEST_PK)),
     matchWallet: () => undefined,
-    assertStorageWritable: () => {},
-    adoptAccount: vi.fn(() => true),
     ...over,
   };
 }
@@ -100,96 +93,6 @@ beforeEach(() => {
   store.set(currentMatchAtom, null);
   store.set(errorAtom, null);
   store.set(stakeAtom, 0n);
-});
-
-describe("switchAccount", () => {
-  test("sweeps the old balance, then adopts", async () => {
-    const chain = fakeChain({ walletBalance: vi.fn(async () => 10n * SOMPI_PER_KAS) });
-    const account = fakeAccount();
-    await expect(switchAccount("p", deps(chain, account))).resolves.toBe(true);
-    expect(chain.sendTo).toHaveBeenCalledTimes(1);
-    expect(account.adoptAccount).toHaveBeenCalledWith("p");
-  });
-
-  test("switching to the active account is a no-op", async () => {
-    const chain = fakeChain();
-    const account = fakeAccount({ phraseWallet: () => walletOf("owned", OWNED_PK) });
-    await expect(switchAccount("p", deps(chain, account))).resolves.toBe(false);
-    expect(chain.walletBalance).not.toHaveBeenCalled();
-    expect(account.adoptAccount).not.toHaveBeenCalled();
-  });
-
-  test("dust below the sweep floor is left behind, not swept at a loss", async () => {
-    const chain = fakeChain({ walletBalance: vi.fn(async () => 1n) });
-    const account = fakeAccount();
-    await expect(switchAccount("p", deps(chain, account))).resolves.toBe(true);
-    expect(chain.sendTo).not.toHaveBeenCalled();
-    expect(account.adoptAccount).toHaveBeenCalled();
-  });
-
-  test("unwritable storage refuses before any balance is read", async () => {
-    const chain = fakeChain();
-    const account = fakeAccount({
-      assertStorageWritable: () => {
-        throw new Error("ACCOUNT_NOT_SAVED: this browser is not persisting data");
-      },
-    });
-    await expect(switchAccount("p", deps(chain, account))).rejects.toThrow("ACCOUNT_NOT_SAVED");
-    expect(chain.walletBalance).not.toHaveBeenCalled();
-  });
-
-  test("a failed sweep (balance unmoved) aborts the switch: MOVE_FAILED", async () => {
-    vi.useFakeTimers();
-    const chain = fakeChain({
-      walletBalance: vi.fn(async () => 10n * SOMPI_PER_KAS),
-      sendTo: vi.fn(async () => {
-        throw new Error("socket dropped");
-      }),
-    });
-    const account = fakeAccount();
-    const outcome = switchAccount("p", deps(chain, account));
-    const assertion = expect(outcome).rejects.toThrow("MOVE_FAILED");
-    await vi.advanceTimersByTimeAsync(2_000);
-    await assertion;
-    expect(account.adoptAccount).not.toHaveBeenCalled();
-  });
-
-  test("an unreachable chain after a throw stays uncertain: MOVE_UNCERTAIN", async () => {
-    vi.useFakeTimers();
-    let calls = 0;
-    const chain = fakeChain({
-      walletBalance: vi.fn(async () => {
-        // First read (pre-sweep) answers; every re-check is unreachable.
-        if (calls++ === 0) return 10n * SOMPI_PER_KAS;
-        throw new Error("still unreachable");
-      }),
-      sendTo: vi.fn(async () => {
-        throw new Error("socket dropped");
-      }),
-    });
-    const account = fakeAccount();
-    const outcome = switchAccount("p", deps(chain, account));
-    const assertion = expect(outcome).rejects.toThrow("MOVE_UNCERTAIN");
-    await vi.advanceTimersByTimeAsync(6_000);
-    await assertion;
-    expect(account.adoptAccount).not.toHaveBeenCalled();
-  });
-
-  test("a throw with the balance dropped means the sweep landed — finish the switch", async () => {
-    vi.useFakeTimers();
-    let calls = 0;
-    const chain = fakeChain({
-      walletBalance: vi.fn(async () => (calls++ === 0 ? 10n * SOMPI_PER_KAS : 0n)),
-      sendTo: vi.fn(async () => {
-        throw new Error("response eaten");
-      }),
-    });
-    const account = fakeAccount();
-    const outcome = switchAccount("p", deps(chain, account));
-    await vi.advanceTimersByTimeAsync(2_000);
-    await expect(outcome).resolves.toBe(true);
-    expect(account.adoptAccount).toHaveBeenCalledWith("p");
-  });
 });
 
 describe("createGame", () => {
