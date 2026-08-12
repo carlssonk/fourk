@@ -574,6 +574,34 @@ export async function signedTerminal(
   return send(rpc, build, [[0, key]]);
 }
 
+/** Permissionless winner-take-all door: sudden_death fired on a PENDING win.
+ * Unlike the even split, the covenant pays the whole pot (minus a self-funded
+ * fee) to the pending winner in a single pinned output — so a vanished winner's
+ * pot is pushed to them by anyone at the deadline instead of being halved by a
+ * stalling loser. No signature: the payout address is fixed by the state, and
+ * the covenant enforces both the single output and its destination. */
+export async function pinnedWinner(
+  rpc: Rpc,
+  mode: ModeEngine,
+  match: Match,
+  fn: string,
+  winnerPkHex: string,
+  opts: { lockTime?: bigint } = {},
+): Promise<string> {
+  const { lockTime = 0n } = opts;
+  const gameUtxo = await fetchGameUtxo(rpc, mode, match);
+  if (!gameUtxo) throw new Error("game UTXO not found on chain — sync first");
+
+  const build: Build = (fee) => {
+    const inputs = [
+      gameInput(match, gameUtxo, mode.sigScript(match, fn, undefined, undefined, []), mode.covenantBudget, 0n),
+    ];
+    return makeTx(inputs, [p2pkOutput(winnerPkHex, match.value - fee)], "", lockTime);
+  };
+
+  return send(rpc, build, []);
+}
+
 /** Pinned-split door (claim_draw / sudden_death / claim_split / split_timeout
  * / dissolve): outputs 0/1 pinned to the players at half the pot each, fees
  * on a funding input. `signerPk` makes it a signed door (dissolve);
@@ -591,11 +619,12 @@ export async function pinnedSplit(
   const { sequence = 0n, lockTime = 0n, signerPk, awaitRefund = false } = opts;
   const gameUtxo = await fetchGameUtxo(rpc, mode, match);
   if (!gameUtxo) throw new Error("game UTXO not found on chain — sync first");
-  const funding = await pickFunding(rpc, key, FEE_HEADROOM);
-  const changeSpk = kaspa.payToAddressScript(new kaspa.Address(walletAddress(key)));
-  const half = match.value / 2n;
 
   const build: Build = (fee, sigs) => {
+    // Self-funded, single input: only the match UTXO is spent, and the covenant
+    // rejects any second input (that is the anti-aggregation guard). The fee is
+    // shaved from the pot and the rest splits equally — the covenant enforces
+    // outputs[0] == outputs[1] and floors each at (value - MAX_FEE) / 2.
     const inputs = [
       gameInput(
         match,
@@ -604,20 +633,15 @@ export async function pinnedSplit(
         mode.covenantBudget,
         sequence,
       ),
-      ...funding.map((f, i) => fundingInput(f, fullP2pkSigScript(sigs.get(i + 1)!))),
     ];
-    const outputs = withChange(
-      [p2pkOutput(match.state.p1, half), p2pkOutput(match.state.p2, half)],
-      changeSpk,
-      fundingTotal(funding) - fee,
-    );
+    const each = (match.value - fee) / 2n;
+    const outputs = [p2pkOutput(match.state.p1, each), p2pkOutput(match.state.p2, each)];
     return makeTx(inputs, outputs, "", lockTime);
   };
 
-  const signers: Array<[number, PrivateKey]> = [
-    ...(signerPk ? ([[0, key]] as Array<[number, PrivateKey]>) : []),
-    ...funding.map((_, i): [number, PrivateKey] => [i + 1, key]),
-  ];
+  const signers: Array<[number, PrivateKey]> = signerPk
+    ? ([[0, key]] as Array<[number, PrivateKey]>)
+    : [];
   const txid = await send(rpc, build, signers);
 
   if (awaitRefund) {

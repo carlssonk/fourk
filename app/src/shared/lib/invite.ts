@@ -4,7 +4,6 @@
  */
 
 import { decodeShareCode, encodeShareCode, loadMatches, type Match } from "./match";
-import { fresherOf } from "../modes/registry";
 
 /** Pull an invite out of a pasted link/code or a URL fragment. */
 export function parseInvite(raw: string): Match | null {
@@ -32,15 +31,20 @@ export function writeUrlHash(shown: Match | null): void {
 }
 
 /**
- * A #g= link to a game we already track reopens that game directly, at
- * whichever state is fresher (this is what makes a mid-game refresh
- * seamless). Pure read — safe in a StrictMode-double-invoked initializer.
+ * A #g= link to a game we already track reopens that game directly, at our
+ * TRACKED state — never at the link's. A #g= link is attacker-controlled input
+ * and its state only has to be genesis-reachable, not correspond to the live
+ * on-chain UTXO; trusting a link that merely reports higher progress would let
+ * an opponent overwrite our real match with a decoy state, pointing the watcher
+ * at a never-funded address and blinding us until we forfeit on the clock. Our
+ * stored match is what the chain-connected watcher keeps synced, so it is the
+ * only safe basis; the watcher advances it, not the link. Pure read — safe in a
+ * StrictMode-double-invoked initializer.
  */
 export function knownMatchFromUrl(): Match | null {
   const invite = parseInvite(window.location.hash);
   if (!invite) return null;
-  const known = loadMatches().find((m) => m.covenantId === invite.covenantId);
-  return known ? fresherOf(known, invite) : null;
+  return loadMatches().find((m) => m.covenantId === invite.covenantId) ?? null;
 }
 
 /** A #g= link to a game we don't track yet becomes a pending invite. */

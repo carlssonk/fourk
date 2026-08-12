@@ -81,8 +81,9 @@ fn sign_input(tx: &MutableTransaction<Transaction>, input_idx: usize, kp: &Keypa
 
 // -- commitments (mirrors src/simul/hash.ts) -------------------------------
 
-fn commitment(col: usize, salt: &[u8; 32]) -> [u8; 32] {
-    let mut preimage = Vec::with_capacity(33);
+fn commitment(player: usize, col: usize, salt: &[u8; 32]) -> [u8; 32] {
+    let mut preimage = Vec::with_capacity(34);
+    preimage.push(player as u8);
     preimage.push(col as u8);
     preimage.extend_from_slice(salt);
     let hash = blake2b_simd::Params::new()
@@ -155,7 +156,7 @@ fn full_board_simul() -> Simul {
 
 fn with_commit(s: &Simul, player: usize, col: usize) -> Simul {
     let mut next = s.clone();
-    let h = commitment(col, &salt(player, s.round));
+    let h = commitment(player, col, &salt(player, s.round));
     if player == 0 {
         next.commit1 = h;
     } else {
@@ -526,11 +527,11 @@ fn run_claim_split(
     run_simul_entry(entry, simul_state(active), 0, 0, payouts, None).map(|_| ())
 }
 
-fn run_simul_draw(active: &Simul, payouts: Vec<(ScriptPublicKey, u64)>) -> RunResult {
+fn run_simul_draw(active: &Simul, sequence: u64, payouts: Vec<(ScriptPublicKey, u64)>) -> RunResult {
     run_simul_entry(
         EntryCall::new("claim_draw"),
         simul_state(active),
-        0,
+        sequence,
         0,
         payouts,
         None,
@@ -585,13 +586,14 @@ fn run_simul_dissolve(
 
 fn run_simul_sudden_death(
     active: BTreeMap<String, ArtifactValue>,
+    sequence: u64,
     payouts: Vec<(ScriptPublicKey, u64)>,
     lock_time: u64,
 ) -> RunResult {
     run_simul_entry(
         EntryCall::new("sudden_death"),
         active,
-        0,
+        sequence,
         lock_time,
         payouts,
         None,
@@ -639,7 +641,7 @@ fn simul_single_input_commit_matches_build_output() {
         .expect("simul utxo");
 
     let signer = p1();
-    let hash = commitment(3, &salt(0, 0));
+    let hash = commitment(0, 3, &salt(0, 0));
     let captured = std::cell::RefCell::new(Vec::new());
     let entry = EntryCall::new("commit").args_with(|tx, idx| {
         let sig = sign_input(tx, idx, &signer);
@@ -957,7 +959,7 @@ fn simul_dissolve_rejects_bad_payouts_and_smuggling() {
 #[test]
 fn commit_either_order_advances() {
     let fresh = new_simul();
-    let h1 = commitment(3, &salt(0, 0));
+    let h1 = commitment(0, 3, &salt(0, 0));
     assert_pass(
         run_commit(
             &fresh,
@@ -969,7 +971,7 @@ fn commit_either_order_advances() {
         ),
         "p1 first",
     );
-    let h2 = commitment(5, &salt(1, 0));
+    let h2 = commitment(1, 5, &salt(1, 0));
     assert_pass(
         run_commit(
             &fresh,
@@ -996,10 +998,27 @@ fn commit_either_order_advances() {
 }
 
 #[test]
+fn commit_rejects_copying_the_opponent() {
+    // P2 mirrors P1's visible commitment value to echo whatever column P1
+    // reveals. The commit door rejects a hash equal to the opponent's slot, and
+    // the player byte in the preimage makes a copied hash unopenable regardless.
+    let fresh = new_simul();
+    let h1 = commitment(0, 3, &salt(0, 0));
+    let after_p1 = with_commit(&fresh, 0, 3);
+    assert_eq!(after_p1.commit1, h1);
+    let mut copied = after_p1.clone();
+    copied.commit2 = h1;
+    assert_fail(
+        run_commit(&after_p1, p2(), pk(&p2()), h1, simul_state(&copied), POT),
+        "p2 copies p1's commitment",
+    );
+}
+
+#[test]
 fn commit_rejects_wrong_phase_and_parties() {
     let fresh = new_simul();
     let one = with_commit(&fresh, 0, 3);
-    let h = commitment(4, &salt(0, 0));
+    let h = commitment(0, 4, &salt(0, 0));
     assert_fail(
         run_commit(&one, p1(), pk(&p1()), h, simul_state(&one), POT),
         "double commit",
@@ -1068,7 +1087,7 @@ fn commit_rejects_wrong_phase_and_parties() {
 #[test]
 fn commit_rejects_tampered_successors() {
     let fresh = new_simul();
-    let h = commitment(3, &salt(0, 0));
+    let h = commitment(0, 3, &salt(0, 0));
 
     // P1 signs but the successor loads P2's slot.
     let mut wrong_slot = fresh.clone();
@@ -1657,7 +1676,7 @@ fn a_pending_win_freezes_every_other_door_except_the_exits() {
             &pending,
             p2(),
             pk(&p2()),
-            commitment(5, &salt(1, pending.round)),
+            commitment(1, 5, &salt(1, pending.round)),
             simul_state(&with_commit(&pending, 1, 5)),
             POT,
         ),
@@ -1676,13 +1695,24 @@ fn a_pending_win_freezes_every_other_door_except_the_exits() {
     let mut full_pending = with_pending(&full_board_simul(), 1);
     full_pending.round = full_board_simul().round;
     assert_fail(
-        run_simul_draw(&full_pending, half_split()),
+        run_simul_draw(&full_pending, MOVE_TIMEOUT as u64, half_split()),
         "claim_draw racing a pending win on a full board",
     );
-    // ...but the liveness exit stays open.
+    // ...but the liveness exit stays open — and on a pending state it pays the
+    // winner in FULL once the challenge window elapses (a stalling loser at
+    // the deadline can no longer halve a decided game), never a split.
+    let win_pot = vec![(p2pk_spk(&pk(&p1())), POT)];
+    assert_fail(
+        run_simul_sudden_death(simul_state(&pending), 0, win_pot.clone(), DEADLINE as u64),
+        "sudden death before the challenge window",
+    );
+    assert_fail(
+        run_simul_sudden_death(simul_state(&pending), MOVE_TIMEOUT as u64, half_split(), DEADLINE as u64),
+        "sudden death splitting a pending win",
+    );
     assert_pass(
-        run_simul_sudden_death(simul_state(&pending), half_split(), DEADLINE as u64),
-        "sudden death on an abandoned pending win",
+        run_simul_sudden_death(simul_state(&pending), MOVE_TIMEOUT as u64, win_pot, DEADLINE as u64),
+        "sudden death sweeps the pending winner",
     );
 }
 
@@ -1808,17 +1838,32 @@ fn claim_split_rejects_wrong_witnesses_and_payouts() {
 
 #[test]
 fn simul_draw_splits_on_full_board() {
-    assert_pass(run_simul_draw(&full_board_simul(), half_split()), "draw");
-    assert_fail(run_simul_draw(&new_simul(), half_split()), "empty board");
+    assert_pass(
+        run_simul_draw(&full_board_simul(), MOVE_TIMEOUT as u64, half_split()),
+        "draw",
+    );
+    // A full board can hide a just-completed, unclaimed line, so the split
+    // waits out one move clock — the window in which that line's owner claims.
+    assert_fail(
+        run_simul_draw(&full_board_simul(), MOVE_TIMEOUT as u64 - 1, half_split()),
+        "draw one block early",
+    );
+    assert_fail(
+        run_simul_draw(&new_simul(), MOVE_TIMEOUT as u64, half_split()),
+        "empty board",
+    );
 
     // One column open is not a draw.
     let mut nearly = full_board_simul();
     nearly.board[3 * ROWS + 5] = 0;
-    assert_fail(run_simul_draw(&nearly, half_split()), "one slot open");
+    assert_fail(
+        run_simul_draw(&nearly, MOVE_TIMEOUT as u64, half_split()),
+        "one slot open",
+    );
 
     let p1_spk = p2pk_spk(&pk(&p1()));
     assert_fail(
-        run_simul_draw(&full_board_simul(), vec![(p1_spk.clone(), POT)]),
+        run_simul_draw(&full_board_simul(), MOVE_TIMEOUT as u64, vec![(p1_spk.clone(), POT)]),
         "whole pot to p1",
     );
 }
@@ -1926,19 +1971,25 @@ fn split_timeout_rejects_one_sided_states_and_bad_payouts() {
 // -- sudden_death ----------------------------------------------------------
 
 #[test]
-fn simul_sudden_death_matches_classic_shape() {
+fn simul_sudden_death_splits_when_nothing_pending() {
     let mid = committed_both(&new_simul(), 3, 5);
     assert_pass(
-        run_simul_sudden_death(simul_state(&mid), half_split(), DEADLINE as u64),
+        run_simul_sudden_death(simul_state(&mid), MOVE_TIMEOUT as u64, half_split(), DEADLINE as u64),
         "at the cap",
     );
+    // The cap now also waits out a move clock (so a board-filling resolve at
+    // the deadline cannot be split before its win becomes claimable).
     assert_fail(
-        run_simul_sudden_death(simul_state(&mid), half_split(), DEADLINE as u64 - 1),
+        run_simul_sudden_death(simul_state(&mid), MOVE_TIMEOUT as u64 - 1, half_split(), DEADLINE as u64),
+        "challenge window still open",
+    );
+    assert_fail(
+        run_simul_sudden_death(simul_state(&mid), MOVE_TIMEOUT as u64, half_split(), DEADLINE as u64 - 1),
         "one block early",
     );
     let uncapped = simul_state_full(&mid, pk(&p1()), pk(&p2()), MOVE_TIMEOUT, 0);
     assert_fail(
-        run_simul_sudden_death(uncapped, half_split(), u32::MAX as u64),
+        run_simul_sudden_death(uncapped, MOVE_TIMEOUT as u64, half_split(), u32::MAX as u64),
         "uncapped game",
     );
 }
@@ -2015,7 +2066,7 @@ fn compute_budget_probe() {
     // commit
     {
         let fresh = new_simul();
-        let h = commitment(3, &salt(0, 0));
+        let h = commitment(0, 3, &salt(0, 0));
         let signer = p1();
         let entry = EntryCall::new("commit")
             .args_with(move |tx, idx| args![sign_input(tx, idx, &signer), pk(&p1()), h]);

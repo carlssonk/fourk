@@ -63,8 +63,8 @@ function reachableSimul(seeds: RoundSeed[]): { s: SimulState; vanished: [number,
       vanished[(1 - priorityPlayer(s.round)) as 0 | 1]++;
     }
     const round = s.round;
-    s = commit(s, ctx(P1), commitmentOf(a, salt(0, round)));
-    s = commit(s, ctx(P2), commitmentOf(b, salt(1, round)));
+    s = commit(s, ctx(P1), commitmentOf(0, a, salt(0, round)));
+    s = commit(s, ctx(P2), commitmentOf(1, b, salt(1, round)));
     const first = (order % 2) as 0 | 1;
     const second = (1 - first) as 0 | 1;
     const cols: [number, number] = [a, b];
@@ -79,10 +79,10 @@ function intoRound(s: SimulState, stop: number, seed: number): SimulState {
   if (stop === 0 || isBoardFull(s.board)) return s;
   const open = legalSimulColumns(s);
   const a = open[seed % open.length]!;
-  s = commit(s, ctx(P1), commitmentOf(a, salt(0, s.round)));
+  s = commit(s, ctx(P1), commitmentOf(0, a, salt(0, s.round)));
   if (stop === 1) return s;
   const b = open[(seed + 1) % open.length]!;
-  s = commit(s, ctx(P2), commitmentOf(b, salt(1, s.round)));
+  s = commit(s, ctx(P2), commitmentOf(1, b, salt(1, s.round)));
   if (stop === 2) return s;
   return reveal(s, ctx(P1), a, salt(0, s.round));
 }
@@ -155,7 +155,7 @@ describe("invariants over random legal simul games", () => {
         fc.pre(!isBoardFull(s.board));
         const open = legalSimulColumns(s);
         const col = open[seed % open.length]!;
-        expect(() => commit(s, ctx(STRANGER), commitmentOf(col, salt(0, s.round)))).toThrow(
+        expect(() => commit(s, ctx(STRANGER), commitmentOf(0, col, salt(0, s.round)))).toThrow(
           "only a player may act",
         );
       }),
@@ -214,9 +214,9 @@ describe("liveness: no reachable state can strand the pot", () => {
       fc.property(arbSeeds, arbStop, fc.nat(6), (seeds, stop, seed) => {
         const s = intoRound(reachableSimul(seeds).s, stop, seed);
         const exits = [
-          () => claimDraw(s, ctx(STRANGER)),
+          () => claimDraw(s, ctx(STRANGER, s.moveTimeout)),
           () => splitTimeout(s, ctx(STRANGER, s.moveTimeout)),
-          () => suddenDeath(s, ctx(STRANGER, 0, s.deadline)),
+          () => suddenDeath(s, ctx(STRANGER, s.moveTimeout, s.deadline)),
         ];
         const payouts = exits.flatMap((exit) => {
           try {

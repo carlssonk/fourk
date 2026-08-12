@@ -179,6 +179,19 @@ describe("takeSeat", () => {
     expect(chain.connect).not.toHaveBeenCalled();
   });
 
+  test("a higher-progress invite never overrides our tracked match (blinding guard)", async () => {
+    const known = matchAt({ p2: GUEST_PK, moveCount: 4 });
+    store.set(matchesAtom, [known]);
+    const chain = fakeChain();
+    // A forged link for the same game, claiming it is much further along, must
+    // NOT overwrite the chain-tracked state: adopting a decoy would point the
+    // watcher at a never-funded address and blind us into a timeout forfeit.
+    const forged = matchAt({ p2: GUEST_PK, moveCount: 30 });
+    await takeSeat(forged, deps(chain, fakeAccount()));
+    expect(store.get(currentMatchAtom)?.state.moveCount).toBe(4);
+    expect(chain.connect).not.toHaveBeenCalled();
+  });
+
   test("a filled seat means spectating — no key resolved, no funds", async () => {
     const chain = fakeChain();
     const signingWallet = vi.fn(() => walletOf("guest", GUEST_PK));

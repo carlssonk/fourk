@@ -22,6 +22,7 @@ contract FourkSimul(
     int constant MIN_MOVE_TIMEOUT = 600;
     int constant MAX_MOVE_TIMEOUT = 8640000;
     int constant DEADLINE_LIMIT = 500000000000;
+    int constant MAX_FEE = 2000000;
 
     // :: state layouts
     struct LobbyState {
@@ -81,13 +82,15 @@ contract FourkSimul(
             require(this.age >= move_timeout);
         }
         require(checkSig(s, pk));
-        int half = tx.inputs[this.activeInputIndex].value / 2;
+        require(tx.inputs.length == 1);
+        require(tx.outputs.length == 2);
+        int half_floor = (tx.inputs[this.activeInputIndex].value - MAX_FEE) / 2;
         byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
         byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
-        require(tx.outputs[0].value == half);
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
-        require(tx.outputs[1].value == half);
+        require(tx.outputs[0].value == tx.outputs[1].value);
+        require(tx.outputs[0].value >= half_floor);
     }
 
     // :: leader entry (1:N)
@@ -112,10 +115,12 @@ contract FourkSimul(
         byte[32] next_c2 = commit2;
         if (pk == p1) {
             require(commit1 == zero32());
+            require(h != commit2);
             next_c1 = h;
         }
         if (pk != p1) {
             require(commit2 == zero32());
+            require(h != commit1);
             next_c2 = h;
         }
         State next_match = {
@@ -149,12 +154,14 @@ contract FourkSimul(
         require(reveal1 == 0 && reveal2 == 0);
         require(commit1 != zero32() && commit2 != zero32());
         require(pk == p1 || pk == p2);
+        int me = 0;
         byte[32] my_commit = commit1;
         if (pk == p2) {
+            me = 1;
             my_commit = commit2;
         }
         require(col >= 0 && col < COLS);
-        require(blake2b(byte[1](byte[1](col)) + salt) == my_commit);
+        require(blake2b(byte[1](byte[1](me)) + byte[1](byte[1](col)) + salt) == my_commit);
         int h = 0;
         for (i, 0, ROWS, ROWS) {
             if (OpBin2Num(board[col * ROWS + i]) != 0) {
@@ -219,7 +226,7 @@ contract FourkSimul(
         require(their_reveal != 0);
         require(my_commit != zero32());
         require(col >= 0 && col < COLS);
-        require(blake2b(byte[1](byte[1](col)) + salt) == my_commit);
+        require(blake2b(byte[1](byte[1](me)) + byte[1](byte[1](col)) + salt) == my_commit);
         int a = their_reveal - 1;
         int ha = 0;
         for (i, 0, ROWS, ROWS) {
@@ -390,13 +397,18 @@ contract FourkSimul(
             require(OpBin2Num(board[c * ROWS + r]) == 2);
         }
 
-        int half = tx.inputs[this.activeInputIndex].value / 2;
+        // Self-funded, single-input split (see MAX_FEE): one match UTXO in,
+        // an equal two-output split out, the fee taken from the pot. The
+        // single-input requirement is the anti-aggregation guard.
+        require(tx.inputs.length == 1);
+        require(tx.outputs.length == 2);
+        int half_floor = (tx.inputs[this.activeInputIndex].value - MAX_FEE) / 2;
         byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
         byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
-        require(tx.outputs[0].value == half);
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
-        require(tx.outputs[1].value == half);
+        require(tx.outputs[0].value == tx.outputs[1].value);
+        require(tx.outputs[0].value >= half_floor);
     }
 
     // :: leader entry (1:N)
@@ -412,13 +424,16 @@ contract FourkSimul(
             }
         }
         require(full == 1);
-        int half = tx.inputs[this.activeInputIndex].value / 2;
+        require(this.age >= move_timeout);
+        require(tx.inputs.length == 1);
+        require(tx.outputs.length == 2);
+        int half_floor = (tx.inputs[this.activeInputIndex].value - MAX_FEE) / 2;
         byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
         byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
-        require(tx.outputs[0].value == half);
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
-        require(tx.outputs[1].value == half);
+        require(tx.outputs[0].value == tx.outputs[1].value);
+        require(tx.outputs[0].value >= half_floor);
     }
 
     // :: leader entry (1:N)
@@ -479,13 +494,15 @@ contract FourkSimul(
         }
         require(c1 == c2);
         require(this.age >= move_timeout);
-        int half = tx.inputs[this.activeInputIndex].value / 2;
+        require(tx.inputs.length == 1);
+        require(tx.outputs.length == 2);
+        int half_floor = (tx.inputs[this.activeInputIndex].value - MAX_FEE) / 2;
         byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
         byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
-        require(tx.outputs[0].value == half);
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
-        require(tx.outputs[1].value == half);
+        require(tx.outputs[0].value == tx.outputs[1].value);
+        require(tx.outputs[0].value >= half_floor);
     }
 
     // :: leader entry (1:N)
@@ -495,13 +512,27 @@ contract FourkSimul(
 
         require(deadline > 0);
         require(tx.time >= deadline);
-        int half = tx.inputs[this.activeInputIndex].value / 2;
-        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
-        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
-        require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
-        require(tx.outputs[0].value == half);
-        require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
-        require(tx.outputs[1].value == half);
+        require(this.age >= move_timeout);
+        require(tx.inputs.length == 1);
+        if (pending_win == 0) {
+            require(tx.outputs.length == 2);
+            int half_floor = (tx.inputs[this.activeInputIndex].value - MAX_FEE) / 2;
+            byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
+            byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+            require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
+            require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
+            require(tx.outputs[0].value == tx.outputs[1].value);
+            require(tx.outputs[0].value >= half_floor);
+        } else {
+            require(tx.outputs.length == 1);
+            pubkey winner_pk = p1;
+            if (pending_win == 2) {
+                winner_pk = p2;
+            }
+            byte[34] w_lock = new ScriptPubKeyP2PK(winner_pk);
+            require(tx.outputs[0].scriptPubKey == byte[](w_lock));
+            require(tx.outputs[0].value >= tx.inputs[this.activeInputIndex].value - MAX_FEE);
+        }
     }
 
     // :: leader entry (1:N)

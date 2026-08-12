@@ -15,6 +15,9 @@ import {
   updateMatch,
 } from "@shared/state";
 
+/** Consecutive traceless live-phase ticks before we offer a manual catch-up. */
+const DESYNC_TICKS = 5;
+
 /**
  * Everything that happens to a match without the player touching the screen:
  * an opponent joining, opposing transitions, and ending classification.
@@ -38,6 +41,12 @@ export function useMatchWatcher(match: Match) {
   // if a spend somehow predates it, the persistent checkpoint still covers
   // it on the fallback pass.
   const freshCp = useRef<string | null>(null);
+  // Consecutive live-phase ticks where the game UTXO is gone and NO spend can
+  // be traced. A blind-phase continuation always leaves a spend, so a run of
+  // pure nulls means our state no longer matches the chain — surface the
+  // catch-up import rather than watch a dead address forever. A threshold
+  // rides out transient misses (an in-flight block, an index race).
+  const desyncTicks = useRef(0);
 
   /** Trace the spend of the current game UTXO: cheap fresh-floor scan first,
    * the persistent checkpoint as the deep fallback. */
@@ -121,8 +130,11 @@ export function useMatchWatcher(match: Match) {
         const cp = await cov.chainCheckpoint(rpc);
         try {
           const { status, match: next } = await cov.syncMatch(rpc, match);
-          if (status === "advanced") updateMatch(next);
-          else if (status === "current") {
+          if (status === "advanced") {
+            desyncTicks.current = 0;
+            updateMatch(next);
+          } else if (status === "current") {
+            desyncTicks.current = 0;
             checkpoint.current = cp;
             saveCheckpoint(match.covenantId, cp);
           } else {
@@ -132,6 +144,7 @@ export function useMatchWatcher(match: Match) {
             const spend = await discover(rpc, match);
             const adopted = spend && (await cov.adoptSpend(rpc, match, spend).catch(() => null));
             if (adopted) {
+              desyncTicks.current = 0;
               updateMatch(adopted);
               return;
             }
@@ -139,13 +152,22 @@ export function useMatchWatcher(match: Match) {
               finish(RESET_RESULT);
               return;
             }
-            // A continuation spend whose adoption failed — or no spend at all
-            // where the mode says continuations can hide (blind phases, index
-            // races, an in-flight block) — must never be declared an ending.
-            // Skip the tick; the watcher retries.
             const mode = modeOf(match);
-            if (mode.classifySpend(spend) === "continuation") return;
-            finish(mode.describeEnd(spend, match, myPk), mode.finalSnapshot(spend, match));
+            if (spend) {
+              // A spend we found but couldn't adopt is a blind-phase
+              // continuation (its successor embeds a secret) — never an ending.
+              desyncTicks.current = 0;
+              if (mode.classifySpend(spend) === "continuation") return;
+              finish(mode.describeEnd(spend, match, myPk), mode.finalSnapshot(spend, match));
+              return;
+            }
+            // No spend at all: the game UTXO is gone and nothing we can trace
+            // spent it. A live blind phase always leaves a spend, so a run of
+            // pure nulls means our tracked state no longer matches the chain (a
+            // stale or forged import, or a checkpoint the node has pruned past)
+            // — not a mid-round continuation. After a few tolerant ticks, offer
+            // the catch-up import instead of watching a dead address in silence.
+            if (++desyncTicks.current >= DESYNC_TICKS) setNeedManualImport(true);
           }
         } finally {
           freshCp.current = cp;

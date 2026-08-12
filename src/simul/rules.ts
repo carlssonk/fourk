@@ -140,6 +140,11 @@ export function commit(s: SimulState, ctx: Ctx, h: Commitment): SimulState {
   const player = playerOf(s, ctx.signer);
   req(commitOf(s, player) === ZERO_HASH, "already committed");
   req(isCommitment(h) && h !== ZERO_HASH, "invalid commitment");
+  // Reject a commitment identical to the opponent's. The preimage's player
+  // byte already makes a copied hash unopenable, so this is defence-in-depth
+  // — but it turns the copy attempt into a clean rejection instead of a
+  // self-inflicted forfeit, and costs one comparison.
+  req(h !== commitOf(s, (1 - player) as 0 | 1), "commitment must differ from opponent's");
   const next = { ...s, board: s.board.slice() };
   if (player === 0) next.commit1 = h;
   else next.commit2 = h;
@@ -218,7 +223,7 @@ export function applyResolve(s: SimulState, player: 0 | 1, col: number): SimulSt
 function checkReveal(s: SimulState, player: 0 | 1, col: number, salt: Uint8Array): void {
   req(isInt(col) && col >= 0 && col < COLS, "column out of range");
   req(salt.length === 32, "bad salt length");
-  req(commitmentOf(col, salt) === commitOf(s, player), "wrong column or salt");
+  req(commitmentOf(player, col, salt) === commitOf(s, player), "wrong column or salt");
   req(heightOf(s.board, col) < ROWS, "column full");
 }
 
@@ -329,13 +334,19 @@ export function claimSplit(s: SimulState, _ctx: Ctx, w1: LineWitness, w2: LineWi
  * has no move count): every column topped out. Commits are refused on a full
  * board, so no obligation can be pending here. Permissionless.
  */
-export function claimDraw(s: SimulState, _ctx: Ctx): Payout[] {
+export function claimDraw(s: SimulState, ctx: Ctx): Payout[] {
   req(!isSimulOpen(s), "match not started");
   // A pending win outranks the draw: this door is permissionless, and on a
   // full board it would otherwise race half the pot away from a winner
   // whose challenge window is still open.
   req(s.pendingWin === 0, "win claim pending");
   req(isBoardFull(s.board), "board not full");
+  // The covenant proves a line's PRESENCE but not its ABSENCE (no scan, by
+  // design), so a board-filling resolve that also completes a line leaves the
+  // win unclaimed here. Waiting out one move clock gives that win's owner the
+  // same window claimWin opens — long enough to flip the pot to themselves —
+  // before this permissionless split can settle an honest draw.
+  req(ctx.utxoAge >= s.moveTimeout, "draw must wait out the move clock");
   return [
     { to: s.p1, amount: s.stake },
     { to: s.p2, amount: s.stake },
@@ -397,6 +408,16 @@ export function suddenDeath(s: SimulState, ctx: Ctx): Payout[] {
   req(!isSimulOpen(s), "match not started");
   req(s.deadline > 0, "no game deadline set");
   req(ctx.txTime >= s.deadline, "game deadline not reached");
+  // The cap must not cut a challenge window short: waiting one move clock past
+  // the last transition keeps a board-filling resolve at the deadline from
+  // being split before its win can be claimed (trivially true for an abandoned
+  // game). When a win is already pending, pay that winner in full — the
+  // sweepWin outcome, made permissionless so a vanished winner is not halved.
+  req(ctx.utxoAge >= s.moveTimeout, "challenge window still open");
+  const winner = pendingWinner(s);
+  if (winner !== null) {
+    return [{ to: simulPubkeyOf(s, winner), amount: simulPot(s) }];
+  }
   return [
     { to: s.p1, amount: s.stake },
     { to: s.p2, amount: s.stake },

@@ -102,7 +102,7 @@ describe("dissolve", () => {
   });
 
   test("any commitment on the table closes the door", () => {
-    const s = commit(simulGame(), ctx(P1), commitmentOf(3, salt(0, 0)));
+    const s = commit(simulGame(), ctx(P1), commitmentOf(0, 3, salt(0, 0)));
     expect(() => dissolve(s, ctx(P1))).toThrow("game has begun");
     expect(() => dissolve(s, ctx(P2, TIMEOUT))).toThrow("game has begun");
   });
@@ -115,18 +115,18 @@ describe("dissolve", () => {
 
 describe("commit", () => {
   test("either order; slots are per-player", () => {
-    let s = commit(simulGame(), ctx(P2), commitmentOf(4, salt(1, 0)));
+    let s = commit(simulGame(), ctx(P2), commitmentOf(1, 4, salt(1, 0)));
     expect(s.commit2).not.toBe(ZERO_HASH);
     expect(s.commit1).toBe(ZERO_HASH);
     expect(roundPhase(s)).toBe("commit");
-    s = commit(s, ctx(P1), commitmentOf(3, salt(0, 0)));
+    s = commit(s, ctx(P1), commitmentOf(0, 3, salt(0, 0)));
     expect(roundPhase(s)).toBe("reveal");
   });
 
   test("double commit, stranger, zero and malformed hashes rejected", () => {
-    const s = commit(simulGame(), ctx(P1), commitmentOf(3, salt(0, 0)));
-    expect(() => commit(s, ctx(P1), commitmentOf(4, salt(0, 0)))).toThrow("already committed");
-    expect(() => commit(s, ctx(STRANGER), commitmentOf(0, salt(0, 0)))).toThrow(
+    const s = commit(simulGame(), ctx(P1), commitmentOf(0, 3, salt(0, 0)));
+    expect(() => commit(s, ctx(P1), commitmentOf(0, 4, salt(0, 0)))).toThrow("already committed");
+    expect(() => commit(s, ctx(STRANGER), commitmentOf(0, 0, salt(0, 0)))).toThrow(
       "only a player may act",
     );
     expect(() => commit(simulGame(), ctx(P1), ZERO_HASH)).toThrow("invalid commitment");
@@ -136,27 +136,26 @@ describe("commit", () => {
   test("closed after a reveal, refused on a full board, refused while open", () => {
     let s = commitBoth(simulGame(), 2, 5);
     s = reveal(s, ctx(P1), 2, salt(0, 0));
-    expect(() => commit(s, ctx(P2), commitmentOf(1, salt(1, 0)))).toThrow("commit phase is over");
+    expect(() => commit(s, ctx(P2), commitmentOf(1, 1, salt(1, 0)))).toThrow("commit phase is over");
     const full = { ...simulGame(), board: new Uint8Array(42).fill(1) };
-    expect(() => commit(full, ctx(P1), commitmentOf(0, salt(0, 0)))).toThrow(
+    expect(() => commit(full, ctx(P1), commitmentOf(0, 0, salt(0, 0)))).toThrow(
       "board full — claim the draw instead",
     );
-    expect(() => commit(openSimul(), ctx(P1), commitmentOf(0, salt(0, 0)))).toThrow(
+    expect(() => commit(openSimul(), ctx(P1), commitmentOf(0, 0, salt(0, 0)))).toThrow(
       "match not started",
     );
   });
 
-  test("DOCUMENTED EDGE: copying the opponent's hash is a blind collision, not an attack", () => {
-    // P2 mirrors P1's visible commitment byte-for-byte. Their reveal must
-    // then be P1's exact column AND salt — a same-column round they chose
-    // without knowing the column. The round resolves as a normal collision.
-    const h = commitmentOf(3, salt(0, 0));
-    let s = commit(simulGame(), ctx(P1), h);
-    s = commit(s, ctx(P2), h);
-    s = reveal(s, ctx(P1), 3, salt(0, 0));
-    s = resolve(s, ctx(P2), 3, salt(0, 0));
-    expect(s.board[cellIndex(3, 0)]).toBe(1); // round 0 priority: p1 lower
-    expect(s.board[cellIndex(3, 1)]).toBe(2);
+  test("copying the opponent's commitment is rejected outright", () => {
+    // P2 tries to mirror P1's visible commitment byte-for-byte so it can echo
+    // whatever column P1 reveals. Domain separation makes a copied hash
+    // unopenable (the preimage carries the committer's player byte), and the
+    // commit door rejects the duplicate on sight — the peek-and-echo attack
+    // never gets off the ground. A genuine same-COLUMN collision is unaffected:
+    // that uses each player's own (differing) salt, so the hashes differ.
+    const h = commitmentOf(0, 3, salt(0, 0));
+    const s = commit(simulGame(), ctx(P1), h);
+    expect(() => commit(s, ctx(P2), h)).toThrow("commitment must differ from opponent's");
   });
 });
 
@@ -174,7 +173,7 @@ describe("reveal and resolve", () => {
   });
 
   test("reveal needs both commitments; a second reveal must resolve", () => {
-    const one = commit(simulGame(), ctx(P1), commitmentOf(3, salt(0, 0)));
+    const one = commit(simulGame(), ctx(P1), commitmentOf(0, 3, salt(0, 0)));
     expect(() => reveal(one, ctx(P1), 3, salt(0, 0))).toThrow("commit phase not complete");
     let s = commitBoth(simulGame(), 3, 4);
     s = reveal(s, ctx(P1), 3, salt(0, 0));
@@ -275,7 +274,7 @@ describe("claim_win", () => {
 
   test("a pending win freezes the game: no round doors, no draw, no timeouts, no second claim", () => {
     const pending = claimWin(p1WinGame(), ctx(P1), { col: 0, row: 0, dir: 0 });
-    expect(() => commit(pending, ctx(P2), commitmentOf(5, salt(1, pending.round)))).toThrow(
+    expect(() => commit(pending, ctx(P2), commitmentOf(1, 5, salt(1, pending.round)))).toThrow(
       "win claim pending",
     );
     expect(() => claimTimeout(pending, ctx(P1, 1e6))).toThrow("win claim pending");
@@ -286,8 +285,15 @@ describe("claim_win", () => {
     expect(() => claimWin(pending, ctx(P1), { col: 0, row: 0, dir: 0 })).toThrow(
       "already pending",
     );
-    // suddenDeath stays legal — the liveness exit outranks the window.
-    expect(suddenDeath(pending, ctx(STRANGER, 0, pending.deadline))).toHaveLength(2);
+    // suddenDeath stays the permissionless liveness exit, but on a pending
+    // state it pays the winner in FULL and only once the challenge window has
+    // elapsed — so a loser who stalls a decided game to the deadline can no
+    // longer halve the winner's pot.
+    expect(() => suddenDeath(pending, ctx(STRANGER, 0, pending.deadline))).toThrow(
+      "challenge window still open",
+    );
+    const swept = suddenDeath(pending, ctx(STRANGER, pending.moveTimeout, pending.deadline));
+    expect(swept).toEqual([{ to: pending.p1, amount: 2n * STAKE }]);
   });
 
   test("only the owner: opponent and stranger are rejected on a real line", () => {
@@ -387,11 +393,14 @@ describe("draw", () => {
     for (let c = 0; c < 7; c++) for (let r = 0; r < 6; r++) full[cellIndex(c, r)] = ((c + r) % 2) + 1;
     expect(isBoardFull(full)).toBe(true);
     const s = { ...simulGame(), board: full };
-    expect(claimDraw(s, ctx(STRANGER))).toEqual([
+    // A full board can hide a just-completed, unclaimed line, so the draw waits
+    // out one move clock — the window in which that line's owner files claimWin.
+    expect(() => claimDraw(s, ctx(STRANGER))).toThrow("wait out the move clock");
+    expect(claimDraw(s, ctx(STRANGER, TIMEOUT))).toEqual([
       { to: P1, amount: STAKE },
       { to: P2, amount: STAKE },
     ]);
-    expect(() => claimDraw(simulGame(), ctx(P1))).toThrow("board not full");
+    expect(() => claimDraw(simulGame(), ctx(P1, TIMEOUT))).toThrow("board not full");
   });
 });
 
@@ -399,7 +408,7 @@ describe("claim_timeout — one-sided lateness", () => {
   test("lone committer claims once the clock lapses", () => {
     for (const player of [0, 1] as const) {
       const pk = player === 0 ? P1 : P2;
-      const s = commit(simulGame(), ctx(pk), commitmentOf(3, salt(player, 0)));
+      const s = commit(simulGame(), ctx(pk), commitmentOf(player, 3, salt(player, 0)));
       expect(() => claimTimeout(s, ctx(pk, TIMEOUT - 1))).toThrow("deadline not expired");
       expect(claimTimeout(s, ctx(pk, TIMEOUT))).toEqual([{ to: pk, amount: 2n * STAKE }]);
       const other = player === 0 ? P2 : P1;
@@ -426,7 +435,7 @@ describe("claim_timeout — one-sided lateness", () => {
     const full = {
       ...simulGame(),
       board: new Uint8Array(42).fill(1),
-      commit1: commitmentOf(0, salt(0, 0)),
+      commit1: commitmentOf(0, 0, salt(0, 0)),
     };
     expect(() => claimTimeout(full, ctx(P1, TIMEOUT))).toThrow("claim the draw instead");
   });
@@ -445,7 +454,7 @@ describe("split_timeout — symmetric stalls", () => {
   });
 
   test("one-sided states are refused — the compliant player must not be robbed of the pot", () => {
-    const one = commit(simulGame(), ctx(P1), commitmentOf(3, salt(0, 0)));
+    const one = commit(simulGame(), ctx(P1), commitmentOf(0, 3, salt(0, 0)));
     expect(() => splitTimeout(one, ctx(P2, TIMEOUT))).toThrow("claim the forfeit instead");
     const half = reveal(commitBoth(simulGame(), 2, 5), ctx(P1), 2, salt(0, 0));
     expect(() => splitTimeout(half, ctx(P2, TIMEOUT))).toThrow("claim the forfeit instead");
@@ -453,17 +462,20 @@ describe("split_timeout — symmetric stalls", () => {
 });
 
 describe("sudden death", () => {
-  test("mirrors classic: permissionless even split at the cap, any live state", () => {
+  test("permissionless cap: even split when nothing is pending, after a move clock", () => {
     const s = { ...playRound(simulGame(), 2, 5), deadline: 1000 };
-    expect(suddenDeath(s, ctx(STRANGER, 0, 1000))).toEqual([
+    // The cap now also waits out a move clock, so a board-filling resolve at
+    // the deadline cannot be split before its win becomes claimable.
+    expect(() => suddenDeath(s, ctx(STRANGER, 0, 1000))).toThrow("challenge window still open");
+    expect(suddenDeath(s, ctx(STRANGER, TIMEOUT, 1000))).toEqual([
       { to: P1, amount: STAKE },
       { to: P2, amount: STAKE },
     ]);
-    expect(() => suddenDeath(s, ctx(STRANGER, 0, 999))).toThrow("deadline not reached");
+    expect(() => suddenDeath(s, ctx(STRANGER, TIMEOUT, 999))).toThrow("deadline not reached");
     // Deadline-0 states are unreachable via join now, but the door must
     // still refuse one carried by a directly-created covenant UTXO.
     const uncapped = { ...playRound(simulGame(), 2, 5), deadline: 0 };
-    expect(() => suddenDeath(uncapped, ctx(P1, 0, 1e9))).toThrow("no game deadline set");
+    expect(() => suddenDeath(uncapped, ctx(P1, TIMEOUT, 1e9))).toThrow("no game deadline set");
   });
 });
 
@@ -471,9 +483,9 @@ describe("canonical serialization", () => {
   test("round-trips every sub-phase, including mid-round slots", () => {
     let s = simulGame();
     expect(decodeSimulState(encodeSimulState(s))).toEqual(s);
-    s = commit(s, ctx(P1), commitmentOf(3, salt(0, 0)));
+    s = commit(s, ctx(P1), commitmentOf(0, 3, salt(0, 0)));
     expect(decodeSimulState(encodeSimulState(s))).toEqual(s);
-    s = commit(s, ctx(P2), commitmentOf(4, salt(1, 0)));
+    s = commit(s, ctx(P2), commitmentOf(1, 4, salt(1, 0)));
     expect(decodeSimulState(encodeSimulState(s))).toEqual(s);
     s = reveal(s, ctx(P2), 4, salt(1, 0));
     expect(decodeSimulState(encodeSimulState(s))).toEqual(s);

@@ -4,10 +4,9 @@
  * sudden_death — same selector names, same pinned-payout shape).
  */
 
-import { isStaked, toHex, type Match } from "../lib/match";
+import { toHex, type Match } from "../lib/match";
 import { CELLS, isOpen, type State } from "../lib/game";
 import * as engine from "../lib/engine";
-import { ensureFunds } from "../lib/dispenser";
 import type { AutoAction, GameMode, ViewCtx } from "./types";
 
 /** A join spend's successor: the joiner's pubkey is the sig script's first
@@ -41,7 +40,7 @@ export function describeSharedEnd(
     case "cancel":
       return "The game was called off before anyone joined.";
     case "sudden_death":
-      return "Time's up — the game hit its total time limit and the pot split evenly.";
+      return suddenDeathMessage(m);
     case "dissolve": {
       // The dissolve call pushes the dissolving player's pubkey — read it to
       // tell a kick from a walk-out.
@@ -107,22 +106,37 @@ export async function drawMatch(
   return engine.pinnedSplit(rpc, key, mode, match, "claim_draw", []);
 }
 
-/** Split a capped game that outlived its deadline; the tx's lockTime proves
- * the chain has passed the deadline — the node simply won't mine it early. */
+/** Settle a capped game that outlived its deadline; the tx's lockTime proves
+ * the chain has passed the deadline — the node simply won't mine it early.
+ * Almost always an even split, but on a pending win (a claimed, not-yet-swept
+ * fourk win) the covenant pays the winner in FULL instead — so a vanished
+ * winner's pot is pushed to them, not halved by a loser stalling to the cap. */
 export async function suddenDeathMatch(
   rpc: engine.Rpc,
   key: engine.PrivateKey,
   mode: GameMode,
   match: Match,
 ): Promise<string> {
-  return engine.pinnedSplit(rpc, key, mode, match, "sudden_death", [], {
-    lockTime: BigInt(match.state.deadline),
-  });
+  const lockTime = BigInt(match.state.deadline);
+  const pendingWin = match.simul?.pendingWin ?? 0;
+  if (pendingWin !== 0) {
+    const winnerPk = pendingWin === 1 ? match.state.p1 : match.state.p2;
+    return engine.pinnedWinner(rpc, mode, match, "sudden_death", winnerPk, { lockTime });
+  }
+  return engine.pinnedSplit(rpc, key, mode, match, "sudden_death", [], { lockTime });
 }
 
 export const DRAW_MESSAGE = "It's a draw — the board filled up with no winner.";
 export const SUDDEN_DEATH_MESSAGE =
   "Time's up — the game hit its total time limit and the pot split evenly.";
+export const SUDDEN_DEATH_WIN_MESSAGE =
+  "Time's up — the game hit its total time limit and the winner took the pot.";
+
+/** Sudden death splits an undecided game but pays a pending winner in full;
+ * the ending copy has to match whichever the covenant did. */
+export function suddenDeathMessage(m: Match): string {
+  return (m.simul?.pendingWin ?? 0) !== 0 ? SUDDEN_DEATH_WIN_MESSAGE : SUDDEN_DEATH_MESSAGE;
+}
 
 /**
  * The automatic duties every mode shares: a full board settles itself as a
@@ -140,8 +154,19 @@ export function sharedAutoActions(mode: GameMode, m: Match): AutoAction[] {
     out.push({
       key: "draw",
       oncePer: "match",
+      // Fourk's claim_draw waits out a move clock: a board-filling resolve can
+      // hide a just-completed win, so the covenant hands that win's owner the
+      // same window before the permissionless split can settle. Schedule the
+      // crank for when the UTXO reaches that age. Classic's draw has no such
+      // gate and fires immediately. Either door is self-funded (fee from the
+      // pot), so no wallet top-up is needed to crank it.
+      ...(m.simul && {
+        scheduleMs: async (rpc) => {
+          const age = await engine.gameUtxoAge(rpc, mode, m);
+          return Math.max(0, (m.state.moveTimeout - (age ?? 0)) * 100 + 2000);
+        },
+      }),
       run: async (rpc, key, mm) => {
-        await ensureFunds(rpc, key, engine.FEE_HEADROOM, { staked: isStaked(mm) });
         await drawMatch(rpc, key, mode, mm);
         return { kind: "finished", message: DRAW_MESSAGE };
       },
@@ -157,12 +182,12 @@ export function sharedAutoActions(mode: GameMode, m: Match): AutoAction[] {
         // catch up before the lockTime-gated tx is submitted.
         return Math.max(0, (m.state.deadline - Number(info.virtualDaaScore)) * 100 + 2000);
       },
+      // Self-funded (fee from the pot), so no wallet top-up to crank it.
       run: async (rpc, key, mm) => {
-        await ensureFunds(rpc, key, engine.FEE_HEADROOM, { staked: isStaked(mm) });
         await suddenDeathMatch(rpc, key, mode, mm);
-        return { kind: "finished", message: SUDDEN_DEATH_MESSAGE };
+        return { kind: "finished", message: suddenDeathMessage(mm) };
       },
-      onTerminated: SUDDEN_DEATH_MESSAGE,
+      onTerminated: suddenDeathMessage(m),
     });
   return out;
 }

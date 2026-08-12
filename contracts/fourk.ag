@@ -35,6 +35,17 @@ const int MAX_MOVE_TIMEOUT = 8640000;
 // unix-ms timestamp (always already in the past). Join keeps every deadline
 // strictly in DAA-score territory.
 const int DEADLINE_LIMIT = 500000000000;
+// Fee ceiling for the self-funded terminal doors. The pinned-payout doors
+// (dissolve, claim_draw, sudden_death, claim_split, split_timeout) take a
+// SINGLE input — the match UTXO — and pay the fee out of the pot, instead of
+// riding on a separate funding input. That is what makes require(tx.inputs.
+// length == 1) safe to demand, and demanding it is what stops pot aggregation:
+// two same-stake matches can no longer be swept in one transaction so their
+// shared pinned split leaks the surplus pot as change. The pot pays the crank
+// fee (fairer for a permissionless door than charging a passing observer);
+// this bounds how much a griefer can burn to ~0.02 KAS, negligible against the
+// 2-KAS floor a free match already stakes, and mirrors the app's FEE_HEADROOM.
+const int MAX_FEE = 2000000;
 
 // An open seat: p1's stake sits in the UTXO waiting for a joiner.
 state LobbyState {
@@ -118,13 +129,18 @@ actor FourkMatch owns MatchState {
         }
         require(checkSig(s, pk));
 
-        int half = self.value / 2;
+        // Self-funded, single-input split (see MAX_FEE): one match UTXO in,
+        // an equal two-output split out, the fee taken from the pot. The
+        // single-input requirement is the anti-aggregation guard.
+        require(tx.inputs.length == 1);
+        require(tx.outputs.length == 2);
+        int half_floor = (self.value - MAX_FEE) / 2;
         byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
         byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
-        require(tx.outputs[0].value == half);
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
-        require(tx.outputs[1].value == half);
+        require(tx.outputs[0].value == tx.outputs[1].value);
+        require(tx.outputs[0].value >= half_floor);
     }
 
     // Drop a disc. Gravity makes this the whole rulebook: your turn, column
@@ -235,13 +251,18 @@ actor FourkMatch owns MatchState {
     entry claim_draw() emits none {
         require(move_count == CELLS);
 
-        int half = self.value / 2;
+        // Self-funded, single-input split (see MAX_FEE): one match UTXO in,
+        // an equal two-output split out, the fee taken from the pot. The
+        // single-input requirement is the anti-aggregation guard.
+        require(tx.inputs.length == 1);
+        require(tx.outputs.length == 2);
+        int half_floor = (self.value - MAX_FEE) / 2;
         byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
         byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
-        require(tx.outputs[0].value == half);
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
-        require(tx.outputs[1].value == half);
+        require(tx.outputs[0].value == tx.outputs[1].value);
+        require(tx.outputs[0].value >= half_floor);
     }
 
     // Terminal door 3: the player to move has let the state UTXO age past the
@@ -274,13 +295,18 @@ actor FourkMatch owns MatchState {
         require(deadline > 0);
         require(tx.time >= deadline);
 
-        int half = self.value / 2;
+        // Self-funded, single-input split (see MAX_FEE): one match UTXO in,
+        // an equal two-output split out, the fee taken from the pot. The
+        // single-input requirement is the anti-aggregation guard.
+        require(tx.inputs.length == 1);
+        require(tx.outputs.length == 2);
+        int half_floor = (self.value - MAX_FEE) / 2;
         byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
         byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
-        require(tx.outputs[0].value == half);
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
-        require(tx.outputs[1].value == half);
+        require(tx.outputs[0].value == tx.outputs[1].value);
+        require(tx.outputs[0].value >= half_floor);
     }
 }
 
@@ -396,13 +422,18 @@ actor FourkSimul owns SimulMatchState {
         }
         require(checkSig(s, pk));
 
-        int half = self.value / 2;
+        // Self-funded, single-input split (see MAX_FEE): one match UTXO in,
+        // an equal two-output split out, the fee taken from the pot. The
+        // single-input requirement is the anti-aggregation guard.
+        require(tx.inputs.length == 1);
+        require(tx.outputs.length == 2);
+        int half_floor = (self.value - MAX_FEE) / 2;
         byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
         byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
-        require(tx.outputs[0].value == half);
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
-        require(tx.outputs[1].value == half);
+        require(tx.outputs[0].value == tx.outputs[1].value);
+        require(tx.outputs[0].value >= half_floor);
     }
 
     // Stake a sealed column pick. Each player owns one slot and a reveal is
@@ -426,10 +457,15 @@ actor FourkSimul owns SimulMatchState {
         byte[32] next_c2 = commit2;
         if (pk == p1) {
             require(commit1 == zero32());
+            // Reject a commitment identical to the opponent's. The player byte
+            // in the preimage already makes a copied hash unopenable; this
+            // turns the copy attempt into a clean rejection.
+            require(h != commit2);
             next_c1 = h;
         }
         if (pk != p1) {
             require(commit2 == zero32());
+            require(h != commit1);
             next_c2 = h;
         }
 
@@ -462,12 +498,16 @@ actor FourkSimul owns SimulMatchState {
         require(commit1 != zero32() && commit2 != zero32());
         require(pk == p1 || pk == p2);
 
+        int me = 0;
         byte[32] my_commit = commit1;
         if (pk == p2) {
+            me = 1;
             my_commit = commit2;
         }
         require(col >= 0 && col < COLS);
-        require(blake2b(byte[1](byte[1](col)) + salt) == my_commit);
+        // Preimage is playerByte || colByte || salt: binding the revealer's
+        // player byte is what makes a copied commitment unopenable.
+        require(blake2b(byte[1](byte[1](me)) + byte[1](byte[1](col)) + salt) == my_commit);
 
         int h = 0;
         for (i, 0, ROWS, ROWS) {
@@ -535,7 +575,8 @@ actor FourkSimul owns SimulMatchState {
         require(my_commit != zero32());
 
         require(col >= 0 && col < COLS);
-        require(blake2b(byte[1](byte[1](col)) + salt) == my_commit);
+        // Preimage is playerByte || colByte || salt (see reveal).
+        require(blake2b(byte[1](byte[1](me)) + byte[1](byte[1](col)) + salt) == my_commit);
 
         // The opponent's column, revealed first; its height passed the
         // reveal gate and the board has not changed since.
@@ -718,13 +759,18 @@ actor FourkSimul owns SimulMatchState {
             require(OpBin2Num(board[c * ROWS + r]) == 2);
         }
 
-        int half = self.value / 2;
+        // Self-funded, single-input split (see MAX_FEE): one match UTXO in,
+        // an equal two-output split out, the fee taken from the pot. The
+        // single-input requirement is the anti-aggregation guard.
+        require(tx.inputs.length == 1);
+        require(tx.outputs.length == 2);
+        int half_floor = (self.value - MAX_FEE) / 2;
         byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
         byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
-        require(tx.outputs[0].value == half);
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
-        require(tx.outputs[1].value == half);
+        require(tx.outputs[0].value == tx.outputs[1].value);
+        require(tx.outputs[0].value >= half_floor);
     }
 
     // Terminal door 3: board full, pot splits, permissionless. Keys on the
@@ -743,14 +789,28 @@ actor FourkSimul owns SimulMatchState {
             }
         }
         require(full == 1);
+        // The covenant cannot see a four-in-a-row on the full board (no scan,
+        // by design), so a board-filling resolve that ALSO completes a line
+        // leaves the win unclaimed here (pending_win still 0). Without a delay
+        // the resolver — who learns the successor txid first — could split that
+        // win before its owner files claim_win. A full move clock of UTXO age
+        // hands the owner the same challenge window claim_win opens: they flip
+        // the state to pending (rerouting the pot to themselves) with time to
+        // spare, while an honest draw is in no hurry to settle.
+        require(this.age >= move_timeout);
 
-        int half = self.value / 2;
+        // Self-funded, single-input split (see MAX_FEE): one match UTXO in,
+        // an equal two-output split out, the fee taken from the pot. The
+        // single-input requirement is the anti-aggregation guard.
+        require(tx.inputs.length == 1);
+        require(tx.outputs.length == 2);
+        int half_floor = (self.value - MAX_FEE) / 2;
         byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
         byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
-        require(tx.outputs[0].value == half);
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
-        require(tx.outputs[1].value == half);
+        require(tx.outputs[0].value == tx.outputs[1].value);
+        require(tx.outputs[0].value >= half_floor);
     }
 
     // Terminal door 4: the opponent is late on a ONE-SIDED obligation and
@@ -818,31 +878,55 @@ actor FourkSimul owns SimulMatchState {
         require(c1 == c2);
         require(this.age >= move_timeout);
 
-        int half = self.value / 2;
+        // Self-funded, single-input split (see MAX_FEE): one match UTXO in,
+        // an equal two-output split out, the fee taken from the pot. The
+        // single-input requirement is the anti-aggregation guard.
+        require(tx.inputs.length == 1);
+        require(tx.outputs.length == 2);
+        int half_floor = (self.value - MAX_FEE) / 2;
         byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
         byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
-        require(tx.outputs[0].value == half);
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
-        require(tx.outputs[1].value == half);
+        require(tx.outputs[0].value == tx.outputs[1].value);
+        require(tx.outputs[0].value >= half_floor);
     }
 
-    // Terminal door 6: identical to classic sudden death — the game
-    // outlived its creation-time cap, even split, permissionless, legal in
-    // any live state. Deliberately UNGATED on pending_win: the liveness
-    // exit outranks the window (a vanished pending winner must not strand
-    // the pot), and the cap dwarfs any honest sweep delay.
+    // Terminal door 6: the game outlived its creation-time cap. Permissionless
+    // and legal in any live state so a pot is never stranded by two vanished
+    // players — but it must not let the deadline steal a decided game. It waits
+    // a full move clock past the last transition (already true for an abandoned
+    // game; the grace also stops a board-filling resolve at the deadline from
+    // being split before its win can be claimed), and when a win is already
+    // pending it pays that winner in FULL rather than splitting. That is the
+    // sweep_win outcome, made permissionless so a vanished winner's pot is
+    // pushed to them instead of halved by a stalling loser at the deadline.
     entry sudden_death() emits none {
         require(deadline > 0);
         require(tx.time >= deadline);
+        require(this.age >= move_timeout);
+        // Self-funded, single input — the anti-aggregation guard (see MAX_FEE).
+        require(tx.inputs.length == 1);
 
-        int half = self.value / 2;
-        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
-        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
-        require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
-        require(tx.outputs[0].value == half);
-        require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
-        require(tx.outputs[1].value == half);
+        if (pending_win == 0) {
+            require(tx.outputs.length == 2);
+            int half_floor = (self.value - MAX_FEE) / 2;
+            byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
+            byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+            require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
+            require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
+            require(tx.outputs[0].value == tx.outputs[1].value);
+            require(tx.outputs[0].value >= half_floor);
+        } else {
+            require(tx.outputs.length == 1);
+            pubkey winner_pk = p1;
+            if (pending_win == 2) {
+                winner_pk = p2;
+            }
+            byte[34] w_lock = new ScriptPubKeyP2PK(winner_pk);
+            require(tx.outputs[0].scriptPubKey == byte[](w_lock));
+            require(tx.outputs[0].value >= self.value - MAX_FEE);
+        }
     }
 
     // Terminal door 7: sweep a pending win whose challenge window has

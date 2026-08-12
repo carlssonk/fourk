@@ -37,6 +37,9 @@ use secp256k1::{Keypair, Secp256k1, SecretKey};
 
 const STAKE: u64 = 100_000_000;
 const POT: u64 = 2 * STAKE;
+/// Mirrors MAX_FEE in contracts/fourk.ag: the ceiling the self-funded terminal
+/// doors let a cranker shave from the pot for the fee.
+const MAX_FEE: u64 = 2_000_000;
 const MOVE_TIMEOUT: i64 = 36_000;
 const MIN_MOVE_TIMEOUT: i64 = 600;
 const MAX_MOVE_TIMEOUT: i64 = 8_640_000;
@@ -1672,101 +1675,87 @@ fn funded_forfeit_honors_the_clock() {
     assert_fail(run(MOVE_TIMEOUT as u64 - 1), "funded forfeit one block early");
 }
 
-// The pinned-payout doors check tx.outputs[0]/[1] by absolute index and demand
-// zero AUTHORIZED covenant outputs — neither bounds the total output count, so
-// a plain wallet change output AFTER the pinned payouts is accepted. That is
-// the intended behavior (fees ride on a funding input, which implies change),
-// pinned here so a covenant change can't silently alter it; change ahead of
-// the pinned payouts shifts them and must still fail.
+// The pinned-payout doors are self-funded and single-input (MAX_FEE in
+// contracts/fourk.ag): one match UTXO in, the fee taken from the pot, and any
+// second input rejected. That single-input rule is the anti-aggregation guard
+// — two same-stake matches can no longer be swept in one transaction so their
+// shared pinned split leaks the surplus pot as change. An equal split stays
+// mandatory; the only freedom is a bounded fee shaved equally from both halves.
 
-fn with_change(mut payouts: Vec<(ScriptPublicKey, u64)>) -> Vec<(ScriptPublicKey, u64)> {
-    payouts.push(change_payout());
-    payouts
+fn self_funded_split(fee: u64) -> Vec<(ScriptPublicKey, u64)> {
+    let each = (POT - fee) / 2;
+    vec![
+        (p2pk_spk(&pk(&p1())), each),
+        (p2pk_spk(&pk(&p2())), each),
+    ]
 }
 
 #[test]
-fn funded_dissolve_allows_trailing_change_only() {
-    let run = |signer: Keypair, payouts: Vec<(ScriptPublicKey, u64)>| {
-        let claimed = pk(&signer);
-        let entry = EntryCall::new("dissolve")
-            .args_with(move |tx, idx| args![sign_input(tx, idx, &signer), claimed]);
-        run_match_entry_funded(entry, match_state(&new_game()), POT, 0, 0, payouts, None)
-    };
+fn dissolve_is_single_input_self_funded() {
     assert_pass(
-        run(p1(), with_change(half_split())),
-        "funded dissolve with trailing change",
+        run_dissolve(&new_game(), p1(), pk(&p1()), self_funded_split(40_000), 0, false),
+        "self-funded dissolve with a real fee",
     );
-    let p1_spk = p2pk_spk(&pk(&p1()));
-    let p2_spk = p2pk_spk(&pk(&p2()));
     assert_fail(
-        run(
-            p1(),
-            with_change(vec![(p2_spk, POT / 2), (p1_spk, POT / 2)]),
-        ),
-        "funded dissolve with swapped refunds",
-    );
-    let mut change_first = vec![change_payout()];
-    change_first.extend(half_split());
-    assert_fail(
-        run(p1(), change_first),
-        "change ahead of the pinned payouts",
+        run_dissolve(&new_game(), p1(), pk(&p1()), self_funded_split(3 * MAX_FEE), 0, false),
+        "fee above the ceiling starves the split",
     );
 }
 
 #[test]
-fn funded_claim_draw_allows_trailing_change_only() {
-    let run = |payouts: Vec<(ScriptPublicKey, u64)>| {
-        run_match_entry_funded(
-            EntryCall::new("claim_draw"),
-            match_state(&full_board()),
-            POT,
-            0,
-            0,
-            payouts,
-            None,
-        )
-    };
-    assert_pass(run(with_change(half_split())), "funded draw with trailing change");
-    let p1_spk = p2pk_spk(&pk(&p1()));
-    let p2_spk = p2pk_spk(&pk(&p2()));
-    assert_fail(
-        run(with_change(vec![
-            (p1_spk, POT / 2 + 1),
-            (p2_spk, POT / 2 - 1),
-        ])),
-        "funded draw with unequal split",
-    );
-    let mut change_first = vec![change_payout()];
-    change_first.extend(half_split());
-    assert_fail(run(change_first), "change ahead of the pinned payouts");
-}
-
-#[test]
-fn funded_sudden_death_allows_trailing_change_only() {
-    let run = |payouts: Vec<(ScriptPublicKey, u64)>, lock_time: u64| {
-        run_match_entry_funded(
-            EntryCall::new("sudden_death"),
-            match_state(&play(&[3, 3])),
-            POT,
-            0,
-            lock_time,
-            payouts,
-            None,
-        )
-    };
+fn claim_draw_is_single_input_self_funded() {
     assert_pass(
-        run(with_change(half_split()), DEADLINE as u64),
-        "funded sudden death with trailing change",
+        run_draw(&full_board(), self_funded_split(40_000)),
+        "self-funded draw with a real fee",
     );
     assert_fail(
-        run(with_change(half_split()), DEADLINE as u64 - 1),
-        "funded sudden death before the deadline",
+        run_draw(&full_board(), self_funded_split(3 * MAX_FEE)),
+        "fee above the ceiling starves the split",
     );
-    let mut change_first = vec![change_payout()];
-    change_first.extend(half_split());
+}
+
+#[test]
+fn sudden_death_is_single_input_self_funded() {
+    assert_pass(
+        run_sudden_death(match_state(&play(&[3, 3])), self_funded_split(40_000), DEADLINE as u64),
+        "self-funded sudden death with a real fee",
+    );
     assert_fail(
-        run(change_first, DEADLINE as u64),
-        "change ahead of the pinned payouts",
+        run_sudden_death(match_state(&play(&[3, 3])), self_funded_split(3 * MAX_FEE), DEADLINE as u64),
+        "fee above the ceiling starves the split",
+    );
+}
+
+#[test]
+fn pinned_doors_reject_pot_aggregation() {
+    // The theft the single-input rule closes: two full-board matches between
+    // the same players at the same stake, swept in ONE claim_draw transaction.
+    // Both inputs' pinned split checks the same outputs[0]/[1], so the second
+    // pot could leave as a trailing output to the attacker. The transaction now
+    // carries two covenant inputs and is rejected (claim_draw_splits_pot is the
+    // single-input baseline that passes).
+    let builder = TxBuilder::new(artifact()).expect("builder");
+    let state = match_state(&full_board());
+    let utxo_a = builder
+        .covenant_utxo("FourkMatch", state.clone(), POT, 0, false, Some(covenant_id()))
+        .expect("utxo a");
+    let utxo_b = builder
+        .covenant_utxo("FourkMatch", state.clone(), POT, 0, false, Some(covenant_id()))
+        .expect("utxo b");
+    let outpoint_b = TransactionOutpoint {
+        transaction_id: TransactionId::from_bytes([0x13; 32]),
+        index: 0,
+    };
+    let attacker = p2pk_spk(&pk(&funder()));
+    let context = TxContext::new()
+        .actor_input("FourkMatch", state.clone(), EntryCall::new("claim_draw"), outpoint(), utxo_a.clone(), 0)
+        .actor_input("FourkMatch", state.clone(), EntryCall::new("claim_draw"), outpoint_b, utxo_b.clone(), 0)
+        .output(p2pk_spk(&pk(&p1())), None, POT / 2)
+        .output(p2pk_spk(&pk(&p2())), None, POT / 2)
+        .output(attacker, None, POT);
+    assert!(
+        build_executed_tx(context, vec![utxo_a, utxo_b]).is_err(),
+        "aggregating two match pots in one transaction must be rejected",
     );
 }
 

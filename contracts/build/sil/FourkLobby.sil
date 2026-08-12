@@ -15,6 +15,7 @@ contract FourkLobby(
     int constant MIN_MOVE_TIMEOUT = 600;
     int constant MAX_MOVE_TIMEOUT = 8640000;
     int constant DEADLINE_LIMIT = 500000000000;
+    int constant MAX_FEE = 2000000;
 
     // :: state layouts
     struct MatchState {

@@ -2,7 +2,6 @@ import { atom, getDefaultStore } from "jotai";
 import { friendlyCatch } from "../lib/errors";
 import { ZERO_PK } from "../lib/game";
 import { FREE_STAKE, SOMPI_PER_KAS, isStaked, saveCheckpoint, type Match } from "../lib/match";
-import { fresherOf } from "../modes/registry";
 import { refreshBalance } from "./balance";
 import { realDeps, type Deps } from "./deps";
 import { clearInvite, matchesAtom, openMatch } from "./matches";
@@ -111,8 +110,12 @@ export const takeSeat = (invite: Match, deps: Deps = realDeps): Promise<void> =>
     clearInvite();
     const known = store.get(matchesAtom).find((m) => m.covenantId === invite.covenantId);
     if (known) {
-      // A game we're already in: just reopen it, at whichever state is fresher.
-      openMatch(fresherOf(known, invite));
+      // A game we're already in: reopen our TRACKED state, never the link's. An
+      // invite is attacker-controlled and only has to be genesis-reachable, so
+      // a higher-progress link must not overwrite the match the chain-connected
+      // watcher maintains — that is exactly the blinding vector. The watcher
+      // advances `known` from the chain; the link never does.
+      openMatch(known);
       return;
     }
     // Whether the open seat is ours to take is a question about the key

@@ -32,7 +32,8 @@ export async function commitMatch(
   const pkHex = engine.walletPubkey(key);
   const ss = simulSnapshot(match);
   const salt = crypto.getRandomValues(new Uint8Array(32));
-  const h = commitmentOf(col, salt);
+  const player = pkHex === ss.p1 ? 0 : 1;
+  const h = commitmentOf(player, col, salt);
   saveSalt(match.covenantId, ss.round, col, toHex(salt));
   const next = fromSimulState(simulCommit(ss, simulCtx(pkHex), h));
   return engine.continuation(
@@ -200,8 +201,9 @@ export function fourkAutoActions(m: Match, ctx: AutoCtx): AutoAction[] {
       out.push({
         key: "contest",
         oncePer: "utxo",
+        // claim_split is self-funded (the pinned split takes its fee from the
+        // pot), so a contesting observer needs no wallet balance to crank it.
         run: async (rpc, key, mm) => {
-          await ensureFunds(rpc, key, engine.FEE_HEADROOM, { staked: isStaked(mm) });
           await claimSplitMatch(rpc, key, mm, p1Line, p2Line);
           return { kind: "finished", message: SPLIT_MESSAGE };
         },

@@ -20,8 +20,8 @@ export function simulGame(): SimulState {
 
 /** Both players commit their sealed picks (p1 first — order is free). */
 export function commitBoth(s: SimulState, colP1: number, colP2: number): SimulState {
-  s = commit(s, ctx(P1), commitmentOf(colP1, salt(0, s.round)));
-  return commit(s, ctx(P2), commitmentOf(colP2, salt(1, s.round)));
+  s = commit(s, ctx(P1), commitmentOf(0, colP1, salt(0, s.round)));
+  return commit(s, ctx(P2), commitmentOf(1, colP2, salt(1, s.round)));
 }
 
 /**
