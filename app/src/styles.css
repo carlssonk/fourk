@@ -3,6 +3,7 @@
 @theme {
   --color-bg: #15100a;
   --color-panel: #2d2213;
+  --color-panel-dark: #21190d;
   --color-line: #4a3e2b;
   --color-ink: #ece4d6;
   --color-dim: #a49882;
@@ -315,18 +316,15 @@
     display: none;
   }
 
-  /* The dim behind it: one flat wash plus a real blur, so the page reads as
-   * out of focus rather than as merely darker. */
+  /* The dim behind it: one flat wash, light enough to keep the page in
+   * view. */
   .dlg::backdrop {
     background: rgba(10, 8, 6, 0.4);
-    backdrop-filter: blur(10px) saturate(0.9);
     animation: overlay-fade 0.18s ease-out both;
     /* The shroud toggles on an already-open dialog (the account panel
      * stepping into a phrase screen) — fade the darkness in rather than
      * snapping it. */
-    transition:
-      background-color 0.3s ease,
-      backdrop-filter 0.3s ease;
+    transition: background-color 0.3s ease;
   }
 
   /* Secrets on screen (a recovery phrase shown or typed): the backdrop
@@ -334,20 +332,17 @@
    * distracts, and nothing on screen but the words that matter. */
   .dlg-shroud::backdrop {
     background: rgba(8, 6, 5, 0.8);
-    backdrop-filter: blur(14px) saturate(0.85);
   }
 
   /* A dialog is a single flat plane: one fill, one hairline, one soft
-   * shadow to place it above the page. The same opaque panel tone as the
-   * cards — every raised surface is the one material — a step lighter than
-   * the washed-out page behind it. */
+   * shadow to place it above the page. An opaque, deep panel tone — a step
+   * lighter than the washed-out page behind it. */
   .dlg-card {
     position: relative;
     overflow: clip;
     border-radius: 16px;
-    border: 1px solid rgba(255, 255, 255, 0.1);/
-    background: color-mix(in srgb, var(--color-panel) 88%, transparent);
-    backdrop-filter: blur(4px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    @apply bg-panel-dark;
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.07),
       0 20px 50px rgba(0, 0, 0, 0.55);
