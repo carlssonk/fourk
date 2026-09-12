@@ -8,9 +8,9 @@ export const fourkMode: GameMode = {
   meta: {
     key: "fourk",
     label: "Fourk",
-    blurb: "Both players pick a column in secret, then the discs drop together.",
+    blurb: "Both players pick a column in secret, the discs drop together.",
     inviteBlurb:
-      "Fourk mode: each round you both pick a column in secret, then the discs drop together. Connect four to win — you play ",
+      "Fourk mode: each round you both pick a column in secret, the discs drop together. Connect four to win — you play ",
     moveNoun: "pick",
   },
   ...fourkEngine,

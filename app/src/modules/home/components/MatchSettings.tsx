@@ -119,7 +119,6 @@ export const MatchSettings = () => {
             </p>
           ) : (
             <p className="mt-1.5 text-xs text-dim">
-              Free games are on the house.{" "}
               <button className="cursor-pointer underline" onClick={() => openAccount("add-funds")}>
                 Add funds
               </button>{" "}
