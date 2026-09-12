@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useAtom, useAtomValue } from "jotai";
 import { Dialog } from "@shared/components/Dialog";
+import { QrCode } from "@shared/components/QrCode";
 import * as cov from "@shared/lib/covenant";
 import { friendlyCatch } from "@shared/lib/errors";
 import { generatePhrase, parsePhrase } from "@shared/lib/mnemonic";
@@ -257,8 +258,14 @@ const AddFunds = () => {
   return (
     <>
       <p className="mb-3 text-sm text-dim">
-        Send KAS to your deposit address and it lands in your balance, usually within seconds.
+        Scan the code from another wallet, or send KAS to your deposit address.
       </p>
+      {/* The code and the text are the same address in two forms, so they
+       * stack as one block: point a phone at the top of it, or copy from the
+       * bottom. */}
+      <div className="mb-3 flex justify-center">
+        <QrCode value={address} label="Your deposit address as a QR code" />
+      </div>
       <Row value={address} copied={copied} onCopy={() => copy(address)} />
     </>
   );
