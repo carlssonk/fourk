@@ -7,7 +7,7 @@
  */
 
 import { ZERO_PK, type State } from "./game";
-import { NETWORK_ID, fromHex, type Match, type PlayerProfile } from "./match";
+import { NETWORK_ID, type Match, type PlayerProfile } from "./match";
 import * as engine from "./engine";
 import { MODES, modeOf } from "../modes/registry";
 import type { GameModeKey } from "../modes/types";
@@ -124,7 +124,7 @@ export async function joinMatch(
     mode,
     match,
     "join",
-    () => ({ pk: fromHex(pkHex), ints: [] }),
+    [{ sig: 0 }, { bytes: pkHex }],
     { state: nextState, ...mode.joinFields(match) },
     match.value,
     engine.profilePayloadHex(profile),
@@ -134,11 +134,11 @@ export async function joinMatch(
 
 // --- Mode-generic doors ------------------------------------------------------
 //
-// These exist at the same selector positions in every mode's actors, so one
+// These exist under the same entry names in every mode's actors, so one
 // facade covers all rule sets.
 
 export async function cancelMatch(rpc: Rpc, key: PrivateKey, match: Match): Promise<string> {
-  return engine.signedTerminal(rpc, key, modeOf(match), match, "cancel", []);
+  return engine.signedTerminal(rpc, key, modeOf(match), match, "cancel", [{ sig: 0 }]);
 }
 
 /**
@@ -148,14 +148,22 @@ export async function cancelMatch(rpc: Rpc, key: PrivateKey, match: Match): Prom
  */
 export async function dissolveMatch(rpc: Rpc, key: PrivateKey, match: Match): Promise<string> {
   const pkHex = engine.walletPubkey(key);
-  // The joiner's exit proves this.age >= move_timeout (the anti-grief gate);
+  // The joiner's exit proves this.ageDaa >= move_timeout (the anti-grief gate);
   // the sequence field is what carries that proof. P1's kick is instant.
   const sequence = pkHex === match.state.p2 ? BigInt(match.state.moveTimeout) : 0n;
-  return engine.pinnedSplit(rpc, key, modeOf(match), match, "dissolve", [], {
-    sequence,
-    signerPk: fromHex(pkHex),
-    awaitRefund: true,
-  });
+  return engine.pinnedSplit(
+    rpc,
+    key,
+    modeOf(match),
+    match,
+    "dissolve",
+    [{ sig: 0 }, { bytes: pkHex }],
+    {
+      sequence,
+      signed: true,
+      awaitRefund: true,
+    },
+  );
 }
 
 export async function drawMatch(rpc: Rpc, key: PrivateKey, match: Match): Promise<string> {
@@ -211,7 +219,8 @@ export async function discoverSpend(
   match: Match,
   lowHash: string,
 ): Promise<engine.SpendInfo | null> {
-  return engine.discoverSpend(rpc, match, lowHash, modeOf(match).selectorTable(match));
+  const mode = modeOf(match);
+  return engine.discoverSpend(rpc, match, lowHash, engine.entryTags(mode.actorOf(match)));
 }
 
 /**

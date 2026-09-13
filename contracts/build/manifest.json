@@ -21,7 +21,7 @@
           "kind": "leader",
           "emits": { "kind": "outputs", "outputs": [{ "name": "game", "auth_index": 0, "actors": ["FourkMatch"] }] },
           "consumes": [],
-          "routes": [{ "output": "game", "actor": "FourkMatch", "state": "next_match" }]
+          "routes": [{ "output": "game", "successor": { "kind": "constructed", "actor": "FourkMatch", "state": "next_match" } }]
         },
         {
           "name": "cancel",
@@ -49,7 +49,7 @@
           "kind": "leader",
           "emits": { "kind": "outputs", "outputs": [{ "name": "next", "auth_index": 0, "actors": ["FourkMatch"] }] },
           "consumes": [],
-          "routes": [{ "output": "next", "actor": "FourkMatch", "state": "next_match" }]
+          "routes": [{ "output": "next", "successor": { "kind": "constructed", "actor": "FourkMatch", "state": "next_match" } }]
         },
         {
           "name": "winning_move",
@@ -91,7 +91,7 @@
           "kind": "leader",
           "emits": { "kind": "outputs", "outputs": [{ "name": "game", "auth_index": 0, "actors": ["FourkSimul"] }] },
           "consumes": [],
-          "routes": [{ "output": "game", "actor": "FourkSimul", "state": "next_match" }]
+          "routes": [{ "output": "game", "successor": { "kind": "constructed", "actor": "FourkSimul", "state": "next_match" } }]
         },
         {
           "name": "cancel",
@@ -119,28 +119,28 @@
           "kind": "leader",
           "emits": { "kind": "outputs", "outputs": [{ "name": "next", "auth_index": 0, "actors": ["FourkSimul"] }] },
           "consumes": [],
-          "routes": [{ "output": "next", "actor": "FourkSimul", "state": "next_match" }]
+          "routes": [{ "output": "next", "successor": { "kind": "constructed", "actor": "FourkSimul", "state": "next_match" } }]
         },
         {
           "name": "reveal",
           "kind": "leader",
           "emits": { "kind": "outputs", "outputs": [{ "name": "next", "auth_index": 0, "actors": ["FourkSimul"] }] },
           "consumes": [],
-          "routes": [{ "output": "next", "actor": "FourkSimul", "state": "next_match" }]
+          "routes": [{ "output": "next", "successor": { "kind": "constructed", "actor": "FourkSimul", "state": "next_match" } }]
         },
         {
           "name": "resolve",
           "kind": "leader",
           "emits": { "kind": "outputs", "outputs": [{ "name": "next", "auth_index": 0, "actors": ["FourkSimul"] }] },
           "consumes": [],
-          "routes": [{ "output": "next", "actor": "FourkSimul", "state": "next_match" }]
+          "routes": [{ "output": "next", "successor": { "kind": "constructed", "actor": "FourkSimul", "state": "next_match" } }]
         },
         {
           "name": "claim_win",
           "kind": "leader",
           "emits": { "kind": "outputs", "outputs": [{ "name": "pending", "auth_index": 0, "actors": ["FourkSimul"] }] },
           "consumes": [],
-          "routes": [{ "output": "pending", "actor": "FourkSimul", "state": "next_match" }]
+          "routes": [{ "output": "pending", "successor": { "kind": "constructed", "actor": "FourkSimul", "state": "next_match" } }]
         },
         {
           "name": "claim_split",

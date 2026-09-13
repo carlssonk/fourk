@@ -1,11 +1,15 @@
 # Dispenser runbook
 
-The dispenser is a 40-byte stateless covenant (`contracts/drip.sil`) that
-funds free-play seats with no backend: its address never changes, and each
-UTXO held at it is an independent "lane" that anyone can drip 10 TKAS from
-at most once per cooldown (1200 DAA ≈ 2 minutes) via an unsigned spend.
-Refilling is nothing more than sending TKAS to the address — every send
-becomes a new lane. When all lanes are drained or cooling, free-mode
+The dispenser is a 63-byte stateless covenant (`contracts/drip.sil`) that
+funds free-play seats with no backend: its address is fixed by the compiled
+script, and each UTXO held at it is an independent "lane" that anyone can
+drip 10 TKAS from at most once per cooldown (1200 DAA ≈ 2 minutes) via an
+unsigned spend. Refilling is nothing more than sending TKAS to the address —
+every send becomes a new lane. The address only moves when `drip.sil` or the
+Silverscript compiler changes (the script bytes are pinned in
+`app/src/shared/lib/dispenser.ts` and `fund-dispenser.mjs`); after such a
+change, lanes at the old address stay claimable by old clients only, so
+refill the new address. When all lanes are drained or cooling, free-mode
 onboarding breaks (`DISPENSER_EMPTY` / `DISPENSER_COOLING` in
 `app/src/shared/lib/dispenser.ts`), so the operational job is simply:
 keep enough float in enough lanes.

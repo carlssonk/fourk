@@ -54,7 +54,7 @@ export interface SimulState {
    * The challenge window: 0 = normal play; 1/2 = that color's owner proved a
    * line via claimWin and the pot is pending theirs. The opponent (anyone,
    * in fact — it is permissionless) has one move clock to present the OTHER
-   * line via claimSplit (the double-win contest); after `this.age >=
+   * line via claimSplit (the double-win contest); after `this.ageDaa >=
    * moveTimeout` the pending winner sweeps. This turns the double-win
    * mempool race into a full block-time window, and consensus itself (the
    * sweep's sequence lock) rejects an early sweep.

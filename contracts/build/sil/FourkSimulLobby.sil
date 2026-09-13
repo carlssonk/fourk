@@ -33,6 +33,12 @@ contract FourkSimulLobby(
         int move_timeout;
         int deadline;
     }
+    struct SimulLobbyState {
+        // :: user declared fields
+        pubkey p1;
+        int move_timeout;
+        int deadline;
+    }
     struct SimulMatchState {
         // :: user declared fields
         pubkey p1;
@@ -48,7 +54,7 @@ contract FourkSimulLobby(
         int deadline;
     }
 
-    // :: shared helper functions
+    // :: global functions (isolated using the gen__glob_ namespace)
     function zero32() : byte[32] {
         return byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
     }
@@ -63,12 +69,7 @@ contract FourkSimulLobby(
 
     // :: entrypoints
     // :: leader entry (1:N)
-    entrypoint function join(
-        sig s,
-        pubkey pk,
-        byte[] gen__fourk_simul_prefix,
-        byte[] gen__fourk_simul_suffix
-    ) {
+    entry join(sig s, pubkey pk, byte[] gen__fourk_simul_prefix, byte[] gen__fourk_simul_suffix) {
         // :: auth outputs
         require(OpAuthOutputCount(this.activeInputIndex) == 1);
         // :: output game: FourkSimul
@@ -80,7 +81,7 @@ contract FourkSimulLobby(
         require(deadline < DEADLINE_LIMIT);
         require(pk != p1);
         require(checkSig(s, pk));
-        SimulMatchState next_match = {
+        SimulMatchState next_match = SimulMatchState {
             // :: user declared fields
             p1: p1,
             p2: pk,
@@ -106,7 +107,7 @@ contract FourkSimulLobby(
     }
 
     // :: leader entry (1:N)
-    entrypoint function cancel(sig s) {
+    entry cancel(sig s) {
         // :: auth outputs
         require(OpAuthOutputCount(this.activeInputIndex) == 0);
 

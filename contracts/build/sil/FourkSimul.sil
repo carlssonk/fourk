@@ -47,7 +47,7 @@ contract FourkSimul(
         int deadline;
     }
 
-    // :: shared helper functions
+    // :: global functions (isolated using the gen__glob_ namespace)
     function zero32() : byte[32] {
         return byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
     }
@@ -69,7 +69,7 @@ contract FourkSimul(
 
     // :: entrypoints
     // :: leader entry (1:N)
-    entrypoint function dissolve(sig s, pubkey pk) {
+    entry dissolve(sig s, pubkey pk) {
         // :: auth outputs
         require(OpAuthOutputCount(this.activeInputIndex) == 0);
 
@@ -79,14 +79,14 @@ contract FourkSimul(
         require(reveal1 == 0 && reveal2 == 0);
         require(pk == p1 || pk == p2);
         if (pk == p2) {
-            require(this.age >= move_timeout);
+            require(this.ageDaa >= move_timeout);
         }
         require(checkSig(s, pk));
         require(tx.inputs.length == 1);
         require(tx.outputs.length == 2);
         int half_floor = (tx.inputs[this.activeInputIndex].value - MAX_FEE) / 2;
-        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
-        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        byte[36] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[36] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
         require(tx.outputs[0].value == tx.outputs[1].value);
@@ -94,7 +94,7 @@ contract FourkSimul(
     }
 
     // :: leader entry (1:N)
-    entrypoint function commit(sig s, pubkey pk, byte[32] h) {
+    entry commit(sig s, pubkey pk, byte[32] h) {
         // :: auth outputs
         require(OpAuthOutputCount(this.activeInputIndex) == 1);
         // :: output next: FourkSimul
@@ -103,7 +103,7 @@ contract FourkSimul(
         require(pending_win == 0);
         int full = 1;
         for (c, 0, COLS, COLS) {
-            if (OpBin2Num(board[c * ROWS + ROWS - 1]) == 0) {
+            if (signed(board[c * ROWS + ROWS - 1]) == 0) {
                 full = 0;
             }
         }
@@ -123,7 +123,7 @@ contract FourkSimul(
             require(h != commit1);
             next_c2 = h;
         }
-        State next_match = {
+        State next_match = State {
             // :: user declared fields
             p1: p1,
             p2: p2,
@@ -144,7 +144,7 @@ contract FourkSimul(
     }
 
     // :: leader entry (1:N)
-    entrypoint function reveal(sig s, pubkey pk, int col, byte[32] salt) {
+    entry reveal(sig s, pubkey pk, int col, byte[32] salt) {
         // :: auth outputs
         require(OpAuthOutputCount(this.activeInputIndex) == 1);
         // :: output next: FourkSimul
@@ -161,10 +161,10 @@ contract FourkSimul(
             my_commit = commit2;
         }
         require(col >= 0 && col < COLS);
-        require(blake2b(byte[1](byte[1](me)) + byte[1](byte[1](col)) + salt) == my_commit);
+        require(blake2b(byte[]((me as byte[1]) + (col as byte[1]) + salt)) == my_commit);
         int h = 0;
         for (i, 0, ROWS, ROWS) {
-            if (OpBin2Num(board[col * ROWS + i]) != 0) {
+            if (signed(board[col * ROWS + i]) != 0) {
                 h = i + 1;
             }
         }
@@ -181,7 +181,7 @@ contract FourkSimul(
             next_c2 = zero32();
             next_r2 = col + 1;
         }
-        State next_match = {
+        State next_match = State {
             // :: user declared fields
             p1: p1,
             p2: p2,
@@ -202,7 +202,7 @@ contract FourkSimul(
     }
 
     // :: leader entry (1:N)
-    entrypoint function resolve(sig s, pubkey pk, int col, byte[32] salt) {
+    entry resolve(sig s, pubkey pk, int col, byte[32] salt) {
         // :: auth outputs
         require(OpAuthOutputCount(this.activeInputIndex) == 1);
         // :: output next: FourkSimul
@@ -226,11 +226,11 @@ contract FourkSimul(
         require(their_reveal != 0);
         require(my_commit != zero32());
         require(col >= 0 && col < COLS);
-        require(blake2b(byte[1](byte[1](me)) + byte[1](byte[1](col)) + salt) == my_commit);
+        require(blake2b(byte[]((me as byte[1]) + (col as byte[1]) + salt)) == my_commit);
         int a = their_reveal - 1;
         int ha = 0;
         for (i, 0, ROWS, ROWS) {
-            if (OpBin2Num(board[a * ROWS + i]) != 0) {
+            if (signed(board[a * ROWS + i]) != 0) {
                 ha = i + 1;
             }
         }
@@ -244,16 +244,16 @@ contract FourkSimul(
             int upper_disc = 2 - round % 2;
             int idx = a * ROWS + ha;
             if (ha + 1 < ROWS) {
-                next_board = byte[42](prev.slice(0, idx) + byte[1](byte[1](lower_disc)) + byte[1](byte[1](upper_disc)) + prev.slice(idx + 2, CELLS));
+                next_board = byte[42](prev.slice(0, idx) + (lower_disc as byte[1]) + (upper_disc as byte[1]) + prev.slice(idx + 2, CELLS));
             }
             if (ha + 1 >= ROWS) {
-                next_board = byte[42](prev.slice(0, idx) + byte[1](byte[1](lower_disc)) + prev.slice(idx + 1, CELLS));
+                next_board = byte[42](prev.slice(0, idx) + (lower_disc as byte[1]) + prev.slice(idx + 1, CELLS));
             }
         }
         if (col != a) {
             int hb = 0;
             for (i, 0, ROWS, ROWS) {
-                if (OpBin2Num(board[col * ROWS + i]) != 0) {
+                if (signed(board[col * ROWS + i]) != 0) {
                     hb = i + 1;
                 }
             }
@@ -268,9 +268,9 @@ contract FourkSimul(
                 hi = a * ROWS + ha;
                 hi_disc = their_disc;
             }
-            next_board = byte[42](prev.slice(0, lo) + byte[1](byte[1](lo_disc)) + prev.slice(lo + 1, hi) + byte[1](byte[1](hi_disc)) + prev.slice(hi + 1, CELLS));
+            next_board = byte[42](prev.slice(0, lo) + (lo_disc as byte[1]) + prev.slice(lo + 1, hi) + (hi_disc as byte[1]) + prev.slice(hi + 1, CELLS));
         }
-        State next_match = {
+        State next_match = State {
             // :: user declared fields
             p1: p1,
             p2: p2,
@@ -291,7 +291,7 @@ contract FourkSimul(
     }
 
     // :: leader entry (1:N)
-    entrypoint function claim_win(sig s, int wcol, int wrow, int wdir) {
+    entry claim_win(sig s, int wcol, int wrow, int wdir) {
         // :: auth outputs
         require(OpAuthOutputCount(this.activeInputIndex) == 1);
         // :: output pending: FourkSimul
@@ -299,7 +299,7 @@ contract FourkSimul(
 
         require(pending_win == 0);
         require(wcol >= 0 && wcol < COLS && wrow >= 0 && wrow < ROWS);
-        int disc_num = OpBin2Num(board[wcol * ROWS + wrow]);
+        int disc_num = signed(board[wcol * ROWS + wrow]);
         require(disc_num == 1 || disc_num == 2);
         require(wdir >= 0 && wdir <= 3);
         int dc = 1;
@@ -318,14 +318,13 @@ contract FourkSimul(
             int c = wcol + k * dc;
             int r = wrow + k * dr;
             require(c >= 0 && c < COLS && r >= 0 && r < ROWS);
-            require(OpBin2Num(board[c * ROWS + r]) == disc_num);
+            require(signed(board[c * ROWS + r]) == disc_num);
         }
-
         pubkey owner_pk = p1;
         if (disc_num == 2) {
             owner_pk = p2;
         }
-        State next_match = {
+        State next_match = State {
             // :: user declared fields
             p1: p1,
             p2: p2,
@@ -346,14 +345,7 @@ contract FourkSimul(
     }
 
     // :: leader entry (1:N)
-    entrypoint function claim_split(
-        int w1col,
-        int w1row,
-        int w1dir,
-        int w2col,
-        int w2row,
-        int w2dir
-    ) {
+    entry claim_split(int w1col, int w1row, int w1dir, int w2col, int w2row, int w2dir) {
         // :: auth outputs
         require(OpAuthOutputCount(this.activeInputIndex) == 0);
 
@@ -374,9 +366,8 @@ contract FourkSimul(
             int c = w1col + k * dc1;
             int r = w1row + k * dr1;
             require(c >= 0 && c < COLS && r >= 0 && r < ROWS);
-            require(OpBin2Num(board[c * ROWS + r]) == 1);
+            require(signed(board[c * ROWS + r]) == 1);
         }
-
         require(w2dir >= 0 && w2dir <= 3);
         int dc2 = 1;
         int dr2 = 0;
@@ -394,17 +385,13 @@ contract FourkSimul(
             int c = w2col + k * dc2;
             int r = w2row + k * dr2;
             require(c >= 0 && c < COLS && r >= 0 && r < ROWS);
-            require(OpBin2Num(board[c * ROWS + r]) == 2);
+            require(signed(board[c * ROWS + r]) == 2);
         }
-
-        // Self-funded, single-input split (see MAX_FEE): one match UTXO in,
-        // an equal two-output split out, the fee taken from the pot. The
-        // single-input requirement is the anti-aggregation guard.
         require(tx.inputs.length == 1);
         require(tx.outputs.length == 2);
         int half_floor = (tx.inputs[this.activeInputIndex].value - MAX_FEE) / 2;
-        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
-        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        byte[36] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[36] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
         require(tx.outputs[0].value == tx.outputs[1].value);
@@ -412,24 +399,24 @@ contract FourkSimul(
     }
 
     // :: leader entry (1:N)
-    entrypoint function claim_draw() {
+    entry claim_draw() {
         // :: auth outputs
         require(OpAuthOutputCount(this.activeInputIndex) == 0);
 
         require(pending_win == 0);
         int full = 1;
         for (c, 0, COLS, COLS) {
-            if (OpBin2Num(board[c * ROWS + ROWS - 1]) == 0) {
+            if (signed(board[c * ROWS + ROWS - 1]) == 0) {
                 full = 0;
             }
         }
         require(full == 1);
-        require(this.age >= move_timeout);
+        require(this.ageDaa >= move_timeout);
         require(tx.inputs.length == 1);
         require(tx.outputs.length == 2);
         int half_floor = (tx.inputs[this.activeInputIndex].value - MAX_FEE) / 2;
-        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
-        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        byte[36] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[36] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
         require(tx.outputs[0].value == tx.outputs[1].value);
@@ -437,19 +424,19 @@ contract FourkSimul(
     }
 
     // :: leader entry (1:N)
-    entrypoint function claim_timeout(sig s) {
+    entry claim_timeout(sig s) {
         // :: auth outputs
         require(OpAuthOutputCount(this.activeInputIndex) == 0);
 
         require(pending_win == 0);
         int full = 1;
         for (c, 0, COLS, COLS) {
-            if (OpBin2Num(board[c * ROWS + ROWS - 1]) == 0) {
+            if (signed(board[c * ROWS + ROWS - 1]) == 0) {
                 full = 0;
             }
         }
         require(full == 0);
-        require(this.age >= move_timeout);
+        require(this.ageDaa >= move_timeout);
         pubkey claimant = p1;
         int one_sided = 0;
         if (reveal2 != 0) {
@@ -478,7 +465,7 @@ contract FourkSimul(
     }
 
     // :: leader entry (1:N)
-    entrypoint function split_timeout() {
+    entry split_timeout() {
         // :: auth outputs
         require(OpAuthOutputCount(this.activeInputIndex) == 0);
 
@@ -493,12 +480,12 @@ contract FourkSimul(
             c2 = 1;
         }
         require(c1 == c2);
-        require(this.age >= move_timeout);
+        require(this.ageDaa >= move_timeout);
         require(tx.inputs.length == 1);
         require(tx.outputs.length == 2);
         int half_floor = (tx.inputs[this.activeInputIndex].value - MAX_FEE) / 2;
-        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
-        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        byte[36] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[36] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
         require(tx.outputs[0].value == tx.outputs[1].value);
@@ -506,19 +493,19 @@ contract FourkSimul(
     }
 
     // :: leader entry (1:N)
-    entrypoint function sudden_death() {
+    entry sudden_death() {
         // :: auth outputs
         require(OpAuthOutputCount(this.activeInputIndex) == 0);
 
         require(deadline > 0);
-        require(tx.time >= deadline);
-        require(this.age >= move_timeout);
+        require(tx.daa >= deadline);
+        require(this.ageDaa >= move_timeout);
         require(tx.inputs.length == 1);
         if (pending_win == 0) {
             require(tx.outputs.length == 2);
             int half_floor = (tx.inputs[this.activeInputIndex].value - MAX_FEE) / 2;
-            byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
-            byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+            byte[36] p1_lock = new ScriptPubKeyP2PK(p1);
+            byte[36] p2_lock = new ScriptPubKeyP2PK(p2);
             require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
             require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
             require(tx.outputs[0].value == tx.outputs[1].value);
@@ -529,19 +516,19 @@ contract FourkSimul(
             if (pending_win == 2) {
                 winner_pk = p2;
             }
-            byte[34] w_lock = new ScriptPubKeyP2PK(winner_pk);
+            byte[36] w_lock = new ScriptPubKeyP2PK(winner_pk);
             require(tx.outputs[0].scriptPubKey == byte[](w_lock));
             require(tx.outputs[0].value >= tx.inputs[this.activeInputIndex].value - MAX_FEE);
         }
     }
 
     // :: leader entry (1:N)
-    entrypoint function sweep_win(sig s) {
+    entry sweep_win(sig s) {
         // :: auth outputs
         require(OpAuthOutputCount(this.activeInputIndex) == 0);
 
         require(pending_win == 1 || pending_win == 2);
-        require(this.age >= move_timeout);
+        require(this.ageDaa >= move_timeout);
         pubkey winner_pk = p1;
         if (pending_win == 2) {
             winner_pk = p2;

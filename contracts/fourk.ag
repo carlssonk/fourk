@@ -125,7 +125,7 @@ actor FourkMatch owns MatchState {
         // cost of fees. P1's kick stays instant; it refunds the joiner.
         // Mirrors rules.ts dissolve.
         if (pk == p2) {
-            require(this.age >= move_timeout);
+            require(this.ageDaa >= move_timeout);
         }
         require(checkSig(s, pk));
 
@@ -135,8 +135,8 @@ actor FourkMatch owns MatchState {
         require(tx.inputs.length == 1);
         require(tx.outputs.length == 2);
         int half_floor = (self.value - MAX_FEE) / 2;
-        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
-        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        byte[36] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[36] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
         require(tx.outputs[0].value == tx.outputs[1].value);
@@ -156,9 +156,13 @@ actor FourkMatch owns MatchState {
         require(checkSig(s, mover_pk));
 
         require(col >= 0 && col < COLS);
+        // Cell reads: a board byte is 0/1/2, i.e. already its own script
+        // number, so signed() (a pass-through cast, no opcode) is the byte ->
+        // int read. The engine does not enforce minimal number encoding under
+        // covenants, so a 0x00 cell compares equal to 0.
         int h = 0;
         for (i, 0, ROWS, ROWS) {
-            if (OpBin2Num(board[col * ROWS + i]) != 0) {
+            if (signed(board[col * ROWS + i]) != 0) {
                 h = i + 1;
             }
         }
@@ -204,7 +208,7 @@ actor FourkMatch owns MatchState {
         require(col >= 0 && col < COLS);
         int h = 0;
         for (i, 0, ROWS, ROWS) {
-            if (OpBin2Num(board[col * ROWS + i]) != 0) {
+            if (signed(board[col * ROWS + i]) != 0) {
                 h = i + 1;
             }
         }
@@ -213,7 +217,7 @@ actor FourkMatch owns MatchState {
         int disc_num = mover + 1;
         int idx = col * ROWS + h;
         byte[] prev_dyn = byte[](board);
-        byte[42] next_board = byte[42](prev_dyn.slice(0, idx) + byte[1](byte[1](disc_num)) + prev_dyn.slice(idx + 1, CELLS));
+        byte[42] next_board = byte[42](prev_dyn.slice(0, idx) + (disc_num as byte[1]) + prev_dyn.slice(idx + 1, CELLS));
 
         // Direction table: 0 = E, 1 = N, 2 = NE, 3 = SE.
         require(wdir >= 0 && wdir <= 3);
@@ -233,7 +237,7 @@ actor FourkMatch owns MatchState {
             int c = wcol + k * dc;
             int r = wrow + k * dr;
             require(c >= 0 && c < COLS && r >= 0 && r < ROWS);
-            require(OpBin2Num(next_board[c * ROWS + r]) == disc_num);
+            require(signed(next_board[c * ROWS + r]) == disc_num);
         }
 
         // Signature checked last so the body never ends on a bare block
@@ -257,8 +261,8 @@ actor FourkMatch owns MatchState {
         require(tx.inputs.length == 1);
         require(tx.outputs.length == 2);
         int half_floor = (self.value - MAX_FEE) / 2;
-        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
-        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        byte[36] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[36] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
         require(tx.outputs[0].value == tx.outputs[1].value);
@@ -267,7 +271,7 @@ actor FourkMatch owns MatchState {
 
     // Terminal door 3: the player to move has let the state UTXO age past the
     // timeout; the waiting player takes the pot. Every transition creates a
-    // fresh UTXO, so this.age IS the time since the last move — no deadline
+    // fresh UTXO, so this.ageDaa IS the time since the last move — no deadline
     // field exists. Consensus sequence-lock validation enforces the age.
     // Only once the game has begun: at move zero p1 may not even know a
     // joiner arrived (invite links are taken at any hour), so an unmoved
@@ -275,7 +279,7 @@ actor FourkMatch owns MatchState {
     entry claim_forfeit(sig s) emits none {
         require(move_count > 0);
         require(move_count < CELLS);
-        require(this.age >= move_timeout);
+        require(this.ageDaa >= move_timeout);
 
         int waiting = 1 - (move_count % 2);
         pubkey waiting_pk = p1;
@@ -289,11 +293,11 @@ actor FourkMatch owns MatchState {
     // pot splits evenly, exactly like claim_draw. Neither player gains from
     // engineering this, so it is permissionless (payouts pinned, anyone may
     // crank) and legal even on an unmoved board, doubling as cleanup for
-    // abandoned games. tx.time proves the chain has reached the deadline
+    // abandoned games. tx.daa proves the chain has reached the deadline
     // (a locktime can be understated, never overstated).
     entry sudden_death() emits none {
         require(deadline > 0);
-        require(tx.time >= deadline);
+        require(tx.daa >= deadline);
 
         // Self-funded, single-input split (see MAX_FEE): one match UTXO in,
         // an equal two-output split out, the fee taken from the pot. The
@@ -301,8 +305,8 @@ actor FourkMatch owns MatchState {
         require(tx.inputs.length == 1);
         require(tx.outputs.length == 2);
         int half_floor = (self.value - MAX_FEE) / 2;
-        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
-        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        byte[36] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[36] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
         require(tx.outputs[0].value == tx.outputs[1].value);
@@ -418,7 +422,7 @@ actor FourkSimul owns SimulMatchState {
         require(reveal1 == 0 && reveal2 == 0);
         require(pk == p1 || pk == p2);
         if (pk == p2) {
-            require(this.age >= move_timeout);
+            require(this.ageDaa >= move_timeout);
         }
         require(checkSig(s, pk));
 
@@ -428,8 +432,8 @@ actor FourkSimul owns SimulMatchState {
         require(tx.inputs.length == 1);
         require(tx.outputs.length == 2);
         int half_floor = (self.value - MAX_FEE) / 2;
-        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
-        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        byte[36] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[36] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
         require(tx.outputs[0].value == tx.outputs[1].value);
@@ -444,7 +448,7 @@ actor FourkSimul owns SimulMatchState {
         require(pending_win == 0);
         int full = 1;
         for (c, 0, COLS, COLS) {
-            if (OpBin2Num(board[c * ROWS + ROWS - 1]) == 0) {
+            if (signed(board[c * ROWS + ROWS - 1]) == 0) {
                 full = 0;
             }
         }
@@ -507,11 +511,11 @@ actor FourkSimul owns SimulMatchState {
         require(col >= 0 && col < COLS);
         // Preimage is playerByte || colByte || salt: binding the revealer's
         // player byte is what makes a copied commitment unopenable.
-        require(blake2b(byte[1](byte[1](me)) + byte[1](byte[1](col)) + salt) == my_commit);
+        require(blake2b(byte[]((me as byte[1]) + (col as byte[1]) + salt)) == my_commit);
 
         int h = 0;
         for (i, 0, ROWS, ROWS) {
-            if (OpBin2Num(board[col * ROWS + i]) != 0) {
+            if (signed(board[col * ROWS + i]) != 0) {
                 h = i + 1;
             }
         }
@@ -576,14 +580,14 @@ actor FourkSimul owns SimulMatchState {
 
         require(col >= 0 && col < COLS);
         // Preimage is playerByte || colByte || salt (see reveal).
-        require(blake2b(byte[1](byte[1](me)) + byte[1](byte[1](col)) + salt) == my_commit);
+        require(blake2b(byte[]((me as byte[1]) + (col as byte[1]) + salt)) == my_commit);
 
         // The opponent's column, revealed first; its height passed the
         // reveal gate and the board has not changed since.
         int a = their_reveal - 1;
         int ha = 0;
         for (i, 0, ROWS, ROWS) {
-            if (OpBin2Num(board[a * ROWS + i]) != 0) {
+            if (signed(board[a * ROWS + i]) != 0) {
                 ha = i + 1;
             }
         }
@@ -601,16 +605,16 @@ actor FourkSimul owns SimulMatchState {
             int upper_disc = 2 - round % 2;
             int idx = a * ROWS + ha;
             if (ha + 1 < ROWS) {
-                next_board = byte[42](prev.slice(0, idx) + byte[1](byte[1](lower_disc)) + byte[1](byte[1](upper_disc)) + prev.slice(idx + 2, CELLS));
+                next_board = byte[42](prev.slice(0, idx) + (lower_disc as byte[1]) + (upper_disc as byte[1]) + prev.slice(idx + 2, CELLS));
             }
             if (ha + 1 >= ROWS) {
-                next_board = byte[42](prev.slice(0, idx) + byte[1](byte[1](lower_disc)) + prev.slice(idx + 1, CELLS));
+                next_board = byte[42](prev.slice(0, idx) + (lower_disc as byte[1]) + prev.slice(idx + 1, CELLS));
             }
         }
         if (col != a) {
             int hb = 0;
             for (i, 0, ROWS, ROWS) {
-                if (OpBin2Num(board[col * ROWS + i]) != 0) {
+                if (signed(board[col * ROWS + i]) != 0) {
                     hb = i + 1;
                 }
             }
@@ -626,7 +630,7 @@ actor FourkSimul owns SimulMatchState {
                 hi = a * ROWS + ha;
                 hi_disc = their_disc;
             }
-            next_board = byte[42](prev.slice(0, lo) + byte[1](byte[1](lo_disc)) + prev.slice(lo + 1, hi) + byte[1](byte[1](hi_disc)) + prev.slice(hi + 1, CELLS));
+            next_board = byte[42](prev.slice(0, lo) + (lo_disc as byte[1]) + prev.slice(lo + 1, hi) + (hi_disc as byte[1]) + prev.slice(hi + 1, CELLS));
         }
 
         SimulMatchState next_match = {
@@ -663,7 +667,7 @@ actor FourkSimul owns SimulMatchState {
     entry claim_win(sig s, int wcol, int wrow, int wdir) emits pending: FourkSimul {
         require(pending_win == 0);
         require(wcol >= 0 && wcol < COLS && wrow >= 0 && wrow < ROWS);
-        int disc_num = OpBin2Num(board[wcol * ROWS + wrow]);
+        int disc_num = signed(board[wcol * ROWS + wrow]);
         require(disc_num == 1 || disc_num == 2);
 
         // Direction table: 0 = E, 1 = N, 2 = NE, 3 = SE.
@@ -684,7 +688,7 @@ actor FourkSimul owns SimulMatchState {
             int c = wcol + k * dc;
             int r = wrow + k * dr;
             require(c >= 0 && c < COLS && r >= 0 && r < ROWS);
-            require(OpBin2Num(board[c * ROWS + r]) == disc_num);
+            require(signed(board[c * ROWS + r]) == disc_num);
         }
 
         pubkey owner_pk = p1;
@@ -736,7 +740,7 @@ actor FourkSimul owns SimulMatchState {
             int c = w1col + k * dc1;
             int r = w1row + k * dr1;
             require(c >= 0 && c < COLS && r >= 0 && r < ROWS);
-            require(OpBin2Num(board[c * ROWS + r]) == 1);
+            require(signed(board[c * ROWS + r]) == 1);
         }
 
         require(w2dir >= 0 && w2dir <= 3);
@@ -756,7 +760,7 @@ actor FourkSimul owns SimulMatchState {
             int c = w2col + k * dc2;
             int r = w2row + k * dr2;
             require(c >= 0 && c < COLS && r >= 0 && r < ROWS);
-            require(OpBin2Num(board[c * ROWS + r]) == 2);
+            require(signed(board[c * ROWS + r]) == 2);
         }
 
         // Self-funded, single-input split (see MAX_FEE): one match UTXO in,
@@ -765,8 +769,8 @@ actor FourkSimul owns SimulMatchState {
         require(tx.inputs.length == 1);
         require(tx.outputs.length == 2);
         int half_floor = (self.value - MAX_FEE) / 2;
-        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
-        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        byte[36] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[36] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
         require(tx.outputs[0].value == tx.outputs[1].value);
@@ -784,7 +788,7 @@ actor FourkSimul owns SimulMatchState {
         require(pending_win == 0);
         int full = 1;
         for (c, 0, COLS, COLS) {
-            if (OpBin2Num(board[c * ROWS + ROWS - 1]) == 0) {
+            if (signed(board[c * ROWS + ROWS - 1]) == 0) {
                 full = 0;
             }
         }
@@ -797,7 +801,7 @@ actor FourkSimul owns SimulMatchState {
         // hands the owner the same challenge window claim_win opens: they flip
         // the state to pending (rerouting the pot to themselves) with time to
         // spare, while an honest draw is in no hurry to settle.
-        require(this.age >= move_timeout);
+        require(this.ageDaa >= move_timeout);
 
         // Self-funded, single-input split (see MAX_FEE): one match UTXO in,
         // an equal two-output split out, the fee taken from the pot. The
@@ -805,8 +809,8 @@ actor FourkSimul owns SimulMatchState {
         require(tx.inputs.length == 1);
         require(tx.outputs.length == 2);
         int half_floor = (self.value - MAX_FEE) / 2;
-        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
-        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        byte[36] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[36] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
         require(tx.outputs[0].value == tx.outputs[1].value);
@@ -823,12 +827,12 @@ actor FourkSimul owns SimulMatchState {
         require(pending_win == 0);
         int full = 1;
         for (c, 0, COLS, COLS) {
-            if (OpBin2Num(board[c * ROWS + ROWS - 1]) == 0) {
+            if (signed(board[c * ROWS + ROWS - 1]) == 0) {
                 full = 0;
             }
         }
         require(full == 0);
-        require(this.age >= move_timeout);
+        require(this.ageDaa >= move_timeout);
 
         pubkey claimant = p1;
         int one_sided = 0;
@@ -876,7 +880,7 @@ actor FourkSimul owns SimulMatchState {
             c2 = 1;
         }
         require(c1 == c2);
-        require(this.age >= move_timeout);
+        require(this.ageDaa >= move_timeout);
 
         // Self-funded, single-input split (see MAX_FEE): one match UTXO in,
         // an equal two-output split out, the fee taken from the pot. The
@@ -884,8 +888,8 @@ actor FourkSimul owns SimulMatchState {
         require(tx.inputs.length == 1);
         require(tx.outputs.length == 2);
         int half_floor = (self.value - MAX_FEE) / 2;
-        byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
-        byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+        byte[36] p1_lock = new ScriptPubKeyP2PK(p1);
+        byte[36] p2_lock = new ScriptPubKeyP2PK(p2);
         require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
         require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
         require(tx.outputs[0].value == tx.outputs[1].value);
@@ -903,16 +907,16 @@ actor FourkSimul owns SimulMatchState {
     // pushed to them instead of halved by a stalling loser at the deadline.
     entry sudden_death() emits none {
         require(deadline > 0);
-        require(tx.time >= deadline);
-        require(this.age >= move_timeout);
+        require(tx.daa >= deadline);
+        require(this.ageDaa >= move_timeout);
         // Self-funded, single input — the anti-aggregation guard (see MAX_FEE).
         require(tx.inputs.length == 1);
 
         if (pending_win == 0) {
             require(tx.outputs.length == 2);
             int half_floor = (self.value - MAX_FEE) / 2;
-            byte[34] p1_lock = new ScriptPubKeyP2PK(p1);
-            byte[34] p2_lock = new ScriptPubKeyP2PK(p2);
+            byte[36] p1_lock = new ScriptPubKeyP2PK(p1);
+            byte[36] p2_lock = new ScriptPubKeyP2PK(p2);
             require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
             require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
             require(tx.outputs[0].value == tx.outputs[1].value);
@@ -923,7 +927,7 @@ actor FourkSimul owns SimulMatchState {
             if (pending_win == 2) {
                 winner_pk = p2;
             }
-            byte[34] w_lock = new ScriptPubKeyP2PK(winner_pk);
+            byte[36] w_lock = new ScriptPubKeyP2PK(winner_pk);
             require(tx.outputs[0].scriptPubKey == byte[](w_lock));
             require(tx.outputs[0].value >= self.value - MAX_FEE);
         }
@@ -935,7 +939,7 @@ actor FourkSimul owns SimulMatchState {
     // selector index.
     entry sweep_win(sig s) emits none {
         require(pending_win == 1 || pending_win == 2);
-        require(this.age >= move_timeout);
+        require(this.ageDaa >= move_timeout);
 
         pubkey winner_pk = p1;
         if (pending_win == 2) {

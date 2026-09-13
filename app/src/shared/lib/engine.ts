@@ -1,62 +1,55 @@
 /**
- * Mode-free transaction engine for the Fourk covenants, on the kaspa wasm
- * SDK. Everything here is generic over `ModeEngine` — the per-mode strategy
- * that derives scripts, selector tables, and budgets. The engine owns:
+ * Mode-free transaction engine for the Fourk covenants. Every covenant spend
+ * is described as a plain JSON spec (inputs, outputs, entry arguments) and
+ * handed to fourk-wasm's `buildTransaction`, which signs it, assembles it,
+ * and executes every input through the real Kaspa script engine via
+ * argent-runtime's TxBuilder — the same builder the Rust harness drives. A
+ * malformed spend therefore fails here, with the engine's reason, instead of
+ * as an opaque node rejection; compute budgets are measured, not declared.
  *
+ * The engine owns:
  *   - node connection and transient-error resilience
- *   - wallet/UTXO access, funding selection, fee floor
- *   - the placeholder-sign-splice build cycle (sighash ignores sig scripts)
- *   - the four transaction shapes every door is one of:
+ *   - wallet/UTXO access, funding selection, fee sizing (two builds: the
+ *     first measures the fee mass, the second carries the fee)
+ *   - the door shapes every entrypoint is one of:
  *       openCovenant   genesis: wallet funding -> covenant output
  *       continuation   covenant input + funding, pot preserved (+delta)
  *       signedTerminal covenant input only, pot minus fee to the caller
- *       pinnedSplit    covenant input + funding, outputs 0/1 pinned to the
- *                      players at half the pot each (optionally signed)
- *   - spend tracing (discoverSpend) and script tokenizing
+ *       pinnedWinner   covenant input only, pot minus fee to a pinned winner
+ *       pinnedSplit    covenant input only, outputs 0/1 pinned to the players
+ *   - spend tracing (discoverSpend)
  *
- * Which entrypoint exists, what its sig script looks like, and what a
- * successor state is are all mode questions — see shared/modes/.
+ * Which actor holds a snapshot and what its state fields are is a mode
+ * question (`ModeEngine`, shared/modes/); which arguments a door takes is the
+ * caller's (ordered ABI argument lists — the builder checks count and type).
  */
 
-import { kaspa } from "./sdk";
+import { fourk, kaspa } from "./sdk";
 import { NETWORK_ID, NETWORK_TYPE, fromHex, toHex, type Match, type PlayerProfile } from "./match";
 import { decodeProfileBytes, encodeProfileBytes } from "./sharecode";
 import type { State } from "./game";
 import type { SimulCore } from "../modes/fourk/core";
 
-const SUBNETWORK_ID = "00".repeat(20);
-const P2PK_BUDGET = 10;
 const DUST = 20_000n;
 const MIN_RELAY_FEERATE = 100n;
 export const FEE_HEADROOM = 2_000_000n;
-const PLACEHOLDER_SIG = new Uint8Array(65);
 
 export type Rpc = InstanceType<typeof kaspa.RpcClient>;
 export type PrivateKey = InstanceType<typeof kaspa.PrivateKey>;
-type Transaction = InstanceType<typeof kaspa.Transaction>;
 
-/** The per-mode strategy the engine is generic over: how a match snapshot
- * becomes scripts and how its entrypoints are numbered. Implemented by
- * shared/modes/(classic|fourk)/engine.ts; lobby-vs-live actor dispatch lives
- * inside the mode. */
+/** An actor's state fields as the wasm builder expects them: hex for
+ * byte-like fields, numbers for integers. Field names are the contract's. */
+export type ActorState = Record<string, string | number>;
+
+/** The per-mode strategy the engine is generic over: which actor holds a
+ * match snapshot and how the snapshot maps onto that actor's state fields.
+ * Implemented by shared/modes/(classic|fourk)/engine.ts. */
 export interface ModeEngine {
-  /** Covenant input compute budget (classic 12; fourk 20 — its continuations
-   * rebuild the ~4.3 KB successor template in-script). */
-  covenantBudget: number;
-  /** Redeem script (P2SH preimage) for the snapshot. */
-  lockRedeem(m: Match): Uint8Array;
-  /** Full entry signature script, hex. `blob` carries 32-byte data args
-   * (fourk's commitment hash / reveal salt); modes without them ignore it. */
-  sigScript(
-    m: Match,
-    fn: string,
-    sig: Uint8Array | undefined,
-    pk: Uint8Array | undefined,
-    ints: number[],
-    blob?: Uint8Array,
-  ): string;
-  /** ABI selector table for the snapshot's current phase. */
-  selectorTable(m: Match): readonly string[];
+  /** The actor (contract) holding the snapshot: the lobby actor while the
+   * seat is open, the live actor afterwards. */
+  actorOf(m: Match): string;
+  /** The snapshot as that actor's state fields. */
+  stateOf(m: Match): ActorState;
 }
 
 /** RPC UTXO entries arrive in two shapes depending on the SDK path — read
@@ -65,14 +58,21 @@ export interface UtxoEntryLike {
   address?: unknown;
   amount?: bigint | number | string;
   blockDaaScore?: bigint | number | string;
+  isCoinbase?: boolean;
   covenantId?: string;
   outpoint?: { transactionId: unknown; index?: unknown };
   entry?: {
     address?: unknown;
     covenantId?: string;
+    isCoinbase?: boolean;
+    blockDaaScore?: bigint | number | string;
     outpoint?: { transactionId: unknown; index?: unknown };
   };
-  utxoEntry?: { amount?: bigint | number | string; blockDaaScore?: bigint | number | string };
+  utxoEntry?: {
+    amount?: bigint | number | string;
+    blockDaaScore?: bigint | number | string;
+    isCoinbase?: boolean;
+  };
 }
 
 /**
@@ -123,7 +123,7 @@ export async function connect(url?: string): Promise<Rpc> {
 // timeouts, balancers). The SDK auto-reconnects, but calls in flight at the
 // moment of the drop throw "WebSocket disconnected". Reads are idempotent, so
 // they retry transparently; transaction submission gets special handling in
-// send() because a lost *response* doesn't mean a lost *transaction*.
+// submitSpec() because a lost *response* doesn't mean a lost *transaction*.
 
 const TRANSIENT = /websocket|disconnect|not connected|connection|timed? ?out/i;
 
@@ -168,13 +168,27 @@ export function entryTxId(entry: UtxoEntryLike): string {
   return String(outpoint!.transactionId);
 }
 
+function entryDaaScore(entry: UtxoEntryLike): bigint {
+  return BigInt(
+    entry.blockDaaScore ?? entry.entry?.blockDaaScore ?? entry.utxoEntry?.blockDaaScore ?? 0n,
+  );
+}
+
+function entryIsCoinbase(entry: UtxoEntryLike): boolean {
+  return Boolean(
+    entry.isCoinbase ?? entry.entry?.isCoinbase ?? entry.utxoEntry?.isCoinbase ?? false,
+  );
+}
+
 export async function walletBalance(rpc: Rpc, address: string): Promise<bigint> {
   const entries = await utxosAt(rpc, address);
   return entries.reduce((sum, e) => sum + entryAmount(e), 0n);
 }
 
+/** The script public key locking a match snapshot under `mode`. */
 export function matchSpk(mode: ModeEngine, m: Match) {
-  return kaspa.payToScriptHashScript(mode.lockRedeem(m));
+  const script = fourk.actorScriptPublicKey(mode.actorOf(m), JSON.stringify(mode.stateOf(m)));
+  return new kaspa.ScriptPublicKey(0, script);
 }
 
 /** The game address of a match snapshot under `mode`. */
@@ -242,51 +256,168 @@ function fundingTotal(entries: UtxoEntryLike[]): bigint {
   return entries.reduce((sum, e) => sum + entryAmount(e), 0n);
 }
 
-// --- Transaction assembly ----------------------------------------------------
+// --- Transaction specs ---------------------------------------------------------
+//
+// The JSON the wasm builder consumes (wasm/src/builder.rs documents it).
+// Sompi and DAA quantities travel as decimal strings; bytes as hex.
 
-function gameInput(
+/** One entry argument, in the contract's declared order. `sig` names a
+ * signer index into the keys handed to submitSpec. */
+export type EntryArg = { sig: number } | { bytes: string } | { int: number };
+
+interface UtxoSpec {
+  outpoint: { txid: string; index: number };
+  value: string;
+  daaScore: string;
+  coinbase: boolean;
+  sequence: string;
+}
+
+type InputSpec =
+  | ({
+      kind: "actor";
+      actor: string;
+      state: ActorState;
+      entry: string;
+      args: EntryArg[];
+      covenantId: string;
+    } & UtxoSpec)
+  | ({ kind: "p2pk"; signer: number; pubkey: string } & UtxoSpec)
+  | ({ kind: "script"; sigScript: string; scriptPublicKey: string } & UtxoSpec);
+
+type OutputSpec =
+  | {
+      kind: "actor";
+      actor: string;
+      state: ActorState;
+      authorizingInput: number;
+      covenantId: string;
+      value: string;
+    }
+  | { kind: "genesis"; actor: string; state: ActorState; authorizingInput: number; value: string }
+  | { kind: "script"; scriptPublicKey: string; value: string };
+
+export interface TxSpec {
+  network: string;
+  lockTime?: string;
+  payload?: string;
+  inputs: InputSpec[];
+  outputs: OutputSpec[];
+}
+
+/** What the builder hands back: the finished transaction plus its masses. */
+export interface BuiltTx {
+  id: string;
+  version: number;
+  lockTime: string;
+  subnetworkId: string;
+  gas: string;
+  payload: string;
+  inputs: Array<{
+    transactionId: string;
+    index: number;
+    signatureScript: string;
+    sequence: string;
+    sigOpCount: number;
+    computeBudget: number;
+  }>;
+  outputs: Array<{
+    value: string;
+    scriptVersion: number;
+    script: string;
+    covenant: { authorizingInput: number; covenantId: string } | null;
+  }>;
+  mass: { compute: string; transient: string; storage: string; fee: string };
+}
+
+function utxoSpec(entry: UtxoEntryLike, sequence = 0n): UtxoSpec {
+  const outpoint = (entry.outpoint ?? entry.entry?.outpoint)!;
+  return {
+    outpoint: { txid: String(outpoint.transactionId), index: Number(outpoint.index ?? 0) },
+    value: entryAmount(entry).toString(),
+    daaScore: entryDaaScore(entry).toString(),
+    coinbase: entryIsCoinbase(entry),
+    sequence: sequence.toString(),
+  };
+}
+
+/** The match's covenant UTXO as a spec input calling `entry`. */
+export function gameInput(
+  mode: ModeEngine,
   match: Match,
   gameUtxo: UtxoEntryLike,
-  sigScriptHex: string,
-  budget: number,
+  entry: string,
+  args: EntryArg[],
   sequence = 0n,
-) {
-  return new kaspa.TransactionInput({
-    previousOutpoint: { transactionId: match.txid, index: 0 },
-    signatureScript: sigScriptHex,
-    sequence,
-    sigOpCount: 0,
-    computeBudget: budget,
-    utxo: gameUtxo,
-  } as any);
+): InputSpec {
+  return {
+    kind: "actor",
+    actor: mode.actorOf(match),
+    state: mode.stateOf(match),
+    entry,
+    args,
+    covenantId: match.covenantId,
+    ...utxoSpec(gameUtxo, sequence),
+  };
 }
 
-function fundingInput(entry: UtxoEntryLike, sigScriptHex: string) {
-  const outpoint = (entry.outpoint ?? entry.entry?.outpoint)!;
-  return new kaspa.TransactionInput({
-    previousOutpoint: {
-      transactionId: String(outpoint.transactionId),
-      index: Number(outpoint.index),
-    },
-    signatureScript: sigScriptHex,
-    sequence: 0n,
-    sigOpCount: 0,
-    computeBudget: P2PK_BUDGET,
-    utxo: entry,
-  } as any);
+/** A wallet UTXO as a spec input signed by key `signer`. */
+export function fundingInput(entry: UtxoEntryLike, signer: number, pubkeyHex: string): InputSpec {
+  return { kind: "p2pk", signer, pubkey: pubkeyHex, ...utxoSpec(entry) };
 }
 
-function makeTx(inputs: any[], outputs: any[], payload = "", lockTime = 0n): Transaction {
-  return new kaspa.Transaction({
-    version: 1,
-    inputs,
-    outputs,
-    lockTime,
-    gas: 0n,
-    payload,
-    subnetworkId: SUBNETWORK_ID,
-  } as any);
+/** A UTXO spent with a ready-made signature script (the dispenser claim). */
+export function scriptInput(
+  entry: UtxoEntryLike,
+  sigScriptHex: string,
+  scriptPublicKeyHex: string,
+  sequence = 0n,
+): InputSpec {
+  return {
+    kind: "script",
+    sigScript: sigScriptHex,
+    scriptPublicKey: scriptPublicKeyHex,
+    ...utxoSpec(entry, sequence),
+  };
 }
+
+/** A plain output to `spk` (an SDK ScriptPublicKey). */
+export function scriptOutput(spk: { script: string }, value: bigint): OutputSpec {
+  return { kind: "script", scriptPublicKey: String(spk.script), value: value.toString() };
+}
+
+export function p2pkOutput(pkHex: string, value: bigint): OutputSpec {
+  return { kind: "script", scriptPublicKey: "20" + pkHex + "ac", value: value.toString() };
+}
+
+/** The successor covenant output, authorized by input `authorizingInput`. */
+function successorOutput(
+  mode: ModeEngine,
+  next: Match,
+  authorizingInput: number,
+  value: bigint,
+): OutputSpec {
+  return {
+    kind: "actor",
+    actor: mode.actorOf(next),
+    state: mode.stateOf(next),
+    authorizingInput,
+    covenantId: next.covenantId,
+    value: value.toString(),
+  };
+}
+
+function withChange(
+  outputs: OutputSpec[],
+  changeSpk: { script: string },
+  changeValue: bigint,
+): OutputSpec[] {
+  if (changeValue < 0n) throw new Error(`insufficient funds: short ${-changeValue} sompi`);
+  if (changeValue >= DUST) return [...outputs, scriptOutput(changeSpk, changeValue)];
+  return outputs;
+}
+
+// --- Build / submit ------------------------------------------------------------
 
 // The join transaction's payload is the only P2 -> P1 channel that exists
 // without a backend: it carries the joiner's profile (name + avatar code),
@@ -310,70 +441,88 @@ export function profileFromPayload(payloadHex: string): PlayerProfile | null {
   }
 }
 
-function p2pkOutput(pkHex: string, value: bigint) {
-  const script = fromHex("20" + pkHex + "ac");
-  return new kaspa.TransactionOutput(value, new kaspa.ScriptPublicKey(0, script));
+function secretsOf(keys: PrivateKey[]): Uint8Array {
+  const out = new Uint8Array(32 * keys.length);
+  keys.forEach((key, i) => out.set(fromHex(key.toString()), 32 * i));
+  return out;
 }
 
-function withChange(outputs: any[], changeSpk: any, changeValue: bigint): any[] {
-  if (changeValue < 0n) throw new Error(`insufficient funds: short ${-changeValue} sompi`);
-  if (changeValue >= DUST) return [...outputs, new kaspa.TransactionOutput(changeValue, changeSpk)];
-  return outputs;
-}
-
-/** Consensus transaction_estimated_serialized_size, for the transient fee floor. */
-function estimatedSize(tx: Transaction): number {
-  let size = 94 + String((tx as any).payload ?? "").length / 2;
-  for (const input of tx.inputs) size += 54 + String(input.signatureScript).length / 2;
-  for (const output of tx.outputs) {
-    size += 18 + String(output.scriptPublicKey.script).length / 2;
-    if (output.covenant) size += 34;
+/** Sign, assemble, and engine-verify `spec` (fourk-wasm). Throws with the
+ * builder's or the script engine's reason. */
+export function buildTx(spec: TxSpec, keys: PrivateKey[]): BuiltTx {
+  const secrets = secretsOf(keys);
+  try {
+    return JSON.parse(fourk.buildTransaction(JSON.stringify(spec), secrets)) as BuiltTx;
+  } finally {
+    secrets.fill(0); // the JS-side copy; the SDK's own key object keeps the secret
   }
-  return size;
 }
 
-/**
- * The mempool fee floor charges max(compute mass, normalized transient mass).
- * The SDK's calculateTransactionMass slightly undercounts consensus compute
- * mass (the +2 spk version bytes per output, at 10 grams/byte), so compute
- * the consensus formula directly and take the max of all three.
- */
-export function feeMassFloor(tx: Transaction, sdkMass: bigint): bigint {
-  const size = estimatedSize(tx);
-  let computeMass = size;
-  for (const output of tx.outputs)
-    computeMass += (String(output.scriptPublicKey.script).length / 2 + 2) * 10;
-  for (const input of tx.inputs) computeMass += Number((input as any).computeBudget ?? 0) * 100;
-  return bigMax(bigMax(sdkMass, BigInt(computeMass)), BigInt(size) * 2n);
+/** Rebuild the SDK transaction object the RPC submits, from the builder's
+ * JSON. CovenantBinding objects are constructed fresh because the SDK's
+ * TransactionOutput consumes them. */
+function toSdkTransaction(built: BuiltTx) {
+  return new kaspa.Transaction({
+    version: built.version,
+    inputs: built.inputs.map(
+      (i) =>
+        new kaspa.TransactionInput({
+          previousOutpoint: { transactionId: i.transactionId, index: i.index },
+          signatureScript: i.signatureScript,
+          sequence: BigInt(i.sequence),
+          sigOpCount: i.sigOpCount,
+          computeBudget: i.computeBudget,
+        } as any),
+    ),
+    outputs: built.outputs.map(
+      (o) =>
+        new kaspa.TransactionOutput(
+          BigInt(o.value),
+          new kaspa.ScriptPublicKey(o.scriptVersion, fromHex(o.script)),
+          o.covenant
+            ? new kaspa.CovenantBinding(
+                o.covenant.authorizingInput,
+                new kaspa.Hash(o.covenant.covenantId),
+              )
+            : undefined,
+        ),
+    ),
+    lockTime: BigInt(built.lockTime),
+    gas: BigInt(built.gas),
+    payload: built.payload,
+    subnetworkId: built.subnetworkId,
+  } as any);
 }
 
-type Build = (fee: bigint, sigs: Map<number, Uint8Array>) => Transaction;
-
-async function send(rpc: Rpc, build: Build, signers: Array<[number, PrivateKey]>): Promise<string> {
-  const placeholders = new Map(signers.map(([i]) => [i, PLACEHOLDER_SIG]));
-  const draft = build(0n, placeholders);
-  const mass = BigInt(kaspa.calculateTransactionMass(NETWORK_ID, draft as any));
-  const feeMass = feeMassFloor(draft, mass);
+/** The node's current priority feerate (sompi per gram), floored. */
+export async function currentFeerate(rpc: Rpc): Promise<bigint> {
   const estimate: any = await withRetry(() => rpc.getFeeEstimate({} as any));
-  const feerate = bigMax(
+  return bigMax(
     BigInt(Math.ceil(Number(estimate.estimate.priorityBucket.feerate))),
     MIN_RELAY_FEERATE,
   );
-  const fee = feeMass * feerate;
+}
 
-  const unsigned = build(fee, placeholders);
-  const sigs = new Map(
-    signers.map(([i, key]) => {
-      // createInputSignature returns hex of [push65, 64-byte sig, hashtype];
-      // strip the push opcode — the entry sigscript does its own pushing.
-      const hex = kaspa.createInputSignature(unsigned as any, i, key);
-      return [i, fromHex(hex.slice(2))] as const;
-    }),
-  );
-  const final = build(fee, sigs);
+/**
+ * Build `specOf(fee)` and submit it. The fee is sized from the transaction
+ * itself: a first build measures the fee mass (compute vs transient, as the
+ * mempool prices it), the second carries `feeMass * feerate`. Both builds run
+ * every input through the script engine, so what gets submitted has already
+ * verified locally.
+ */
+export async function submitSpec(
+  rpc: Rpc,
+  keys: PrivateKey[],
+  specOf: (fee: bigint) => TxSpec,
+): Promise<{ txid: string; built: BuiltTx }> {
+  const draft = buildTx(specOf(0n), keys);
+  const feerate = await currentFeerate(rpc);
+  const fee = BigInt(draft.mass.fee) * feerate;
+  const built = buildTx(specOf(fee), keys);
+  const final = toSdkTransaction(built);
   try {
     const res = await rpc.submitTransaction({ transaction: final as any, allowOrphan: false });
-    return String(res.transactionId);
+    return { txid: String(res.transactionId), built };
   } catch (e) {
     // A dropped websocket may have eaten the RESPONSE, not the transaction.
     // Resubmit the identical tx once; "already known" then means success.
@@ -381,9 +530,9 @@ async function send(rpc: Rpc, build: Build, signers: Array<[number, PrivateKey]>
     await sleep(2500);
     try {
       const res = await rpc.submitTransaction({ transaction: final as any, allowOrphan: false });
-      return String(res.transactionId);
+      return { txid: String(res.transactionId), built };
     } catch (e2: any) {
-      if (/already/i.test(String(e2?.message ?? e2))) return String((final as any).id);
+      if (/already/i.test(String(e2?.message ?? e2))) return { txid: built.id, built };
       throw e2;
     }
   }
@@ -391,10 +540,6 @@ async function send(rpc: Rpc, build: Build, signers: Array<[number, PrivateKey]>
 
 function bigMax(a: bigint, b: bigint): bigint {
   return a > b ? a : b;
-}
-
-function fullP2pkSigScript(sig: Uint8Array): string {
-  return "41" + toHex(sig);
 }
 
 /**
@@ -421,27 +566,24 @@ export async function sendTo(
   const total = fundingTotal(funding);
   if (sweep && total < DUST) throw new Error("LOW_BALANCE");
   const changeSpk = kaspa.payToAddressScript(new kaspa.Address(walletAddress(key)));
+  const pk = walletPubkey(key);
 
   let sent = 0n;
-  const build: Build = (fee, sigs) => {
+  const { txid } = await submitSpec(rpc, [key], (fee) => {
     sent = sweep ? total - fee : (amount as bigint);
     if (sent < DUST) throw new Error("LOW_BALANCE"); // fee ate the sweep
-    const inputs = funding.map((f, i) => fundingInput(f, fullP2pkSigScript(sigs.get(i)!)));
-    const outputs = sweep
-      ? [new kaspa.TransactionOutput(sent, destSpk)]
-      : withChange([new kaspa.TransactionOutput(sent, destSpk)], changeSpk, total - sent - fee);
-    return makeTx(inputs, outputs);
-  };
-
-  const txid = await send(
-    rpc,
-    build,
-    funding.map((_, i): [number, PrivateKey] => [i, key]),
-  );
+    return {
+      network: NETWORK_ID,
+      inputs: funding.map((f) => fundingInput(f, 0, pk)),
+      outputs: sweep
+        ? [scriptOutput(destSpk, sent)]
+        : withChange([scriptOutput(destSpk, sent)], changeSpk, total - sent - fee),
+    };
+  });
   return { txid, amount: sent };
 }
 
-// --- The four door shapes -----------------------------------------------------
+// --- The door shapes -----------------------------------------------------------
 
 export interface MatchTiming {
   /** Per-move forfeit clock, DAA blocks (>= contract floor of 600). */
@@ -452,7 +594,8 @@ export interface MatchTiming {
 }
 
 /** Genesis: fund a fresh covenant output of `stake` at the mode-derived
- * address for `genesis`. Returns the covenant id and txid. */
+ * address for `genesis`. The covenant id is derived by the builder from the
+ * funding input. Returns the covenant id and txid. */
 export async function openCovenant(
   rpc: Rpc,
   key: PrivateKey,
@@ -460,42 +603,43 @@ export async function openCovenant(
   genesis: Match,
 ): Promise<{ covenantId: string; txid: string }> {
   const stake = genesis.value;
-  const spk = matchSpk(mode, genesis);
   const funding = await pickFunding(rpc, key, stake + FEE_HEADROOM);
   const changeSpk = kaspa.payToAddressScript(new kaspa.Address(walletAddress(key)));
-  let covenantId = "";
+  const pk = walletPubkey(key);
 
-  const build: Build = (fee, sigs) => {
-    const inputs = funding.map((f, i) => fundingInput(f, fullP2pkSigScript(sigs.get(i)!)));
-    const outputs = withChange(
-      [new kaspa.TransactionOutput(stake, spk)],
+  const { txid, built } = await submitSpec(rpc, [key], (fee) => ({
+    network: NETWORK_ID,
+    inputs: funding.map((f) => fundingInput(f, 0, pk)),
+    outputs: withChange(
+      [
+        {
+          kind: "genesis",
+          actor: mode.actorOf(genesis),
+          state: mode.stateOf(genesis),
+          authorizingInput: 0,
+          value: stake.toString(),
+        },
+      ],
       changeSpk,
       fundingTotal(funding) - stake - fee,
-    );
-    const tx = makeTx(inputs, outputs);
-    tx.populateGenesisCovenants([new kaspa.GenesisCovenantGroup(0, [0])]);
-    covenantId = String((tx.outputs[0] as any).covenant.covenantId);
-    return tx;
-  };
-
-  const txid = await send(
-    rpc,
-    build,
-    funding.map((_, i): [number, PrivateKey] => [i, key]),
-  );
+    ),
+  }));
+  const covenantId = built.outputs[0]?.covenant?.covenantId;
+  if (!covenantId) throw new Error("genesis output carries no covenant id");
   return { covenantId, txid };
 }
 
-/** Continuation spend (join / move / commit / reveal / resolve): game input
- * + funding, pot preserved (+delta on join). `next` is the successor
- * snapshot; mode-specific Match fields ride along. */
+/** Continuation spend (join / move / commit / reveal / resolve / claim_win):
+ * game input + funding, pot preserved (+delta on join). `args` are the
+ * entry's arguments in ABI order (`{ sig: 0 }` is the caller's signature);
+ * `next` is the successor snapshot; mode-specific Match fields ride along. */
 export async function continuation(
   rpc: Rpc,
   key: PrivateKey,
   mode: ModeEngine,
   match: Match,
-  fn: string,
-  callArgs: (sig: Uint8Array) => { pk?: Uint8Array; ints: number[]; blob?: Uint8Array },
+  entry: string,
+  args: EntryArg[],
   next: { state: State; simul?: SimulCore },
   potDelta: bigint,
   payload = "",
@@ -504,6 +648,7 @@ export async function continuation(
   if (!gameUtxo) throw new Error("game UTXO not found on chain — sync first");
   const funding = await pickFunding(rpc, key, potDelta + FEE_HEADROOM);
   const changeSpk = kaspa.payToAddressScript(new kaspa.Address(walletAddress(key)));
+  const pk = walletPubkey(key);
   const nextValue = match.value + potDelta;
   const nextMatch: Match = {
     ...match,
@@ -512,66 +657,44 @@ export async function continuation(
     value: nextValue,
   };
 
-  const build: Build = (fee, sigs) => {
-    const { pk, ints, blob } = callArgs(sigs.get(0)!);
-    const inputs = [
-      gameInput(
-        match,
-        gameUtxo,
-        mode.sigScript(match, fn, sigs.get(0)!, pk, ints, blob),
-        mode.covenantBudget,
-      ),
-      ...funding.map((f, i) => fundingInput(f, fullP2pkSigScript(sigs.get(i + 1)!))),
-    ];
-    // The TransactionOutput constructor CONSUMES the CovenantBinding wasm
-    // object (passed by value into Rust) — it must be constructed fresh on
-    // every build, or the signed/submitted rebuilds silently lose the
-    // binding and the covenant's OpAuthOutputCount check fails on-chain.
-    const binding = new kaspa.CovenantBinding(0, new kaspa.Hash(match.covenantId));
-    const outputs = withChange(
-      [new kaspa.TransactionOutput(nextValue, matchSpk(mode, nextMatch), binding)],
+  const { txid } = await submitSpec(rpc, [key], (fee) => ({
+    network: NETWORK_ID,
+    payload,
+    inputs: [
+      gameInput(mode, match, gameUtxo, entry, args),
+      ...funding.map((f) => fundingInput(f, 0, pk)),
+    ],
+    outputs: withChange(
+      [successorOutput(mode, nextMatch, 0, nextValue)],
       changeSpk,
       fundingTotal(funding) - potDelta - fee,
-    );
-    return makeTx(inputs, outputs, payload);
-  };
-
-  const txid = await send(rpc, build, [
-    [0, key],
-    ...funding.map((_, i): [number, PrivateKey] => [i + 1, key]),
-  ]);
+    ),
+  }));
   return untilIndexed(rpc, mode, { ...nextMatch, txid }, match);
 }
 
-/** Signed terminal door (cancel / winning_move / claim_forfeit / claim_win /
- * claim_timeout): pot minus fee to the caller, who signs and directs freely. */
+/** Signed terminal door (cancel / winning_move / claim_forfeit / claim_timeout
+ * / sweep_win): pot minus fee to the caller, who signs and directs freely.
+ * `args` in ABI order, the caller's signature as `{ sig: 0 }`. */
 export async function signedTerminal(
   rpc: Rpc,
   key: PrivateKey,
   mode: ModeEngine,
   match: Match,
-  fn: string,
-  ints: number[],
+  entry: string,
+  args: EntryArg[],
   sequence = 0n,
 ): Promise<string> {
   const gameUtxo = await fetchGameUtxo(rpc, mode, match);
   if (!gameUtxo) throw new Error("game UTXO not found on chain — sync first");
   const payoutSpk = kaspa.payToAddressScript(new kaspa.Address(walletAddress(key)));
 
-  const build: Build = (fee, sigs) => {
-    const inputs = [
-      gameInput(
-        match,
-        gameUtxo,
-        mode.sigScript(match, fn, sigs.get(0)!, undefined, ints),
-        mode.covenantBudget,
-        sequence,
-      ),
-    ];
-    return makeTx(inputs, [new kaspa.TransactionOutput(match.value - fee, payoutSpk)]);
-  };
-
-  return send(rpc, build, [[0, key]]);
+  const { txid } = await submitSpec(rpc, [key], (fee) => ({
+    network: NETWORK_ID,
+    inputs: [gameInput(mode, match, gameUtxo, entry, args, sequence)],
+    outputs: [scriptOutput(payoutSpk, match.value - fee)],
+  }));
+  return txid;
 }
 
 /** Permissionless winner-take-all door: sudden_death fired on a PENDING win.
@@ -584,7 +707,7 @@ export async function pinnedWinner(
   rpc: Rpc,
   mode: ModeEngine,
   match: Match,
-  fn: string,
+  entry: string,
   winnerPkHex: string,
   opts: { lockTime?: bigint } = {},
 ): Promise<string> {
@@ -592,57 +715,44 @@ export async function pinnedWinner(
   const gameUtxo = await fetchGameUtxo(rpc, mode, match);
   if (!gameUtxo) throw new Error("game UTXO not found on chain — sync first");
 
-  const build: Build = (fee) => {
-    const inputs = [
-      gameInput(match, gameUtxo, mode.sigScript(match, fn, undefined, undefined, []), mode.covenantBudget, 0n),
-    ];
-    return makeTx(inputs, [p2pkOutput(winnerPkHex, match.value - fee)], "", lockTime);
-  };
-
-  return send(rpc, build, []);
+  const { txid } = await submitSpec(rpc, [], (fee) => ({
+    network: NETWORK_ID,
+    lockTime: lockTime.toString(),
+    inputs: [gameInput(mode, match, gameUtxo, entry, [])],
+    outputs: [p2pkOutput(winnerPkHex, match.value - fee)],
+  }));
+  return txid;
 }
 
 /** Pinned-split door (claim_draw / sudden_death / claim_split / split_timeout
- * / dissolve): outputs 0/1 pinned to the players at half the pot each, fees
- * on a funding input. `signerPk` makes it a signed door (dissolve);
- * `awaitRefund` waits until the caller's refund is indexed (a kick chains
- * straight into hosting a fresh game off the same UTXO set). */
+ * / dissolve): self-funded, single input — only the match UTXO is spent (the
+ * covenant rejects any second input: the anti-aggregation guard), the fee is
+ * shaved from the pot and the rest splits equally into outputs 0/1 pinned to
+ * the players. `signer` makes it a signed door (dissolve); `awaitRefund`
+ * waits until the caller's refund is indexed (a kick chains straight into
+ * hosting a fresh game off the same UTXO set). */
 export async function pinnedSplit(
   rpc: Rpc,
   key: PrivateKey,
   mode: ModeEngine,
   match: Match,
-  fn: string,
-  ints: number[],
-  opts: { sequence?: bigint; lockTime?: bigint; signerPk?: Uint8Array; awaitRefund?: boolean } = {},
+  entry: string,
+  args: EntryArg[],
+  opts: { sequence?: bigint; lockTime?: bigint; signed?: boolean; awaitRefund?: boolean } = {},
 ): Promise<string> {
-  const { sequence = 0n, lockTime = 0n, signerPk, awaitRefund = false } = opts;
+  const { sequence = 0n, lockTime = 0n, signed = false, awaitRefund = false } = opts;
   const gameUtxo = await fetchGameUtxo(rpc, mode, match);
   if (!gameUtxo) throw new Error("game UTXO not found on chain — sync first");
 
-  const build: Build = (fee, sigs) => {
-    // Self-funded, single input: only the match UTXO is spent, and the covenant
-    // rejects any second input (that is the anti-aggregation guard). The fee is
-    // shaved from the pot and the rest splits equally — the covenant enforces
-    // outputs[0] == outputs[1] and floors each at (value - MAX_FEE) / 2.
-    const inputs = [
-      gameInput(
-        match,
-        gameUtxo,
-        mode.sigScript(match, fn, signerPk ? sigs.get(0)! : undefined, signerPk, ints),
-        mode.covenantBudget,
-        sequence,
-      ),
-    ];
+  const { txid } = await submitSpec(rpc, signed ? [key] : [], (fee) => {
     const each = (match.value - fee) / 2n;
-    const outputs = [p2pkOutput(match.state.p1, each), p2pkOutput(match.state.p2, each)];
-    return makeTx(inputs, outputs, "", lockTime);
-  };
-
-  const signers: Array<[number, PrivateKey]> = signerPk
-    ? ([[0, key]] as Array<[number, PrivateKey]>)
-    : [];
-  const txid = await send(rpc, build, signers);
+    return {
+      network: NETWORK_ID,
+      lockTime: lockTime.toString(),
+      inputs: [gameInput(mode, match, gameUtxo, entry, args, sequence)],
+      outputs: [p2pkOutput(match.state.p1, each), p2pkOutput(match.state.p2, each)],
+    };
+  });
 
   if (awaitRefund) {
     // Wait until the index reflects this spend (our refund appearing means
@@ -670,7 +780,7 @@ export async function chainCheckpoint(rpc: Rpc): Promise<string> {
 export interface SpendInfo {
   kind: string;
   txid: string;
-  /** Data pushes of the entry call (sig, pk — selector and redeem excluded). */
+  /** Data pushes of the entry call (sig, pk — dispatch tag and redeem excluded). */
   pushes: Uint8Array[];
   /** Small-integer arguments of the entry call, in declared order (e.g. the
    * played column leads winning_move's [col, wcol, wrow, wdir]). Data pushes
@@ -680,20 +790,32 @@ export interface SpendInfo {
   payload: string;
 }
 
+const tagTables = new Map<string, Record<string, string>>();
+
+/** An actor's entry dispatch tags (hex) -> entry names, from the artifact. */
+export function entryTags(actor: string): Record<string, string> {
+  let table = tagTables.get(actor);
+  if (!table) {
+    table = JSON.parse(fourk.entryTags(actor)) as Record<string, string>;
+    tagTables.set(actor, table);
+  }
+  return table;
+}
+
 /**
  * Find the transaction that spent the current game UTXO in blocks since
- * `lowHash` and classify which covenant entrypoint it called (the function
- * selector sits directly before the pushed redeem script; `table` is the
- * mode's ABI order for the match's phase). Pages through getBlocks up to the
- * tip — a backgrounded tab can wake hours past its checkpoint. Returns null
- * if the spend is outside the scanned window; throws if `lowHash` is unknown
- * to the node (e.g. pruned).
+ * `lowHash` and classify which covenant entrypoint it called: an entry call's
+ * signature script ends with the 4-byte dispatch tag push, then the pushed
+ * redeem script, and `tags` is the actor's tag table. Pages through
+ * getBlocks up to the tip — a backgrounded tab can wake hours past its
+ * checkpoint. Returns null if the spend is outside the scanned window;
+ * throws if `lowHash` is unknown to the node (e.g. pruned).
  */
 export async function discoverSpend(
   rpc: Rpc,
   match: Match,
   lowHash: string,
-  table: readonly string[],
+  tags: Record<string, string>,
 ): Promise<SpendInfo | null> {
   let low = lowHash;
   for (let page = 0; page < 50; page++) {
@@ -711,8 +833,8 @@ export async function discoverSpend(
           )
             continue;
           const tokens = scriptTokens(String(inp.signatureScript ?? inp.signature_script ?? ""));
-          const selector = tokens.length >= 2 ? tokenToSmallInt(tokens[tokens.length - 2]!) : null;
-          const kind = selector !== null ? table[selector] : undefined;
+          const tag = tokens.length >= 2 ? tokens[tokens.length - 2]!.data : null;
+          const kind = tag && tag.length === 4 ? tags[toHex(tag)] : undefined;
           if (!kind) return null;
           const call = tokens.slice(0, Math.max(0, tokens.length - 2));
           return {
@@ -785,9 +907,8 @@ export async function gameUtxoAge(
 ): Promise<number | null> {
   const entry = await fetchGameUtxo(rpc, mode, match);
   if (!entry) return null;
-  const daaScore = BigInt(entry.blockDaaScore ?? entry.utxoEntry?.blockDaaScore ?? 0n);
   const info: any = await withRetry(() => rpc.getBlockDagInfo());
-  return Number(BigInt(info.virtualDaaScore) - daaScore);
+  return Number(BigInt(info.virtualDaaScore) - entryDaaScore(entry));
 }
 
 export function myRole(match: Match, pkHex: string): "p1" | "p2" | "spectator" {

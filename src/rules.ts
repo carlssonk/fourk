@@ -7,7 +7,7 @@
  *
  * Ctx models exactly what the covenant can observe about its spending
  * transaction: which pubkey authorized the spend (checkSig) and how old the
- * state UTXO is (`this.age`, in DAA blocks). Output values/scripts are modeled
+ * state UTXO is (`this.ageDaa`, in DAA blocks). Output values/scripts are modeled
  * by the return types: a `State` return means "one covenant successor output
  * carrying this state and the full pot"; a `Payout[]` return means the
  * covenant terminates and these outputs must appear.
@@ -36,10 +36,10 @@ import {
 export interface Ctx {
   /** The pubkey whose signature authorizes this spend (models checkSig). */
   signer: PubKey;
-  /** Age of the state UTXO in DAA blocks (models `this.age`). */
+  /** Age of the state UTXO in DAA blocks (models `this.ageDaa`). */
   utxoAge: number;
   /** Chain DAA score proven reached by the spend's locktime (models
-   * `tx.time`) — the claimant can understate it, never overstate. */
+   * `tx.daa`) — the claimant can understate it, never overstate. */
   txTime: number;
 }
 

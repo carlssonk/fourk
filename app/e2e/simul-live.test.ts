@@ -49,6 +49,7 @@ import {
   sweepWinMatch,
 } from "../src/shared/modes/fourk/actions";
 import { moveMatch, winMatch } from "../src/shared/modes/classic/actions";
+import { claimDrip, dispenserAddress } from "../src/shared/lib/dispenser";
 import type { Match } from "../src/shared/lib/match";
 import { loadSalt } from "../src/shared/modes/fourk/saltStore";
 import { ZERO_CORE, ZERO_HASH, roundPhase, toSimulState } from "../src/shared/modes/fourk/core";
@@ -56,6 +57,14 @@ import { cellIndex } from "../src/shared/lib/game";
 import { decodeShareCode, encodeShareCode, isStaked } from "../src/shared/lib/match";
 
 const NODE_URL = "ws://127.0.0.1:17510";
+/** Mirrors MAX_FEE in contracts/fourk.ag: the pinned-payout doors are
+ * self-funded (single input, fee shaved from the pot), so each pinned half
+ * is at least (pot - MAX_FEE) / 2 — one stake minus half the fee ceiling. */
+const MAX_FEE = 2_000_000n;
+function expectPinnedHalf(after: bigint, before: bigint) {
+  expect(after).toBeGreaterThanOrEqual(before + 1n * KAS - MAX_FEE / 2n);
+  expect(after).toBeLessThan(before + 1n * KAS);
+}
 const NETWORK_TYPE = "simnet";
 const KAS = 100_000_000n;
 
@@ -72,8 +81,24 @@ async function setup() {
   const p1 = new kaspa.PrivateKey("aa".repeat(32));
   const p2 = new kaspa.PrivateKey("bb".repeat(32));
 
-  // Bankroll both players from the miner-fed faucet key (coinbase-mature
-  // UTXOs only — the miner pays this key directly).
+  // Bankroll both players from the miner-fed faucet key.
+  await fundFromFaucet(rpc, faucet, [p1, p2].map((k) => [k.toAddress(NETWORK_TYPE).toString(), 20n * KAS]));
+  // Wait for the funding to be indexed.
+  for (let i = 0; i < 60; i++) {
+    const bal = await cov.walletBalance(rpc, cov.walletAddress(p1));
+    if (bal >= 20n * KAS) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
+  return { rpc, p1, p2, faucet };
+}
+
+/** Pay `outputs` from the faucet key (coinbase-mature UTXOs only — the
+ * miner pays this key directly). */
+async function fundFromFaucet(
+  rpc: cov.Rpc,
+  faucet: kaspa.PrivateKey,
+  outputs: Array<[address: string, amount: bigint]>,
+) {
   const from = faucet.toAddress(NETWORK_TYPE).toString();
   const { entries } = await rpc.getUtxosByAddresses([from]);
   const { virtualDaaScore } = await rpc.getBlockDagInfo();
@@ -84,10 +109,7 @@ async function setup() {
   });
   const { transactions } = await kaspa.createTransactions({
     entries: spendable,
-    outputs: [p1, p2].map((k) => ({
-      address: k.toAddress(NETWORK_TYPE).toString(),
-      amount: 20n * KAS,
-    })),
+    outputs: outputs.map(([address, amount]) => ({ address, amount })),
     changeAddress: from,
     priorityFee: 5_000_000n,
     networkId: "simnet",
@@ -96,13 +118,6 @@ async function setup() {
     await pending.sign([faucet]);
     await pending.submit(rpc);
   }
-  // Wait for the funding to be indexed.
-  for (let i = 0; i < 60; i++) {
-    const bal = await cov.walletBalance(rpc, cov.walletAddress(p1));
-    if (bal >= 20n * KAS) break;
-    await new Promise((r) => setTimeout(r, 500));
-  }
-  return { rpc, p1, p2 };
 }
 
 function core(m: Match) {
@@ -255,7 +270,7 @@ async function waitGone(rpc: cov.Rpc, m: Match) {
     expect(core(m).pendingWin).toBe(1);
 
     // ...and P2 contests at leisure with both witnesses. Pinned payouts:
-    // each player gets exactly their stake back.
+    // each player gets their stake back minus half the self-funded fee.
     const p1Before = await cov.walletBalance(rpc, cov.walletAddress(p1));
     const p2Before = await cov.walletBalance(rpc, cov.walletAddress(p2));
     await as2(() =>
@@ -266,10 +281,8 @@ async function waitGone(rpc: cov.Rpc, m: Match) {
       if ((await cov.walletBalance(rpc, cov.walletAddress(p1))) > p1Before) break;
       await new Promise((r) => setTimeout(r, 500));
     }
-    expect(await cov.walletBalance(rpc, cov.walletAddress(p1))).toBe(p1Before + 1n * KAS);
-    expect(await cov.walletBalance(rpc, cov.walletAddress(p2))).toBeGreaterThan(
-      p2Before + 1n * KAS - KAS / 10n, // their stake back, minus the contest fee
-    );
+    expectPinnedHalf(await cov.walletBalance(rpc, cov.walletAddress(p1)), p1Before);
+    expectPinnedHalf(await cov.walletBalance(rpc, cov.walletAddress(p2)), p2Before);
   }, 600_000);
 
   test("claim_timeout: the lone committer collects after the round clock", async () => {
@@ -375,14 +388,14 @@ async function waitGone(rpc: cov.Rpc, m: Match) {
     }
     expect(m.state.moveCount).toBe(42);
     const p2Before = await cov.walletBalance(rpc, cov.walletAddress(p2));
-    await cov.drawMatch(rpc, p1, m); // p1 cranks; fees ride p1's funding input
+    await cov.drawMatch(rpc, p1, m); // p1 cranks; the fee comes out of the pot
     await waitGone(rpc, m);
     for (let i = 0; i < 40; i++) {
       if ((await cov.walletBalance(rpc, cov.walletAddress(p2))) > p2Before) break;
       await new Promise((r) => setTimeout(r, 500));
     }
-    // The non-cranking player's pinned half arrives whole: exactly one stake.
-    expect(await cov.walletBalance(rpc, cov.walletAddress(p2))).toBe(p2Before + 1n * KAS);
+    // The non-cranking player's pinned half: one stake minus half the fee.
+    expectPinnedHalf(await cov.walletBalance(rpc, cov.walletAddress(p2)), p2Before);
   }, 600_000);
 
   test("sudden_death: a capped game splits once the chain passes its deadline", async () => {
@@ -403,7 +416,7 @@ async function waitGone(rpc: cov.Rpc, m: Match) {
       if ((await cov.walletBalance(rpc, cov.walletAddress(p2))) > p2Before) break;
       await new Promise((r) => setTimeout(r, 500));
     }
-    expect(await cov.walletBalance(rpc, cov.walletAddress(p2))).toBe(p2Before + 1n * KAS);
+    expectPinnedHalf(await cov.walletBalance(rpc, cov.walletAddress(p2)), p2Before);
   }, 600_000);
 
   test("classic mode still works end to end (regression)", async () => {
@@ -490,5 +503,42 @@ async function waitGone(rpc: cov.Rpc, m: Match) {
         KAS,
       ),
     ).rejects.toThrow("BAD_ADDRESS");
+  }, 600_000);
+
+  test("dispenser: an aged lane pays one drip to an empty wallet and re-locks the rest", async () => {
+    const { rpc, faucet } = await setup();
+    const DRIP = 10n * KAS;
+    const LANE = 30n * KAS;
+    // The claimant is a wallet with nothing in it: the claim is an unsigned,
+    // pure-script spend and the fee comes out of the drip.
+    const player = new kaspa.PrivateKey(kaspa.Keypair.random().privateKey);
+    const to = cov.walletAddress(player);
+    const laneBefore = await cov.walletBalance(rpc, dispenserAddress());
+
+    await fundFromFaucet(rpc, faucet, [[dispenserAddress(), LANE]]);
+
+    // The lane is claimable once it has aged COOLDOWN (1200 DAA ≈ 2 min of
+    // simnet mining); claimDrip refuses earlier and the node would too.
+    let txid = "";
+    let lastError: unknown = null;
+    for (let i = 0; i < 300 && !txid; i++) {
+      try {
+        txid = await claimDrip(rpc, to);
+      } catch (e) {
+        lastError = e;
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+    expect(txid, String(lastError)).not.toBe("");
+
+    let got = 0n;
+    for (let i = 0; i < 40 && got === 0n; i++) {
+      await new Promise((r) => setTimeout(r, 500));
+      got = await cov.walletBalance(rpc, to);
+    }
+    // One drip minus the claim's fee lands; the lane re-locks exactly the rest.
+    expect(got).toBeGreaterThanOrEqual(DRIP - MAX_FEE);
+    expect(got).toBeLessThan(DRIP);
+    expect(await cov.walletBalance(rpc, dispenserAddress())).toBe(laneBefore + LANE - DRIP);
   }, 600_000);
 });

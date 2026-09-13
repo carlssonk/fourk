@@ -8,10 +8,9 @@
  * (rederiveSpend) — the same treatment joins get in every mode.
  */
 
-import { fourk } from "../../lib/sdk";
-import { fromHex, phaseOf, toHex, type Match } from "../../lib/match";
+import { phaseOf, toHex, type Match } from "../../lib/match";
 import { findWin, type State } from "../../lib/game";
-import type { SpendInfo } from "../../lib/engine";
+import type { ActorState, SpendInfo } from "../../lib/engine";
 import type { ModeChainSurface, SpendClass } from "../types";
 import { rederiveJoin } from "../common";
 import {
@@ -35,61 +34,12 @@ import {
 } from "./core";
 import { pruneSalts } from "./saltStore";
 
-/** Entrypoints in ABI/selector order — must match fourk.ag declaration order
- * per actor (each generated contract numbers its own selectors from 0).
- * Note `split_timeout`: a real covenant door with no app affordance yet —
- * symmetric stalls are settled by whichever CLI/client cranks it. */
-const SIMUL_LOBBY_ENTRYPOINTS = ["join", "cancel"] as const;
-const SIMUL_MATCH_ENTRYPOINTS = [
-  "dissolve",
-  "commit",
-  "reveal",
-  "resolve",
-  "claim_win",
-  "claim_split",
-  "claim_draw",
-  "claim_timeout",
-  "split_timeout",
-  "sudden_death",
-  "sweep_win",
-] as const;
-
 // claim_win is a continuation now: it parks the pot in a pending-win
 // successor (the challenge window) rather than paying out.
 const CONTINUATIONS = new Set<string>(["commit", "reveal", "resolve", "claim_win"]);
 
 function isOpen(s: State): boolean {
   return phaseOf(s) === 0;
-}
-
-function simulArgs(
-  ss: SimulState,
-): [
-  Uint8Array,
-  Uint8Array,
-  Uint8Array,
-  bigint,
-  Uint8Array,
-  Uint8Array,
-  bigint,
-  bigint,
-  bigint,
-  bigint,
-  bigint,
-] {
-  return [
-    fromHex(ss.p1),
-    fromHex(ss.p2),
-    ss.board,
-    BigInt(ss.round),
-    fromHex(ss.commit1),
-    fromHex(ss.commit2),
-    BigInt(ss.reveal1),
-    BigInt(ss.reveal2),
-    BigInt(ss.pendingWin),
-    BigInt(ss.moveTimeout),
-    BigInt(ss.deadline),
-  ];
 }
 
 export function simulSnapshot(m: Match): SimulState {
@@ -101,44 +51,29 @@ export function simulCtx(pkHex: string) {
 }
 
 export const fourkEngine = {
-  /** Fourk continuations rebuild the ~4.3 KB successor template in-script
-   * (~131k units measured live for join — budget 12 caps at 129,999), so
-   * the declared budget is 20 for comfortable headroom. */
-  covenantBudget: 20,
-
-  lockRedeem(m: Match): Uint8Array {
-    const s = m.state;
-    return isOpen(s)
-      ? fourk.simulLobbyLockScript(fromHex(s.p1), BigInt(s.moveTimeout), BigInt(s.deadline))
-      : fourk.simulMatchLockScript(...simulArgs(simulSnapshot(m)));
+  /** An open seat is a FourkSimulLobby; a joined match is a FourkSimul. */
+  actorOf(m: Match): string {
+    return isOpen(m.state) ? "FourkSimulLobby" : "FourkSimul";
   },
 
-  sigScript(
-    m: Match,
-    fn: string,
-    sig: Uint8Array | undefined,
-    pk: Uint8Array | undefined,
-    ints: number[],
-    blob?: Uint8Array,
-  ): string {
+  /** The snapshot as the actor's state fields (contracts/fourk.ag). */
+  stateOf(m: Match): ActorState {
     const s = m.state;
-    const intArgs = ints.length ? BigInt64Array.from(ints.map(BigInt)) : undefined;
-    return toHex(
-      isOpen(s)
-        ? fourk.simulLobbySigScript(
-            fromHex(s.p1),
-            BigInt(s.moveTimeout),
-            BigInt(s.deadline),
-            fn,
-            sig,
-            pk,
-          )
-        : fourk.simulMatchSigScript(...simulArgs(simulSnapshot(m)), fn, sig, pk, blob, intArgs),
-    );
-  },
-
-  selectorTable(m: Match): readonly string[] {
-    return isOpen(m.state) ? SIMUL_LOBBY_ENTRYPOINTS : SIMUL_MATCH_ENTRYPOINTS;
+    if (isOpen(s)) return { p1: s.p1, move_timeout: s.moveTimeout, deadline: s.deadline };
+    const ss = simulSnapshot(m);
+    return {
+      p1: ss.p1,
+      p2: ss.p2,
+      board: toHex(ss.board),
+      round: ss.round,
+      commit1: ss.commit1,
+      commit2: ss.commit2,
+      reveal1: ss.reveal1,
+      reveal2: ss.reveal2,
+      pending_win: ss.pendingWin,
+      move_timeout: ss.moveTimeout,
+      deadline: ss.deadline,
+    };
   },
 
   genesisFields(): Partial<Match> {

@@ -4,75 +4,34 @@
  * now named.
  */
 
-import { fourk } from "../../lib/sdk";
 import { applyMove, legalColumns, playerToMove, type State } from "../../lib/game";
-import { fromHex, phaseOf, toHex, type Match } from "../../lib/match";
-import type { SpendInfo } from "../../lib/engine";
+import { phaseOf, toHex, type Match } from "../../lib/match";
+import type { ActorState, SpendInfo } from "../../lib/engine";
 import type { ModeChainSurface, SpendClass } from "../types";
 import { rederiveJoin } from "../common";
-
-/** Entrypoints in ABI/selector order — must match fourk.ag declaration order
- * per actor (each generated contract numbers its own selectors from 0). */
-const LOBBY_ENTRYPOINTS = ["join", "cancel"] as const;
-const MATCH_ENTRYPOINTS = [
-  "dissolve",
-  "move",
-  "winning_move",
-  "claim_draw",
-  "claim_forfeit",
-  "sudden_death",
-] as const;
 
 function isOpen(s: State): boolean {
   return phaseOf(s) === 0;
 }
 
-function classicArgs(s: State): [Uint8Array, Uint8Array, Uint8Array, bigint, bigint, bigint] {
-  return [
-    fromHex(s.p1),
-    fromHex(s.p2),
-    s.board,
-    BigInt(s.moveCount),
-    BigInt(s.moveTimeout),
-    BigInt(s.deadline),
-  ];
-}
-
 export const classicEngine = {
-  covenantBudget: 12,
-
-  lockRedeem(m: Match): Uint8Array {
-    const s = m.state;
-    return isOpen(s)
-      ? fourk.lobbyLockScript(fromHex(s.p1), BigInt(s.moveTimeout), BigInt(s.deadline))
-      : fourk.matchLockScript(...classicArgs(s));
+  /** An open seat is a FourkLobby; a joined match is a FourkMatch. */
+  actorOf(m: Match): string {
+    return isOpen(m.state) ? "FourkLobby" : "FourkMatch";
   },
 
-  sigScript(
-    m: Match,
-    fn: string,
-    sig: Uint8Array | undefined,
-    pk: Uint8Array | undefined,
-    ints: number[],
-  ): string {
+  /** The snapshot as the actor's state fields (contracts/fourk.ag). */
+  stateOf(m: Match): ActorState {
     const s = m.state;
-    const intArgs = ints.length ? BigInt64Array.from(ints.map(BigInt)) : undefined;
-    return toHex(
-      isOpen(s)
-        ? fourk.lobbySigScript(
-            fromHex(s.p1),
-            BigInt(s.moveTimeout),
-            BigInt(s.deadline),
-            fn,
-            sig,
-            pk,
-          )
-        : fourk.matchSigScript(...classicArgs(s), fn, sig, pk, intArgs),
-    );
-  },
-
-  selectorTable(m: Match): readonly string[] {
-    return isOpen(m.state) ? LOBBY_ENTRYPOINTS : MATCH_ENTRYPOINTS;
+    if (isOpen(s)) return { p1: s.p1, move_timeout: s.moveTimeout, deadline: s.deadline };
+    return {
+      p1: s.p1,
+      p2: s.p2,
+      board: toHex(s.board),
+      move_count: s.moveCount,
+      move_timeout: s.moveTimeout,
+      deadline: s.deadline,
+    };
   },
 
   genesisFields(): Partial<Match> {

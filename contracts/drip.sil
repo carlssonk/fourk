@@ -10,7 +10,7 @@ pragma silverscript ^0.1.0;
 // remains (drip minus fee) goes wherever the claimant directs it.
 //
 // Abuse containment is consensus-side and deliberately simple:
-//   - require(this.age >= COOLDOWN): each lane drips at most once per
+//   - require(this.ageDaa >= COOLDOWN): each lane drips at most once per
 //     cooldown window (sequence-lock enforced).
 //   - require(tx.inputs.length == 1): without this, spending N lanes in one
 //     transaction would satisfy every input's floor check with a single
@@ -26,9 +26,9 @@ contract Drip() {
     // 10 TKAS per claim.
     int constant DRIP = 1000000000;
 
-    entrypoint function drip() {
+    entry drip() {
         require(tx.inputs.length == 1);
-        require(this.age >= COOLDOWN);
+        require(this.ageDaa >= COOLDOWN);
 
         int balance = tx.inputs[this.activeInputIndex].value;
         if (balance > DRIP) {

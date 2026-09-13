@@ -7,7 +7,9 @@ Three layers, one rulebook:
 - `contracts/fourk.ag` — the Argent covenant, a require-for-require port of
   `src/rules.ts` (classic) and `src/simul/rules.ts` (fourk mode): four actors,
   `FourkLobby`/`FourkMatch` and `FourkSimulLobby`/`FourkSimul`. Rebuild with
-  `argentc build contracts/fourk.ag`, which regenerates `contracts/build/`
+  `argentc build contracts/fourk.ag --out contracts/build` (from the repo
+  root, so the artifact's recorded source path stays relative), which
+  regenerates `contracts/build/`
   (`sil/*.sil` + `artifact.json`) — the artifacts the harness, the wasm
   crate, and the app all consume. (An earlier hand-ported Silverscript
   covenant, `fourk.sil`, is retired — see `docs/adr/0001`.)
@@ -15,9 +17,14 @@ Three layers, one rulebook:
   against the real rusty-kaspa script engine with real Schnorr signatures and
   covenant bindings (KIP-20). This is the suite that audits the machine that
   will actually hold money.
-- `wasm/` — `fourk-wasm`: a small wasm-bindgen crate embedding the contract
-  and exposing state → redeem script and entrypoint → signature script, so
-  browsers can compile covenant states client-side.
+- `wasm/` — `fourk-wasm`: a wasm-bindgen crate embedding the contract and
+  exposing two things: an actor state → script public key (addresses) and a
+  transaction builder. The app describes every covenant spend as a JSON spec
+  (inputs, outputs, entry arguments); the crate signs it, assembles it, and
+  executes every input through the real script engine via argent-runtime's
+  `TxBuilder` — the same builder the harness drives — so a malformed spend
+  fails in the browser with the engine's reason, and compute budgets are
+  measured rather than declared (`docs/adr/0002`).
 - `app/` — the React UI (Vite): "free mode" by default — a player's key is
   created invisibly, seats are funded automatically by the drip service, and
   games are shared as invite links; staked matches and account management
@@ -26,10 +33,10 @@ Three layers, one rulebook:
   kaspa wasm SDK + fourk-wasm; invite links carry a compact binary share
   code in the `#g=` fragment, and stored matches use the same JSON schema
   as the CLI's match.json.
-- `contracts/drip.sil` — the on-chain dispenser: a 40-byte stateless covenant
+- `contracts/drip.sil` — the on-chain dispenser: a 63-byte stateless covenant
   that funds fresh player seats permissionlessly. Claims are UNSIGNED spends
   (fee paid out of the drip), so an empty wallet can claim; the address never
-  changes, refills are plain sends to it, `this.age` rate-limits each lane,
+  changes, refills are plain sends to it, `this.ageDaa` rate-limits each lane,
   and a single-input rule blocks lane-aggregation draining. Free mode now
   has no backend at all.
 - `faucet/` — `fund-dispenser.mjs` refills the dispenser (the only ongoing
@@ -43,11 +50,21 @@ cd harness && cargo test        # compiled covenant vs the real engine
 SIMNET_E2E=1 VITE_NETWORK_ID=simnet npx vitest run app/e2e/simul-live.test.ts
 ```
 
-The harness needs two sibling checkouts (path dependencies): the
-[silverscript](https://github.com/kaspanet/silverscript) repo at
-`../silverscript` (it compiles `contracts/drip.sil`) and the Argent toolchain
-at `../argent-lang` (`argent-runtime` drives `contracts/fourk.ag`'s committed
-artifact). It pins rusty-kaspa v2.0.1, matching the silverscript workspace.
+Every toolchain dependency is git-pinned, so a clean clone builds without
+sibling checkouts: the [Argent](https://github.com/argent-lang/argent)
+runtime (`argent-runtime`, which drives `contracts/fourk.ag`'s committed
+artifact in both the harness and the wasm crate),
+[Silverscript](https://github.com/kaspanet/silverscript) v1.0.0 (which
+compiles `contracts/drip.sil`), and rusty-kaspa (v2.0.1 plus one commit) are
+pinned in `harness/Cargo.toml` and `wasm/Cargo.toml` to the exact revisions
+argent's own workspace pins — the three must stay equal because
+`argent-runtime` re-exports types from the other two. The compiler comes
+from the same revision:
+
+```
+cargo install --git https://github.com/argent-lang/argent \
+  --rev 867b080b973f93d75c4b7ca8ce06950a963accbb argent   # installs argentc
+```
 
 The prebuilt browser artifacts are committed so the app builds with no Rust
 toolchain at all: `wasm/pkg/` (fourk-wasm; rebuild with
@@ -69,8 +86,8 @@ state in the P2SH redeem-script preimage, eight classic entrypoints:
 | `move`          | playing | drop a disc: your turn, column in range, column not full — the whole rulebook |
 | `winning_move`  | playing | `move` + win witness; terminal, pays mover the pot |
 | `claim_draw`    | playing | move count = 42; splits pot; permissionless crank |
-| `claim_forfeit` | playing | `this.age >= move_timeout`; waiting player takes the pot |
-| `sudden_death`  | playing | `tx.time >= deadline`; splits pot; permissionless crank — the guaranteed exit |
+| `claim_forfeit` | playing | `this.ageDaa >= move_timeout`; waiting player takes the pot |
+| `sudden_death`  | playing | `tx.daa >= deadline`; splits pot; permissionless crank — the guaranteed exit |
 
 **Join-time genesis gates** (a genesis violating them is simply unjoinable):
 `MIN_MOVE_TIMEOUT <= move_timeout <= MAX_MOVE_TIMEOUT` (a near-instant clock
@@ -99,8 +116,8 @@ Key decisions (and why):
   Consequence, tested and documented: a player who declines to claim on every
   remaining turn can lose the win to the move-42 draw. Their choice.
 - **No deadline field in state.** Every transition creates a fresh UTXO, so
-  `this.age` *is* "time since the last move" and resets automatically. Forfeit
-  is `require(this.age >= MOVE_TIMEOUT_DAA)` with a compile-time constant
+  `this.ageDaa` *is* "time since the last move" and resets automatically. Forfeit
+  is `require(this.ageDaa >= MOVE_TIMEOUT_DAA)` with a compile-time constant
   (DAA blocks; ~10/s on mainnet).
 - **No turn or phase fields either.** Turn = `moveCount & 1` (P1 opens);
   phase = whether `p2` is still the zero key. State is just
@@ -171,7 +188,7 @@ Design notes, mirroring the classic decisions:
   revealer waiting on the opponent) pays the compliant player the pot
   (`claim_timeout` — this is also what punishes peek-then-stall and the
   unrevealable full-column commitment); symmetric silence splits it
-  (`split_timeout`, permissionless). Same `this.age` clock as classic.
+  (`split_timeout`, permissionless). Same `this.ageDaa` clock as classic.
 - **The salt lives in the browser** (`localStorage`, written before the
   commit broadcast). It is secret, so it cannot ride the share code: a pick
   sealed in one browser cannot be revealed from another — the timeout doors
@@ -180,10 +197,11 @@ Design notes, mirroring the classic decisions:
   addresses); a commit successor embeds the opponent's unpredictable hash
   and gets the join treatment — trace the spending tx, lift the pushes,
   verify the derived address holds the covenant UTXO.
-- **Compute budget**: fourk-mode covenant inputs declare budget 20 (classic
-  12) — every continuation rebuilds and hashes the ~4.3 KB `FourkSimul`
-  successor template in-script (~131k script units measured live for join;
-  budget 12 caps at 129,999).
+- **Compute budget**: measured, not declared — the builder executes every
+  input and commits the budget the engine actually charged. Fourk-mode
+  continuations are the dear ones (~15 units for join: every continuation
+  rebuilds and hashes the ~4.3 KB `FourkSimul` successor template
+  in-script) against ~11 for classic.
 
 ## TS reference ↔ covenant mapping
 
@@ -224,8 +242,8 @@ ever needed again.
 Transaction shapes and conventions (see `app/src/shared/lib/covenant.ts` for
 details):
 
-- All transactions are **v1** with per-input compute budgets (12 units for the
-  covenant input — one Schnorr verify dominates — and 10 for P2PK funding).
+- All transactions are **v1** with per-input compute budgets, measured by
+  executing each input before submission.
 - `open` derives the covenant id from the funding outpoint via
   `populate_genesis_covenants`; the id is the match's stable handle forever.
 - `join`/`move` preserve the pot exactly, so fees ride on a wallet funding
@@ -248,7 +266,7 @@ Fully client-side; anyone can host it and any two browsers can play.
 ```
 # one-time: build the two wasm packages
 cd ../rusty-kaspa/wasm && ./build-web --sdk         # -> wasm/web/kaspa
-cd ../../fourk/wasm && wasm-pack build --target web  # -> wasm/pkg
+cd ../../fourk/wasm && wasm-pack build --target web --release  # -> wasm/pkg
 
 cd ../app
 npm install
@@ -342,8 +360,9 @@ mode — and with it the guest tier — is what a mainnet deployment loses. Stak
 are gated by tier, not by network, so staked play stays testable on simnet and
 testnet.
 
-`fourk-wasm` embeds the same argentc artifact the harness executes, so the
-scripts a browser builds are byte-identical to the engine-verified ones.
+`fourk-wasm` embeds the same argentc artifact the harness executes and builds
+transactions through the same `TxBuilder`, so what a browser submits has
+already run through the script engine locally.
 
 ## Status / next steps
 
@@ -367,13 +386,15 @@ scripts a browser builds are byte-identical to the engine-verified ones.
   `claim_win` challenge window (the double-win mempool race is gone),
   invite/share-code validation (network binding, value↔stake, timing
   bounds), account-record salvage-not-destroy, evidence-based watcher and
-  reset detection, multi-input + all-door-lineage + budget-probe harness
+  reset detection, multi-input + all-door-lineage harness
   coverage, CI for the TS side, security headers + deploy notes
   (`app/DEPLOY.md`), dispenser status + runbook (`faucet/RUNBOOK.md`)
 - [x] Single covenant source: the hand-ported `fourk.sil` and its parallel
   suite retired in favor of the Argent contract (`docs/adr/0001`);
   genesis-gate constants pinned across TS/.ag/harness by a cross-source test
 - [ ] Live browser-vs-browser game on testnet-10 through every terminal path
-- [ ] Pin/vendor the `argent-lang` + `silverscript` toolchains so the harness
-  and artifact rebuilds run in CI; external audit of the compiler lowering
-  before mainnet funds.
+- [x] Browser transactions built by argent-runtime's `TxBuilder` inside
+  fourk-wasm (`docs/adr/0002`): engine-verified before submission, budgets
+  measured, spend classification by entry dispatch tag; every toolchain
+  dependency git-pinned and the Rust suites in CI
+- [ ] External audit of the compiler lowering before mainnet funds.

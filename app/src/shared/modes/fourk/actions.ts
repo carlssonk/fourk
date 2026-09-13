@@ -42,7 +42,7 @@ export async function commitMatch(
     fourkEngine,
     match,
     "commit",
-    () => ({ pk: fromHex(pkHex), ints: [], blob: fromHex(h) }),
+    [{ sig: 0 }, { bytes: pkHex }, { bytes: h }],
     next,
     0n,
   );
@@ -72,7 +72,7 @@ export async function revealMatch(
     fourkEngine,
     match,
     resolving ? "resolve" : "reveal",
-    () => ({ pk: fromHex(pkHex), ints: [rec.col], blob: salt }),
+    [{ sig: 0 }, { bytes: pkHex }, { int: rec.col }, { bytes: rec.salt }],
     next,
     0n,
   );
@@ -97,7 +97,7 @@ export async function claimWinMatch(
     fourkEngine,
     match,
     "claim_win",
-    () => ({ ints: [w.col, w.row, w.dir] }),
+    [{ sig: 0 }, { int: w.col }, { int: w.row }, { int: w.dir }],
     next,
     0n,
   );
@@ -116,7 +116,7 @@ export async function sweepWinMatch(
     fourkEngine,
     match,
     "sweep_win",
-    [],
+    [{ sig: 0 }],
     BigInt(match.state.moveTimeout),
   );
 }
@@ -131,12 +131,12 @@ export async function claimSplitMatch(
   w2: LineWitness,
 ): Promise<string> {
   return engine.pinnedSplit(rpc, key, fourkEngine, match, "claim_split", [
-    w1.col,
-    w1.row,
-    w1.dir,
-    w2.col,
-    w2.row,
-    w2.dir,
+    { int: w1.col },
+    { int: w1.row },
+    { int: w1.dir },
+    { int: w2.col },
+    { int: w2.row },
+    { int: w2.dir },
   ]);
 }
 
@@ -153,7 +153,7 @@ export async function claimTimeoutMatch(
     fourkEngine,
     match,
     "claim_timeout",
-    [],
+    [{ sig: 0 }],
     BigInt(match.state.moveTimeout),
   );
 }

@@ -18,6 +18,12 @@ contract FourkLobby(
     int constant MAX_FEE = 2000000;
 
     // :: state layouts
+    struct LobbyState {
+        // :: user declared fields
+        pubkey p1;
+        int move_timeout;
+        int deadline;
+    }
     struct MatchState {
         // :: user declared fields
         pubkey p1;
@@ -48,7 +54,7 @@ contract FourkLobby(
         int deadline;
     }
 
-    // :: shared helper functions
+    // :: global functions (isolated using the gen__glob_ namespace)
     function zero32() : byte[32] {
         return byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
     }
@@ -63,12 +69,7 @@ contract FourkLobby(
 
     // :: entrypoints
     // :: leader entry (1:N)
-    entrypoint function join(
-        sig s,
-        pubkey pk,
-        byte[] gen__fourk_match_prefix,
-        byte[] gen__fourk_match_suffix
-    ) {
+    entry join(sig s, pubkey pk, byte[] gen__fourk_match_prefix, byte[] gen__fourk_match_suffix) {
         // :: auth outputs
         require(OpAuthOutputCount(this.activeInputIndex) == 1);
         // :: output game: FourkMatch
@@ -80,7 +81,7 @@ contract FourkLobby(
         require(deadline < DEADLINE_LIMIT);
         require(pk != p1);
         require(checkSig(s, pk));
-        MatchState next_match = {
+        MatchState next_match = MatchState {
             // :: user declared fields
             p1: p1,
             p2: pk,
@@ -101,7 +102,7 @@ contract FourkLobby(
     }
 
     // :: leader entry (1:N)
-    entrypoint function cancel(sig s) {
+    entry cancel(sig s) {
         // :: auth outputs
         require(OpAuthOutputCount(this.activeInputIndex) == 0);
 

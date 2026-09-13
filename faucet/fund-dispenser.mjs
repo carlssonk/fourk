@@ -15,8 +15,9 @@ import init, * as kaspa from "../vendor/kaspa-wasm/kaspa.js";
 
 await init(fs.readFileSync(new URL("../vendor/kaspa-wasm/kaspa_bg.wasm", import.meta.url)));
 
-// Keep in sync with contracts/drip.sil — harness/tests/drip_tests.rs prints it.
-const DRIP_REDEEM_HEX = "b3519c6902b004b1b9be760400ca9a3ba06300c3b9bf876900c2780400ca9a3b94a26968007a7551";
+// Keep in sync with contracts/drip.sil and app/src/shared/lib/dispenser.ts —
+// harness/tests/drip_tests.rs prints it (`script_is_tiny`, --nocapture).
+const DRIP_REDEEM_HEX = "7604441891a2876375b3519c6902b0047600050000000001a569b1b9be760400ca9a3ba063b9bf00c378876900c252790400ca9a3b94a26975687551676a68";
 
 // Keep in sync with COOLDOWN_DAA / DRIP_SOMPI / DUST in
 // app/src/shared/lib/dispenser.ts (which match contracts/drip.sil).
