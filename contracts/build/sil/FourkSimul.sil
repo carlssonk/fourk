@@ -23,6 +23,7 @@ contract FourkSimul(
     int constant MAX_MOVE_TIMEOUT = 8640000;
     int constant DEADLINE_LIMIT = 500000000000;
     int constant MAX_FEE = 2000000;
+    int constant REBASE_GRACE = 100;
 
     // :: state layouts
     struct LobbyState {
@@ -46,10 +47,69 @@ contract FourkSimul(
         int move_timeout;
         int deadline;
     }
+    struct SimulV2MatchState {
+        // :: user declared fields
+        pubkey p1;
+        pubkey p2;
+        byte[42] board;
+        int round;
+        byte[32] commit1;
+        byte[32] commit2;
+        int reveal1;
+        int reveal2;
+        int pending_win;
+        int move_timeout;
+        int deadline;
+        int ready_mask;
+        int pick_deadline;
+        int first_committer;
+        int reveal_timeout;
+    }
+    struct SimulV2LobbyState {
+        // :: user declared fields
+        pubkey p1;
+        int move_timeout;
+        int deadline;
+        int reveal_timeout;
+    }
 
     // :: global functions (isolated using the gen__glob_ namespace)
     function zero32() : byte[32] {
         return byte[32](0x0000000000000000000000000000000000000000000000000000000000000000);
+    }
+    function v2AcceptedScore() : int {
+        int gen__glob_accepted = OpTxInputDaaScore(this.activeInputIndex);
+        require(gen__glob_accepted >= 0 && gen__glob_accepted < DEADLINE_LIMIT);
+        return gen__glob_accepted;
+    }
+    function v2CommitCount(byte[32] gen__glob_c1, byte[32] gen__glob_c2) : int {
+        int gen__glob_count = 0;
+        if (gen__glob_c1 != zero32()) { gen__glob_count = gen__glob_count + 1; }
+        if (gen__glob_c2 != zero32()) { gen__glob_count = gen__glob_count + 1; }
+        return gen__glob_count;
+    }
+    function v2TimeoutOwner(byte[32] gen__glob_c1, byte[32] gen__glob_c2, int gen__glob_r1, int gen__glob_r2, int gen__glob_first, int gen__glob_cutoff, int gen__glob_grace) : int {
+        int gen__glob_owner = gen__glob_first;
+        if (gen__glob_r1 != 0 || gen__glob_r2 != 0) {
+            require(this.ageDaa >= gen__glob_grace);
+            gen__glob_owner = 1;
+            if (gen__glob_r2 != 0) { gen__glob_owner = 2; }
+        } else {
+            int gen__glob_accepted = v2AcceptedScore();
+            int gen__glob_count = v2CommitCount(gen__glob_c1, gen__glob_c2);
+            if (gen__glob_count == 1) {
+                require(gen__glob_accepted <= gen__glob_cutoff);
+                // Wait out the second committer's rebase grace as well, so a
+                // graced second commit and this claim can never both stand.
+                int gen__glob_claim_at = gen__glob_cutoff;
+                if (gen__glob_accepted + REBASE_GRACE > gen__glob_claim_at) { gen__glob_claim_at = gen__glob_accepted + REBASE_GRACE; }
+                require(tx.daa >= gen__glob_claim_at);
+            } else {
+                require(gen__glob_count == 2 && gen__glob_accepted > gen__glob_cutoff);
+            }
+            require(gen__glob_first == 1 || gen__glob_first == 2);
+        }
+        return gen__glob_owner;
     }
 
     // :: route templates
