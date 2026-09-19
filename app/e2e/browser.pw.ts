@@ -113,6 +113,10 @@ test("two browsers finish Classic and preserve a game across refresh", async ({
       if (move < 6) {
         await expect.poll(async () => (await current(page))?.moveCount).toBe(move + 1);
         await expect.poll(async () => (await current(guest))?.moveCount).toBe(move + 1);
+        await expect(page.getByRole("button", { name: "Kick opponent", exact: true })).toHaveCount(
+          0,
+        );
+        await expect(guest.getByRole("button", { name: /^Cancel game/ })).toHaveCount(0);
         for (const player of [page, guest]) {
           await expect(player.getByRole("group", { name: /^Your player:/ })).toHaveClass(
             /border-accent/,
@@ -167,6 +171,8 @@ test("Fourk keeps both simultaneous picks and reveals after refresh", async ({ p
       await Promise.all([column(page, 4).click(), column(guest, 4).click()]);
       await expect.poll(async () => (await current(page))?.round).toBe(round + 1);
       await expect.poll(async () => (await current(guest))?.round).toBe(round + 1);
+      await expect(page.getByRole("button", { name: "Kick opponent", exact: true })).toHaveCount(0);
+      await expect(guest.getByRole("button", { name: /^Cancel game/ })).toHaveCount(0);
     }
     await column(page, 1).click();
     await expect(page.getByText("Pick saved. Waiting for your opponent…")).toBeVisible();

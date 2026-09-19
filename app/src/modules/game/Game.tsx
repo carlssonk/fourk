@@ -110,17 +110,15 @@ export const Game = ({ match }: Props) => {
   const p1Color = match.p1Color ?? "red";
   const p2Color = p1Color === "red" ? "blue" : "red";
 
-  // Joined but nothing staked yet: the pre-game lobby, where either player
-  // may still unwind the match on-chain and both stakes come back.
+  // Before the first move or sealed pick, either player can unwind the match.
+  // P1 can kick immediately; P2 must wait one move clock to prevent instant
+  // join-and-cancel abuse. In staked games both stakes come back. The UI used
+  // to hide the kick for one clock so it would not read as an accusation, but
+  // that left a host with no exit from a guest who joined and idled, so it
+  // now mirrors the covenant.
   const inLobby = mode.inLobby(match) && !result;
-  // One move clock from the join gates both lobby exits: the joiner's
-  // withdrawal is covenant-gated (anti-grief; the same age math as the
-  // forfeit clock), and the host's kick waits out the same clock in the UI —
-  // a red "Kick opponent" the second someone sits down reads as an accusation
-  // nobody has earned yet.
-  const lobbyClock = useMoveClock(match, inLobby && iAmPlayer);
+  const lobbyClock = useMoveClock(match, inLobby && role === "p2");
   const withdrawGated = role === "p2" && !lobbyClock.expired;
-  const kickHidden = role === "p1" && !lobbyClock.expired;
 
   // ONE optimistic record for both modes: the column just clicked, keyed to
   // the game UTXO it was played on — any fresh match state (our confirmation
@@ -570,13 +568,13 @@ export const Game = ({ match }: Props) => {
             Claim timeout win
           </button>
         )}
-        {inLobby && iAmPlayer && !kickHidden && (
+        {inLobby && iAmPlayer && (
           <button
             className="btn btn-danger"
             disabled={busy || withdrawGated}
             title={
               role === "p1"
-                ? "Your opponent joined but hasn't moved for a whole move clock. Kicking clears their seat and gets you a fresh invite link."
+                ? "Before play starts, you can remove your opponent and get a fresh game with a new invite link."
                 : withdrawGated
                   ? "You can cancel once the lobby timer ends."
                   : undefined
