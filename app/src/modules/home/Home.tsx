@@ -57,11 +57,21 @@ export const Home = () => {
         <BoardBackdrop />
         {host && <Avatar code={host.avatar} size={72} className="mx-auto mb-1" />}
         <h2 className="mb-1.5 text-2xl font-bold">
-          {host?.name ? `${host.name} invited you to a game!` : "You've been invited to a game!"}
+          {!seatOpen
+            ? "Watch this game"
+            : host?.name
+              ? `${host.name} invited you to a game!`
+              : "You've been invited to a game!"}
         </h2>
         <p className="text-sm text-dim">
-          {inviteMeta.inviteBlurb}
-          <b className={myColor === "red" ? "text-red" : "text-blue"}>{myColor} ●</b>.
+          {seatOpen ? (
+            <>
+              {inviteMeta.inviteBlurb}
+              <b className={myColor === "red" ? "text-red" : "text-blue"}>{myColor} ●</b>.
+            </>
+          ) : (
+            "Both seats are taken. You can follow along as a spectator."
+          )}
         </p>
         {staked ? (
           <p className="mt-1 text-sm">
@@ -79,14 +89,13 @@ export const Home = () => {
           </p>
         ) : (
           <p className="mt-1 text-xs text-dim">
-            Free game — your seat is funded for you ·{" "}
-            {fmtDaaDuration(pendingInvite.state.moveTimeout)} per {inviteMeta.moveNoun}
+            Free game · {fmtDaaDuration(pendingInvite.state.moveTimeout)} per {inviteMeta.moveNoun}
             {inviteCapLeft && <> · game ends in {inviteCapLeft}</>}
           </p>
         )}
         {needsAccount && (
           <p className="mt-2 text-sm">
-            Staked games need an account — it's what holds your funds.{" "}
+            An account is required for staked games.{" "}
             <button className="cursor-pointer underline" onClick={() => openAccount("get-started")}>
               Create one
             </button>{" "}
@@ -95,18 +104,26 @@ export const Home = () => {
         )}
         {short && (
           <p className="mt-2 text-sm text-red">
-            You need {fmtKas(need)} KAS to join — you have {fmtKas(balance)}.{" "}
+            You need {fmtKas(need)} KAS to join. Your balance is {fmtKas(balance)} KAS.{" "}
             <button className="cursor-pointer underline" onClick={() => openAccount("add-funds")}>
               Add funds
             </button>
           </p>
         )}
-        <PlayerSetup
-          actionLabel="Join"
-          busy={busy || short || needsAccount}
-          onSubmit={() => takeSeat(pendingInvite)}
-        />
-        <button className="btn" disabled={busy} onClick={clearInvite}>
+        {seatOpen ? (
+          <PlayerSetup
+            actionLabel="Join"
+            busy={busy || short || needsAccount}
+            onSubmit={() => takeSeat(pendingInvite)}
+          />
+        ) : (
+          <div className="my-5">
+            <button className="btn" disabled={busy} onClick={() => takeSeat(pendingInvite)}>
+              Watch game
+            </button>
+          </div>
+        )}
+        <button className="btn btn-muted" disabled={busy} onClick={clearInvite}>
           Not now
         </button>
       </div>

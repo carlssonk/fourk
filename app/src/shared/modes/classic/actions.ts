@@ -76,7 +76,7 @@ export const classicActions: ModeActions = {
       return {
         kind: "ended",
         match: { ...match, state: next, txid },
-        message: "You connected four — you win! 🎉",
+        message: "You connected four. You win!",
       };
     }
     // A move's fee comes off a wallet UTXO; refill from the dispenser if the

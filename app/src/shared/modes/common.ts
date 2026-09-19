@@ -36,7 +36,7 @@ export function describeSharedEnd(
 ): string | null {
   switch (spend?.kind) {
     case "claim_draw":
-      return "It's a draw — the board filled up with no winner.";
+      return "It's a draw. The board filled up with no winner.";
     case "cancel":
       return "The game was called off before anyone joined.";
     case "sudden_death":
@@ -46,12 +46,12 @@ export function describeSharedEnd(
       // tell a kick from a walk-out.
       const signer = spend.pushes.find((p) => p.length === 32);
       const by = signer ? toHex(signer) : null;
-      if (by === myPk) return "The game was dissolved — both stakes returned.";
+      if (by === myPk) return "The game was dissolved. Both stakes returned.";
       if (myPk === m.state.p2 && by === m.state.p1)
-        return "Your opponent called the game off — your stake is on its way back.";
+        return "Your opponent called the game off. Your stake is on its way back.";
       if (myPk === m.state.p1 && by === m.state.p2)
-        return "Your opponent left before the game began — your stake is on its way back.";
-      return "The game was dissolved before the first move — both stakes returned.";
+        return "Your opponent left before the game began. Your stake is on its way back.";
+      return "The game was dissolved before the first move. Both stakes returned.";
     }
     default:
       return null;
@@ -126,11 +126,11 @@ export async function suddenDeathMatch(
   return engine.pinnedSplit(rpc, key, mode, match, "sudden_death", [], { lockTime });
 }
 
-export const DRAW_MESSAGE = "It's a draw — the board filled up with no winner.";
+export const DRAW_MESSAGE = "It's a draw. The board filled up with no winner.";
 export const SUDDEN_DEATH_MESSAGE =
-  "Time's up — the game hit its total time limit and the pot split evenly.";
+  "Time's up. The game hit its total time limit and the pot split evenly.";
 export const SUDDEN_DEATH_WIN_MESSAGE =
-  "Time's up — the game hit its total time limit and the winner took the pot.";
+  "Time's up. The game hit its total time limit and the winner took the pot.";
 
 /** Sudden death splits an undecided game but pays a pending winner in full;
  * the ending copy has to match whichever the covenant did. */

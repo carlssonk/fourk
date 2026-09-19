@@ -1,10 +1,12 @@
-import { useAtomValue } from "jotai";
+import { useEffect } from "react";
+import { useAtomValue, useSetAtom } from "jotai";
 import { AccountChip, AccountPanel } from "@modules/account";
 import { Game } from "@modules/game";
 import { Home } from "@modules/home";
 import { ConfirmDialog } from "@shared/components/ConfirmDialog";
 import { ConnectingScreen } from "@shared/components/ConnectingScreen";
 import {
+  accountPanelAtom,
   clearError,
   clearNetworkReset,
   connectingAtom,
@@ -28,6 +30,7 @@ const Banner = ({
   children: React.ReactNode;
 }) => (
   <div
+    role={tone === "red" ? "alert" : "status"}
     className={`mx-auto mb-4 flex max-w-175 items-start gap-3 rounded-lg border px-3.5 py-2.5 ${
       tone === "red" ? "border-red bg-red/10" : "border-accent bg-accent/10"
     }`}
@@ -48,6 +51,11 @@ export default function App() {
   const current = useAtomValue(currentMatchAtom);
   const error = useAtomValue(errorAtom);
   const connecting = useAtomValue(connectingAtom);
+  const accountAvailable = !current && !connecting;
+  const setAccountPanel = useSetAtom(accountPanelAtom);
+  useEffect(() => {
+    if (!accountAvailable) setAccountPanel(null);
+  }, [accountAvailable, setAccountPanel]);
   const reconnecting = useAtomValue(reconnectingAtom);
   const networkReset = useAtomValue(networkResetAtom);
   // Never connected at all (vs. reconnecting, which means a live session's
@@ -56,30 +64,36 @@ export default function App() {
   const offline = useAtomValue(rpcFailuresAtom) >= 2;
 
   return (
-    <div className="mx-auto max-w-270 p-4">
+    <div className={`mx-auto max-w-270 p-4 ${connecting ? "flex min-h-dvh flex-col" : ""}`}>
       {/* In the flow, not floating: the game screen puts a seat panel in the
        * top-right corner, and a fixed chip would sit on top of it. */}
-      <header className="mb-2 flex h-8 items-center justify-end gap-2">
+      <header
+        className={
+          current && !connecting && !reconnecting
+            ? "hidden"
+            : "mb-2 flex h-8 shrink-0 items-center justify-end gap-2"
+        }
+      >
         {reconnecting && (
           <div className="rounded-full border border-accent bg-panel/60 px-3 py-1 text-sm text-accent backdrop-blur-xs">
             reconnecting…
           </div>
         )}
-        <AccountChip />
+        {accountAvailable && <AccountChip />}
       </header>
-      <AccountPanel />
+      {accountAvailable && <AccountPanel />}
       <ConfirmDialog />
-      <main className="mx-auto">
+      <main className={`mx-auto ${connecting ? "flex w-full flex-1 flex-col" : ""}`}>
         {offline && (
           <div className="mx-auto mb-4 max-w-175 rounded-lg border border-red bg-red/10 px-3.5 py-2.5">
-            Can't reach the Kaspa network — retrying automatically. Check your connection; games
-            resume on their own once it's back.
+            Connection lost. Retrying automatically. Check your internet connection if this
+            continues.
           </div>
         )}
         {networkReset && (
           <Banner tone="accent" onDismiss={clearNetworkReset}>
-            The test network was reset — games and balances from before it are gone. New games work
-            normally.
+            The test network was reset. Previous games and balances are no longer available. New
+            games work normally.
           </Banner>
         )}
         {error && (

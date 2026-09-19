@@ -9,8 +9,8 @@
 
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { getDefaultStore } from "jotai";
-import { createGame, errorAtom, takeSeat } from "../src/shared/state/actions";
-import { currentMatchAtom, matchesAtom } from "../src/shared/state/matches";
+import { busyAtom, createGame, errorAtom, runAction, takeSeat } from "../src/shared/state/actions";
+import { currentMatchAtom, matchesAtom, pendingInviteAtom } from "../src/shared/state/matches";
 import { stakeAtom } from "../src/shared/state/profile";
 import type { AccountOps, ChainOps, Deps } from "../src/shared/state/deps";
 import type { Wallet } from "../src/shared/state/wallet";
@@ -93,6 +93,27 @@ beforeEach(() => {
   store.set(currentMatchAtom, null);
   store.set(errorAtom, null);
   store.set(stakeAtom, 0n);
+  store.set(busyAtom, false);
+  store.set(pendingInviteAtom, null);
+});
+
+test("a second action cannot start while the first is still submitting", async () => {
+  let finish!: () => void;
+  const first = runAction(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const second = vi.fn(async () => {});
+  try {
+    await runAction(second);
+    expect(second).not.toHaveBeenCalled();
+    expect(store.get(busyAtom)).toBe(true);
+  } finally {
+    finish();
+    await first;
+  }
 });
 
 describe("createGame", () => {
@@ -148,6 +169,19 @@ describe("createGame", () => {
 });
 
 describe("takeSeat", () => {
+  test("a failed join keeps the invitation available to retry", async () => {
+    const invite = matchAt();
+    store.set(pendingInviteAtom, invite);
+    const chain = fakeChain({
+      connect: vi.fn(async () => {
+        throw new Error("offline");
+      }),
+    });
+    await takeSeat(invite, deps(chain, fakeAccount()));
+    expect(store.get(pendingInviteAtom)).toBe(invite);
+    expect(store.get(currentMatchAtom)).toBeNull();
+  });
+
   test("a spent deadline refuses the seat before any funds move", async () => {
     const chain = fakeChain({
       assertJoinableDeadline: vi.fn(async () => {

@@ -21,7 +21,7 @@ async function connectPreferred(): Promise<RpcClient> {
     try {
       return await connect(NODE_URL);
     } catch (e) {
-      console.warn(`pinned node ${NODE_URL} unreachable — using the public resolver`, e);
+      console.warn(`pinned node ${NODE_URL} unreachable. Using the public resolver`, e);
     }
   }
   return connect();

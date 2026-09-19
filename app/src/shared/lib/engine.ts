@@ -240,7 +240,7 @@ export async function untilIndexed(
  * of combining several small UTXOs into one spend. */
 async function pickFunding(rpc: Rpc, key: PrivateKey, need: bigint): Promise<UtxoEntryLike[]> {
   const entries = await utxosAt(rpc, walletAddress(key));
-  if (!entries.length) throw new Error("wallet has no UTXOs — fund it with testnet KAS first");
+  if (!entries.length) throw new Error("wallet has no UTXOs. Fund it with testnet KAS first");
   const sorted = entries.sort((a, b) => (entryAmount(b) > entryAmount(a) ? 1 : -1));
   const picked: UtxoEntryLike[] = [];
   let total = 0n;
@@ -645,7 +645,7 @@ export async function continuation(
   payload = "",
 ): Promise<Match> {
   const gameUtxo = await fetchGameUtxo(rpc, mode, match);
-  if (!gameUtxo) throw new Error("game UTXO not found on chain — sync first");
+  if (!gameUtxo) throw new Error("game UTXO not found on chain. Sync first");
   const funding = await pickFunding(rpc, key, potDelta + FEE_HEADROOM);
   const changeSpk = kaspa.payToAddressScript(new kaspa.Address(walletAddress(key)));
   const pk = walletPubkey(key);
@@ -686,7 +686,7 @@ export async function signedTerminal(
   sequence = 0n,
 ): Promise<string> {
   const gameUtxo = await fetchGameUtxo(rpc, mode, match);
-  if (!gameUtxo) throw new Error("game UTXO not found on chain — sync first");
+  if (!gameUtxo) throw new Error("game UTXO not found on chain. Sync first");
   const payoutSpk = kaspa.payToAddressScript(new kaspa.Address(walletAddress(key)));
 
   const { txid } = await submitSpec(rpc, [key], (fee) => ({
@@ -713,7 +713,7 @@ export async function pinnedWinner(
 ): Promise<string> {
   const { lockTime = 0n } = opts;
   const gameUtxo = await fetchGameUtxo(rpc, mode, match);
-  if (!gameUtxo) throw new Error("game UTXO not found on chain — sync first");
+  if (!gameUtxo) throw new Error("game UTXO not found on chain. Sync first");
 
   const { txid } = await submitSpec(rpc, [], (fee) => ({
     network: NETWORK_ID,
@@ -742,7 +742,7 @@ export async function pinnedSplit(
 ): Promise<string> {
   const { sequence = 0n, lockTime = 0n, signed = false, awaitRefund = false } = opts;
   const gameUtxo = await fetchGameUtxo(rpc, mode, match);
-  if (!gameUtxo) throw new Error("game UTXO not found on chain — sync first");
+  if (!gameUtxo) throw new Error("game UTXO not found on chain. Sync first");
 
   const { txid } = await submitSpec(rpc, signed ? [key] : [], (fee) => {
     const each = (match.value - fee) / 2n;

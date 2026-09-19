@@ -6,12 +6,12 @@
  *
  *   - each action fires once per its guard scope (game UTXO or match)
  *   - optional hold-back delay (reveal etiquette) or dynamic schedule
- *     (sudden death's DAA distance), re-checked whenever the match advances
+ *     (sudden death's DAA distance), re-checked on-chain before firing
  *   - on failure: resync; "advanced" adopts the fresh state and re-arms;
  *     "terminated" finishes with the action's message (someone else cranked
  *     the same door) or stays silent for the watcher to classify; a crossed
- *     transaction re-arms after a short pause; anything else surfaces in
- *     the error banner.
+ *     transaction, sequence lock or connection failure re-arms after a short
+ *     pause; anything else surfaces in the error banner.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -20,9 +20,11 @@ import type { Match } from "@shared/lib/match";
 import type { GameMode } from "@shared/modes/types";
 import { getRpc, matchWallet, runAction, updateMatch } from "@shared/state";
 
-const CROSSED = /game UTXO not found|orphan|already spent|missing outpoint/i;
-/** setTimeout's cap (~24.8 days); longer schedules re-arm on a later mount. */
-const MAX_TIMER_MS = 2_147_000_000;
+const RETRYABLE =
+  /game UTXO not found|orphan|already spent|missing outpoint|sequence locks?|websocket|disconnect|connection|timed? ?out|network|failed to fetch/i;
+const RETRY_MS = 3000;
+/** Recheck long waits periodically; wall time is only an estimate of DAA age. */
+const MAX_TIMER_MS = 30_000;
 
 export function useAutopilot(
   match: Match,
@@ -38,7 +40,20 @@ export function useAutopilot(
   const fired = useRef(new Map<string, string>());
   /** action key -> when its current guard id first became due (delays). */
   const firstDue = useRef(new Map<string, { id: string; since: number }>());
+  const mounted = useRef(false);
+  // Action retries must survive the busy -> idle effect cleanup.
+  const retries = useRef(new Set<ReturnType<typeof setTimeout>>());
   const { result, busy, finish } = opts;
+
+  useEffect(() => {
+    mounted.current = true;
+    const pending = retries.current;
+    return () => {
+      mounted.current = false;
+      pending.forEach(clearTimeout);
+      pending.clear();
+    };
+  }, []);
 
   useEffect(() => {
     if (result || busy) return;
@@ -59,20 +74,22 @@ export function useAutopilot(
       run: (typeof actions)[number]["run"],
       onTerminated?: string,
     ) => {
-      fired.current.set(key, guardId);
       runAction(async () => {
+        fired.current.set(key, guardId);
         const signKey = seat.key;
-        const rpc = await getRpc();
+        let rpc: Awaited<ReturnType<typeof getRpc>> | undefined;
         try {
+          rpc = await getRpc();
           const outcome = await run(rpc, signKey, match);
           if (outcome.kind === "advanced") updateMatch(outcome.match);
           else finish(outcome.message, outcome.match ?? match);
         } catch (e) {
           // The opponent's transaction may have crossed ours — adopt
           // whatever the chain says and quietly retry on the fresh state.
-          const { status, match: next } = await cov
-            .syncMatch(rpc, match)
-            .catch(() => ({ status: "current" as const, match }));
+          const { status, match: next } = rpc
+            ? await cov.syncMatch(rpc, match).catch(() => ({ status: "current" as const, match }))
+            : { status: "current" as const, match };
+          if (!mounted.current) return;
           if (status === "advanced") {
             fired.current.delete(key);
             updateMatch(next);
@@ -82,11 +99,13 @@ export function useAutopilot(
             if (onTerminated) finish(onTerminated);
             return; // otherwise the watcher classifies the ending
           }
-          if (!CROSSED.test(String((e as any)?.message ?? e))) throw e;
-          setTimeout(() => {
-            fired.current.delete(key);
+          if (!RETRYABLE.test(String((e as any)?.message ?? e))) throw e;
+          const timer = setTimeout(() => {
+            retries.current.delete(timer);
+            if (fired.current.get(key) === guardId) fired.current.delete(key);
             setTick((n) => n + 1);
-          }, 3000);
+          }, RETRY_MS);
+          retries.current.add(timer);
         }
       });
     };
@@ -96,20 +115,18 @@ export function useAutopilot(
       if (fired.current.get(action.key) === guardId) continue;
 
       if (action.scheduleMs) {
-        void (async () => {
+        const schedule = async () => {
           try {
             const rpc = await getRpc();
             const ms = await action.scheduleMs!(rpc);
             if (!alive || fired.current.get(action.key) === guardId) return;
             if (ms <= 0) fire(action.key, guardId, action.run, action.onTerminated);
-            else if (ms < MAX_TIMER_MS)
-              timers.push(
-                setTimeout(() => fire(action.key, guardId, action.run, action.onTerminated), ms),
-              );
+            else timers.push(setTimeout(schedule, Math.min(ms, MAX_TIMER_MS)));
           } catch {
-            /* transient RPC trouble — re-armed by the next mount/advance */
+            if (alive) timers.push(setTimeout(schedule, RETRY_MS));
           }
-        })();
+        };
+        void schedule();
         continue;
       }
 

@@ -3,6 +3,7 @@ import { Dialog } from "@shared/components/Dialog";
 import type { ResultTone } from "../lib";
 
 interface Props {
+  title: string;
   result: string;
   /** Staked games: where the money went, in balance terms. */
   pot?: string | undefined;
@@ -48,6 +49,7 @@ const Coins = () => (
  * line get their moment first.
  */
 export const ResultOverlay = ({
+  title,
   result,
   pot,
   tone,
@@ -63,20 +65,14 @@ export const ResultOverlay = ({
   }, []);
   if (!shown) return null;
 
-  const title = tone === "win" ? "You win!" : tone === "loss" ? "You lose" : "Game over";
-
   return (
     <Dialog
       title={title}
       headline
       tone={tone === "win" ? "win" : tone === "loss" ? "loss" : "neutral"}
-      // Wide enough to keep the three endings on one row — a lone wrapped
-      // button reads as an afterthought.
       width="max-w-115"
       className="text-center"
-      // Escape and a click beside the card do what "View board" does — the
-      // reflex dismissal shouldn't be a dead end here, the board is right
-      // behind it.
+      // Escape and a click beside the card reveal the finished board.
       onDismiss={onDismiss}
       {...(tone === "win" && { behind: <Coins /> })}
     >
@@ -88,9 +84,6 @@ export const ResultOverlay = ({
         </button>
         <button className="btn btn-muted" disabled={busy} onClick={onExit}>
           Back to start
-        </button>
-        <button className="btn btn-ghost" onClick={onDismiss}>
-          View board
         </button>
       </div>
     </Dialog>

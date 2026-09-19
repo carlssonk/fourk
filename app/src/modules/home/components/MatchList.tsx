@@ -1,4 +1,6 @@
 import { fmtKas, isStaked, type Match } from "@shared/lib/match";
+import { gameEnd } from "@shared/lib/result";
+import { matchWallet } from "@shared/state";
 import type { MatchGlance } from "../hooks";
 
 const GLANCE_LABEL: Record<MatchGlance, string> = {
@@ -24,7 +26,8 @@ export const MatchList = ({ matches, glances, busy, onOpen }: Props) => {
       <h3 className="mb-2.5 text-base font-semibold text-dim">Your matches</h3>
       {matches.map((m) => {
         const glance = glances[m.covenantId];
-        const urgent = glance === "your-turn";
+        const ending = gameEnd(m, matchWallet(m)?.myPk ?? "");
+        const urgent = !ending && glance === "your-turn";
         return (
           <button
             key={m.covenantId}
@@ -40,11 +43,15 @@ export const MatchList = ({ matches, glances, busy, onOpen }: Props) => {
                     staked
                   </span>
                 )}
-                {fmtKas(m.value)} KAS
+                {isStaked(m) ? `${fmtKas(m.value)} KAS` : "Free"}
               </span>
             </span>
             <span className={`mt-0.5 block text-sm ${urgent ? "text-accent" : "text-dim"}`}>
-              {glance ? GLANCE_LABEL[glance] : "checking…"}
+              {ending
+                ? `${ending.title}${isStaked(m) && ending.settling ? " · Settlement pending" : ""}`
+                : glance
+                  ? GLANCE_LABEL[glance]
+                  : "checking…"}
             </span>
           </button>
         );

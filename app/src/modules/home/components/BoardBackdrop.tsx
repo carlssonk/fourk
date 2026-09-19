@@ -344,7 +344,7 @@ export const BoardBackdrop = () => {
       <button
         type="button"
         onClick={cycleMode}
-        title={`backdrop: ${MODE_LABELS[mode]} — click to change`}
+        title={`backdrop: ${MODE_LABELS[mode]}. Click to change`}
         aria-label={`backdrop animation: ${MODE_LABELS[mode]}; click to change`}
         className="fixed right-3 bottom-3 cursor-pointer rounded-md border border-line/60 bg-panel/40 p-1.5 text-dim backdrop-blur-xs hover:border-accent hover:text-ink"
       >

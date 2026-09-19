@@ -1,5 +1,10 @@
 import { atom, getDefaultStore } from "jotai";
-import { knownMatchFromUrl, pendingInviteFromUrl, writeUrlHash } from "../lib/invite";
+import {
+  inviteErrorFromUrl,
+  knownMatchFromUrl,
+  pendingInviteFromUrl,
+  writeUrlHash,
+} from "../lib/invite";
 import { LIST_KEY, loadMatches, saveMatches, type Match } from "../lib/match";
 import { fresherOf, onMatchesPruned } from "../modes/registry";
 
@@ -104,7 +109,9 @@ export function clearInvite(): void {
  * a mid-game refresh seamless); a link to an unknown game becomes a pending
  * invite.
  */
-export function initMatches(): void {
+export function initMatches(onInviteError: (message: string) => void): void {
+  const initialError = inviteErrorFromUrl();
+  if (initialError) onInviteError(initialError);
   const initialCurrent = knownMatchFromUrl();
   // If the URL delivered a fresher state than we had stored, persist it.
   const initialMatches = initialCurrent ? upsert(loadMatches(), initialCurrent) : loadMatches();
@@ -149,6 +156,11 @@ export function initMatches(): void {
   // hash returns to the hub. The mirror above writes via replaceState, which
   // never fires this event — no feedback loop.
   window.addEventListener("hashchange", () => {
+    const error = inviteErrorFromUrl();
+    if (error) {
+      onInviteError(error);
+      return;
+    }
     const known = knownMatchFromUrl();
     if (known) {
       store.set(pendingInviteAtom, null);

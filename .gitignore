@@ -3,6 +3,8 @@ harness/target/
 contracts/fourk.json
 *.key
 app/dist/
+app/test-results/
+app/playwright-report/
 wasm/target/
 faucet/faucet.key
 

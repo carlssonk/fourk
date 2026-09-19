@@ -1,35 +1,31 @@
 /** Translate raw SDK/covenant errors into something a player can act on. */
 export function friendlyError(message: string): string {
-  if (/websocket|disconnect/i.test(message))
-    return "The connection blipped mid-action — it usually works on the next try.";
+  if (/websocket|disconnect/i.test(message)) return "Connection lost. Please try again.";
   if (message.includes("DISPENSER_EMPTY"))
-    return "The seat dispenser is out of funds — it needs a refill before new seats open.";
+    return "Free games are temporarily unavailable. Please try again later.";
   if (message.includes("DISPENSER_COOLING"))
-    return "The seat dispenser is catching its breath — try again in a minute or two.";
+    return "New games are temporarily unavailable. Try again in a minute.";
   if (message.includes("SEAT_SETUP_FAILED"))
-    return "Your seat funds haven't arrived yet — give it a moment and try again.";
-  if (message.includes("NO_ACCOUNT"))
-    return "Staked games need an account — create one and your funds live there.";
+    return "Your seat isn't ready yet. Please try again shortly.";
+  if (message.includes("NO_ACCOUNT")) return "Create an account to join a staked game.";
   if (message.includes("NOT_SEATED"))
-    return "You're watching this game, not playing in it — none of your accounts holds a seat.";
-  if (message.includes("LOW_BALANCE"))
-    return "Your balance can't cover that — add funds to your account and try again.";
+    return "You're watching this game. Only the players can make moves.";
+  if (message.includes("LOW_BALANCE")) return "Insufficient balance. Add funds and try again.";
   if (message.includes("BAD_SECRET"))
-    return "That doesn't look like a recovery phrase — it should be 12 or 24 words. Check for typos and try again.";
-  if (message.includes("BAD_ADDRESS"))
-    return "That doesn't look like a valid address — double-check it and try again.";
+    return "Enter a valid 12- or 24-word recovery phrase. Check for typos and try again.";
+  if (message.includes("BAD_ADDRESS")) return "Enter a valid Kaspa address.";
   if (message.includes("DEADLINE_TOO_CLOSE"))
-    return "This game's time cap is already spent — joining now wouldn't leave room to play. Ask the host for a fresh invite.";
+    return "This game is too close to its time limit. Ask the host for a new invite.";
   if (message.includes("WRONG_NETWORK"))
     return "That invite is for a different Kaspa network than this app is connected to.";
   if (message.includes("ACCOUNT_NOT_SAVED"))
-    return "This browser isn't saving data (private mode?), so an account can't survive here — nothing was changed. Try a regular window.";
+    return "Account could not be saved. Check your browser's storage settings and try again. Nothing was changed.";
   if (message.includes("ACCOUNT_NOT_REMOVED"))
-    return "This browser wouldn't save the change, so the account is still on this device — nothing was removed.";
+    return "Account could not be removed. It is still saved on this device.";
   if (message.includes("cannot cover") || message.includes("no UTXOs"))
-    return "Your balance can't quite cover that right now — free games top themselves up in a minute; staked games need added funds.";
+    return "Unable to prepare this action. Try again shortly or check your account balance.";
   if (isStaleMatchError(message))
-    return "That move crossed with another update — the board has refreshed, try again.";
+    return "The game updated before your move was accepted. Please try again.";
   return message;
 }
 

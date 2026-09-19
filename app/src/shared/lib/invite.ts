@@ -4,6 +4,19 @@
  */
 
 import { decodeShareCode, encodeShareCode, loadMatches, type Match } from "./match";
+import { friendlyCatch } from "./errors";
+
+/** A malformed invite should explain the failure instead of silently opening the hub. */
+export function inviteErrorFromUrl(): string | null {
+  if (!window.location.hash.startsWith("#g=")) return null;
+  try {
+    decodeShareCode(decodeURIComponent(window.location.hash.slice(3)));
+    return null;
+  } catch (error) {
+    if (String(error).includes("WRONG_NETWORK")) return friendlyCatch(error);
+    return "This invite link is invalid or incomplete. Ask the host to copy and send it again.";
+  }
+}
 
 /** Pull an invite out of a pasted link/code or a URL fragment. */
 export function parseInvite(raw: string): Match | null {

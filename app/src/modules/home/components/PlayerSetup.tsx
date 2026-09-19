@@ -95,6 +95,7 @@ export const PlayerSetup = ({
               <input
                 ref={inputRef}
                 id="username"
+                aria-label="Username"
                 className="input"
                 maxLength={MAX_NAME_LEN}
                 value={name}

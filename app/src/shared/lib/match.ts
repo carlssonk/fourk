@@ -111,6 +111,14 @@ export function isStaked(m: Match): boolean {
  * that it never contains FREE_STAKE — a test holds the line. */
 export const STAKE_PRESETS = [0n, 1n, 5n, 25n].map((k) => k * SOMPI_PER_KAS);
 
+/** Nonnegative estimated countdown, including seconds and hours beyond one day. */
+export function fmtCountdown(seconds: number): string {
+  const remaining = Number.isFinite(seconds) ? Math.max(0, Math.ceil(seconds)) : 0;
+  const hours = Math.floor(remaining / 3600);
+  const minutes = Math.floor((remaining % 3600) / 60);
+  return [hours, minutes, remaining % 60].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
 /** Human duration for a DAA block count (~10 blocks/s). */
 export function fmtDaaDuration(daa: number): string {
   const mins = Math.round(daa / 600);
@@ -131,6 +139,15 @@ export function parseKas(input: string): bigint | null {
   const frac = m[2] ? BigInt(m[2].padEnd(8, "0")) : 0n;
   const sompi = whole + frac;
   return sompi > 0n ? sompi : null;
+}
+
+/** Exact decimal for editable amounts: display rounding must never change a transfer. */
+export function fmtKasExact(sompi: bigint): string {
+  const whole = sompi / SOMPI_PER_KAS;
+  const fraction = String(sompi % SOMPI_PER_KAS)
+    .padStart(8, "0")
+    .replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : String(whole);
 }
 
 export function fmtKas(sompi: bigint): string {
@@ -276,7 +293,15 @@ export function loadMatches(): Match[] {
   const out: Match[] = [];
   try {
     const raw = localStorage.getItem(LIST_KEY);
-    if (raw) for (const item of JSON.parse(raw) as string[]) out.push(matchFromJson(item));
+    const items: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(items)) return out;
+    for (const item of items) {
+      try {
+        if (typeof item === "string") out.push(matchFromJson(item));
+      } catch {
+        // Salvage the other games even when one record is damaged.
+      }
+    }
   } catch {
     /* corrupt list — start over rather than brick the app */
   }
@@ -305,7 +330,14 @@ const CHECKPOINT_KEY = "fourk.checkpoints"; // covenantId -> block hash
 
 function loadCheckpoints(): Record<string, string> {
   try {
-    return JSON.parse(localStorage.getItem(CHECKPOINT_KEY) ?? "{}");
+    const raw = JSON.parse(localStorage.getItem(CHECKPOINT_KEY) ?? "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    return Object.fromEntries(
+      Object.entries(raw).filter(
+        (entry): entry is [string, string] =>
+          typeof entry[1] === "string" && /^[0-9a-f]{64}$/.test(entry[1]),
+      ),
+    );
   } catch {
     return {};
   }
@@ -330,7 +362,14 @@ const FINISHED_KEY = "fourk.finished"; // covenantId -> ms timestamp first seen 
 
 function loadFinishedSeen(): Record<string, number> {
   try {
-    return JSON.parse(localStorage.getItem(FINISHED_KEY) ?? "{}");
+    const raw = JSON.parse(localStorage.getItem(FINISHED_KEY) ?? "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    return Object.fromEntries(
+      Object.entries(raw).filter(
+        (entry): entry is [string, number] =>
+          typeof entry[1] === "number" && Number.isFinite(entry[1]) && entry[1] > 0,
+      ),
+    );
   } catch {
     return {};
   }

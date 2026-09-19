@@ -15,6 +15,8 @@ export interface MoveClock {
   expired: boolean;
   /** Whole seconds remaining (0 once expired), or null with no anchor. */
   secondsLeft: number | null;
+  /** Fraction of the configured move window remaining, clamped to 0..1. */
+  fractionRemaining: number;
 }
 
 /**
@@ -60,7 +62,8 @@ export function useMoveClock(match: Match, active: boolean): MoveClock {
     return () => clearInterval(id);
   }, [deadline]);
 
-  if (!active || deadline === null) return { text: null, expired: false, secondsLeft: null };
+  if (!active || deadline === null)
+    return { text: null, expired: false, secondsLeft: null, fractionRemaining: 0 };
   const left = Math.max(0, deadline - now);
   const m = Math.floor(left / 60_000);
   const s = Math.floor((left % 60_000) / 1000);
@@ -68,5 +71,9 @@ export function useMoveClock(match: Match, active: boolean): MoveClock {
     text: `${m}:${String(s).padStart(2, "0")}`,
     expired: left === 0,
     secondsLeft: Math.ceil(left / 1000),
+    fractionRemaining: Math.max(
+      0,
+      Math.min(1, left / Math.max(1, match.state.moveTimeout * MS_PER_DAA)),
+    ),
   };
 }

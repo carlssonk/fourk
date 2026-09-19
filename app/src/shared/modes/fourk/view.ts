@@ -74,21 +74,16 @@ function status(m: Match, ctx: ViewCtx, r: RoundView, inLobbyNow: boolean): Stat
   const pending = coreOf(m).pendingWin;
   if (pending !== 0) {
     const myDisc = ctx.role === "p2" ? 2 : 1;
+    const window = " Checking the final board…";
     if (!iAmPlayer)
-      return { segments: [{ text: "A win was claimed — the pot pays out shortly…" }], tone: "dim" };
+      return { segments: [{ text: "A win was claimed." }, { text: window }], tone: "dim" };
     return pending === myDisc
       ? {
-          segments: [
-            { text: "You connected four!", bold: true },
-            { text: " The pot pays out shortly…" },
-          ],
+          segments: [{ text: "You connected four!", bold: true }, { text: window }],
           spinner: true,
         }
       : {
-          segments: [
-            { text: "Your opponent connected four", bold: true },
-            { text: " — verifying the board before the pot pays out…" },
-          ],
+          segments: [{ text: "Your opponent connected four.", bold: true }, { text: window }],
           tone: "dim",
           spinner: true,
         };
@@ -96,9 +91,9 @@ function status(m: Match, ctx: ViewCtx, r: RoundView, inLobbyNow: boolean): Stat
   if (r.saltMissing)
     return {
       segments: [
-        { text: "Your sealed pick lives in another browser", bold: true },
+        { text: "Your pick was saved in another browser", bold: true },
         {
-          text: " — it can't be revealed here. If the clock runs out, your opponent can claim the pot.",
+          text: ". It can't be revealed here. If the clock runs out, your opponent can claim the win.",
         },
       ],
       tone: "danger",
@@ -109,7 +104,7 @@ function status(m: Match, ctx: ViewCtx, r: RoundView, inLobbyNow: boolean): Stat
     return {
       segments: [
         { text: "Your time is up", bold: true },
-        { text: " — your opponent can claim the pot. Pick now!" },
+        { text: ". Your opponent can claim the win. Pick now!" },
       ],
       tone: "danger",
     };
@@ -118,21 +113,20 @@ function status(m: Match, ctx: ViewCtx, r: RoundView, inLobbyNow: boolean): Stat
       ? {
           segments: [
             { text: "Your opponent joined", bold: true },
-            { text: " — pick a column in secret" },
+            { text: ". Pick a column in secret" },
           ],
         }
       : {
           segments: [
             { text: "Pick a column", bold: true },
-            { text: " — your opponent won't see it until both have picked" },
+            { text: ". Your opponent won't see it until both have picked" },
           ],
         };
   if (r.obligation !== null)
     return { segments: [{ text: "Revealing your pick…" }], tone: "dim", spinner: true };
   if (iAmPlayer && r.phase === "commit")
-    return { segments: [{ text: "You picked — waiting for your opponent's secret pick…" }] };
-  if (iAmPlayer)
-    return { segments: [{ text: "You revealed — waiting for your opponent's disc to drop…" }] };
+    return { segments: [{ text: "Pick saved. Waiting for your opponent…" }] };
+  if (iAmPlayer) return { segments: [{ text: "Waiting for your opponent to reveal…" }] };
   return { segments: [{ text: "Both players are picking columns in secret…" }] };
 }
 
@@ -217,12 +211,10 @@ export const fourkView = {
         // window — and never reaches ending classification).
         const winner = coreOf(m).pendingWin === 1 ? s.p1 : coreOf(m).pendingWin === 2 ? s.p2 : null;
         if (!winner) return GENERIC_END;
-        return winner === myPk
-          ? "You connected four — you win! 🎉"
-          : "Your opponent connected four — they win this one.";
+        return winner === myPk ? "You connected four. You win!" : "Your opponent connected four.";
       }
       case "claim_split":
-        return "You both connected four in the same drop — the pot split evenly.";
+        return "You both connected four in the same drop. The pot split evenly.";
       case "claim_timeout": {
         // The compliant claimant, from the pre-spend state: the lone
         // revealer, else the lone committer.
@@ -236,11 +228,11 @@ export const fourkView = {
                 ? s.p1
                 : s.p2;
         return claimant === myPk
-          ? "Your opponent ran out of time — you win by timeout. 🎉"
+          ? "Your opponent ran out of time. You win by timeout."
           : "The round timer ran out and your opponent claimed the pot.";
       }
       case "split_timeout":
-        return "The game stalled on both sides — it timed out and the pot split evenly.";
+        return "The game stalled on both sides. It timed out and the pot split evenly.";
       default:
         return GENERIC_END;
     }

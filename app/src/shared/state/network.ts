@@ -26,7 +26,7 @@ const store = getDefaultStore();
  * stored high-water mark — the testnet was reset since we last looked. */
 export const networkResetAtom = atom(false);
 
-export const RESET_RESULT = "The test network was reset — this game no longer exists.";
+export const RESET_RESULT = "The test network was reset. This game no longer exists.";
 
 // Per-network key: a future network switch starts a fresh watermark.
 const WATERMARK_KEY = `fourk.daaHighWater.${NETWORK_ID}`;

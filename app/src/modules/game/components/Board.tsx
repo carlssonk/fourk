@@ -204,15 +204,13 @@ export const Board = ({
     );
   });
 
-  // Fill most of what the Game screen's size container allows — width-bound
-  // on phones, height-bound on desktops, backed off to 97% so the board
-  // breathes. cqw/cqh are the slack the surrounding bars actually leave
-  // (invite card, error banner and all), so the only reserves left are the
-  // board's own chrome: the on-deck slot and the frame's padding and gaps
-  // (6rem ≈ 88px of frame per axis, on-deck folded into the 6.5 row count).
+  // Fill the available width/height, reserving the actual frame chrome:
+  // 7 column gaps + 14px padding + 2px border = 86px wide;
+  // 6 row gaps + 14px padding + 2px border + 8px on-deck gap = 84px tall.
+  // The on-deck discs account for the extra half-row in the height divisor.
   // Without a query container (the board nowhere else yet), cq units fall
   // back to the viewport, which degrades to the old behaviour.
-  const cell = "max(2rem, calc(min((100cqw - 6rem) / 7, (100cqh - 6rem) / 6.5) * 0.97))";
+  const cell = "max(1rem, min((100cqw - 86px) / 7, (100cqh - 84px) / 6.5))";
 
   return (
     <div
@@ -235,7 +233,7 @@ export const Board = ({
               return (
                 <div
                   className="flex items-center"
-                  title="If both players pick the same column, the front disc lands underneath — priority alternates every round."
+                  title="If both players pick the same column, the front disc lands underneath. Priority alternates each round."
                 >
                   <div className={`z-10 size-[calc(var(--cell)*0.5)] rounded-full ${DISC[first]}`}>
                     <KaspaStamp />

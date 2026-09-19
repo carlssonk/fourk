@@ -114,7 +114,7 @@ export function useMatchWatcher(match: Match) {
         /* transient RPC errors: keep polling */
       }
     });
-  }, [rpc, open, result, busy, needManualImport, match, chainReset]);
+  }, [rpc, open, result, busy, needManualImport, match, chainReset, myPk]);
 
   // Live phase: follow the opponent's transitions; classify the ending if
   // the game UTXO disappears. Push-driven: every opponent transition spends
@@ -176,7 +176,7 @@ export function useMatchWatcher(match: Match) {
         /* transient RPC errors: keep polling */
       }
     });
-  }, [rpc, open, full, result, busy, match, chainReset]);
+  }, [rpc, open, full, result, busy, match, chainReset, myPk]);
 
   /** Catch up from a pasted invite link (call inside `runAction`). */
   const importMatch = (text: string) => {

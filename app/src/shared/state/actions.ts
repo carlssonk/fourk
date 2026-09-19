@@ -48,6 +48,7 @@ export function reportError(e: unknown): void {
 
 /** One user action at a time; failures land in the error banner. */
 export async function runAction(action: () => Promise<void>): Promise<void> {
+  if (store.get(busyAtom)) return;
   store.set(busyAtom, true);
   store.set(errorAtom, null);
   try {
@@ -72,9 +73,9 @@ export async function createGame(deps: Deps = realDeps): Promise<void> {
   const staked = stakeSetting > 0n;
   const stake = staked ? stakeSetting : FREE_STAKE;
   startConnecting("Creating your game", [
-    "Connecting to the Kaspa network",
-    staked ? "Placing your stake" : "Topping up your stake",
-    "Opening the game on-chain",
+    staked ? "Connecting to the Kaspa network" : "Connecting to the game",
+    staked ? "Placing your stake" : "Preparing your seat",
+    staked ? "Opening the game on-chain" : "Creating your invite link",
   ]);
   // Free games are seated by the invisible guest key and paid for by the
   // dispenser; staked games are seated by the player's own account. The two
@@ -107,7 +108,6 @@ export const newGame = (): Promise<void> => runAction(createGame);
 /** Sit down at an invite — or reopen a known game, or spectate. */
 export const takeSeat = (invite: Match, deps: Deps = realDeps): Promise<void> =>
   runAction(async () => {
-    clearInvite();
     const known = store.get(matchesAtom).find((m) => m.covenantId === invite.covenantId);
     if (known) {
       // A game we're already in: reopen our TRACKED state, never the link's. An
@@ -116,6 +116,7 @@ export const takeSeat = (invite: Match, deps: Deps = realDeps): Promise<void> =>
       // watcher maintains — that is exactly the blinding vector. The watcher
       // advances `known` from the chain; the link never does.
       openMatch(known);
+      clearInvite();
       return;
     }
     // Whether the open seat is ours to take is a question about the key
@@ -128,9 +129,9 @@ export const takeSeat = (invite: Match, deps: Deps = realDeps): Promise<void> =>
       const staked = isStaked(invite);
       const { key } = deps.account.signingWallet({ staked });
       startConnecting("Joining the game", [
-        "Connecting to the Kaspa network",
-        staked ? "Placing your stake" : "Topping up your stake",
-        "Taking your seat on-chain",
+        staked ? "Connecting to the Kaspa network" : "Connecting to the game",
+        staked ? "Placing your stake" : "Preparing your seat",
+        staked ? "Taking your seat on-chain" : "Joining your opponent",
       ]);
       await deps.chain.connect();
       // A deadline the chain has already passed (or nearly so) is a trap —
@@ -150,17 +151,19 @@ export const takeSeat = (invite: Match, deps: Deps = realDeps): Promise<void> =>
         const joined = await deps.chain.joinMatch(key, invite, getProfile());
         saveCheckpoint(joined.covenantId, preJoin);
         openMatch(joined);
+        clearInvite();
       } catch (e) {
         // The genesis UTXO being gone has one meaning here: the seat is no
         // longer up for grabs. Say that, not "sync first".
         if (/game UTXO not found/.test(String((e as any)?.message ?? e)))
           throw new Error(
-            "This game is no longer open — someone else took the seat, or the host called it off.",
+            "This game is no longer open. Someone else took the seat, or the host called it off.",
             { cause: e },
           );
         throw e;
       }
     } else {
       openMatch(invite); // a game in progress or spectating
+      clearInvite();
     }
   });

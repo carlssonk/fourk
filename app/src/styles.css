@@ -208,7 +208,7 @@
    * hairline rather than by depth — which also means they read the same on
    * the home card and on a dialog's darker floor. */
   .input {
-    @apply w-full flex-1 rounded-lg px-3 py-2 text-ink;
+    @apply min-w-0 w-full flex-1 rounded-lg px-3 py-2 text-ink;
     border: 1px solid rgba(255, 224, 170, 0.13);
     background: rgba(255, 200, 120, 0.05);
   }
@@ -374,6 +374,10 @@
     .dlg::backdrop,
     .btn {
       transition: none;
+      animation: none;
+    }
+    .animate-pulse {
+      animation: none;
     }
     .coin-fall {
       display: none;

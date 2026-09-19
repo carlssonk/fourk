@@ -20,7 +20,8 @@ interface SaltRecord {
 
 function loadAll(): Record<string, SaltRecord> {
   try {
-    return JSON.parse(localStorage.getItem(SALT_KEY) ?? "{}");
+    const raw = JSON.parse(localStorage.getItem(SALT_KEY) ?? "{}");
+    return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : {};
   } catch {
     return {};
   }
@@ -35,7 +36,14 @@ export function saveSalt(covenantId: string, round: number, col: number, salt: s
 
 export function loadSalt(covenantId: string, round: number): SaltRecord | null {
   const rec = loadAll()[`${covenantId}:${round}`];
-  if (!rec || !Number.isInteger(rec.col) || !/^[0-9a-f]{64}$/.test(rec.salt)) return null;
+  if (
+    !rec ||
+    !Number.isInteger(rec.col) ||
+    rec.col < 0 ||
+    rec.col > 6 ||
+    !/^[0-9a-f]{64}$/.test(rec.salt)
+  )
+    return null;
   return rec;
 }
 

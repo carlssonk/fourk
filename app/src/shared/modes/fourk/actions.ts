@@ -168,8 +168,8 @@ export const fourkActions: ModeActions = {
   claimTimeout: claimTimeoutMatch,
 };
 
-export const SPLIT_MESSAGE = "You both connected four in the same drop — the pot split evenly.";
-const WIN_MESSAGE = "You connected four — you win! 🎉";
+export const SPLIT_MESSAGE = "You both connected four in the same drop. The pot split evenly.";
+const WIN_MESSAGE = "You connected four. You win!";
 
 /**
  * Fourk's round duties. Reveals and resolves fire the moment they're owed
@@ -215,12 +215,13 @@ export function fourkAutoActions(m: Match, ctx: AutoCtx): AutoAction[] {
         oncePer: "match",
         scheduleMs: async (rpc) => {
           const age = await engine.gameUtxoAge(rpc, fourkEngine, m);
-          // The +2s pad lets the chain tick past the sequence lock before
-          // the age-gated tx is submitted.
-          return Math.max(0, (m.state.moveTimeout - (age ?? 0)) * 100 + 2000);
+          if (age === null) return 3000;
+          if (age >= m.state.moveTimeout) return 0;
+          // Only estimate the next check, never permission to submit.
+          return (m.state.moveTimeout - age) * 100 + 2000;
         },
         run: async (rpc, key, mm) => {
-          await ensureFunds(rpc, key, engine.FEE_HEADROOM, { staked: isStaked(mm) });
+          // signedTerminal takes its fee from the pot, not the wallet.
           await sweepWinMatch(rpc, key, mm);
           return { kind: "finished", message: WIN_MESSAGE };
         },

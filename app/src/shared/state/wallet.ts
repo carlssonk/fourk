@@ -80,7 +80,7 @@ function persist(account: StoredAccount): void {
     // this session working; adoptAccount separately refuses to proceed when
     // a write doesn't stick (see there), so a phrase can't be "saved" into
     // thin air.
-    console.error("account record not saved — storage unavailable", e);
+    console.error("account record not saved. Storage unavailable", e);
   }
 }
 

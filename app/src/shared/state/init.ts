@@ -6,13 +6,14 @@
  */
 
 import { startBalancePolling } from "./balance";
+import { reportError } from "./actions";
 import { initMatches } from "./matches";
 import { wireProfileCrossTab } from "./profile";
 import { initRpc } from "./rpc";
 import { wireAccountCrossTab } from "./wallet";
 
 export function initStateLayer(): void {
-  initMatches();
+  initMatches(reportError);
   wireAccountCrossTab();
   wireProfileCrossTab();
   startBalancePolling();

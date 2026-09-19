@@ -26,7 +26,7 @@ function status(m: Match, ctx: ViewCtx, myTurn: boolean, mover: 0 | 1): StatusDe
     return {
       segments: [
         { text: "Your time is up", bold: true },
-        { text: " — your opponent can claim the win. Move now!" },
+        { text: ". Your opponent can claim the win. Move now!" },
       ],
       tone: "danger",
     };
@@ -35,10 +35,10 @@ function status(m: Match, ctx: ViewCtx, myTurn: boolean, mover: 0 | 1): StatusDe
       ? {
           segments: [
             { text: "Your opponent joined", bold: true },
-            { text: " — drop a disc to start" },
+            { text: ". Drop a disc to start" },
           ],
         }
-      : { segments: [{ text: "Your turn", bold: true }, { text: " — drop a disc" }] };
+      : { segments: [{ text: "Your turn", bold: true }, { text: ". Drop a disc" }] };
   if (iAmPlayer && s.moveCount === 0)
     return { segments: [{ text: "Waiting for your opponent to start…" }] };
   if (iAmPlayer) return { segments: [{ text: "Opponent's turn…" }] };
@@ -92,12 +92,10 @@ export const classicView = {
     const waitingPk = playerToMove(s) === 0 ? s.p2 : s.p1;
     switch (spend?.kind) {
       case "winning_move":
-        return moverPk === myPk
-          ? "You connected four — you win! 🎉"
-          : "Your opponent connected four — they win this one.";
+        return moverPk === myPk ? "You connected four. You win!" : "Your opponent connected four.";
       case "claim_forfeit":
         return waitingPk === myPk
-          ? "Your opponent ran out of time — you win by timeout. 🎉"
+          ? "Your opponent ran out of time. You win by timeout."
           : "The move timer ran out and your opponent claimed the win.";
       default:
         return GENERIC_END;
