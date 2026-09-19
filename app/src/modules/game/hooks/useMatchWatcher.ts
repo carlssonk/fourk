@@ -137,6 +137,11 @@ export function useMatchWatcher(match: Match) {
             desyncTicks.current = 0;
             checkpoint.current = cp;
             saveCheckpoint(match.covenantId, cp);
+            // The sync observed the UTXO alive: keep its acceptance stamp (a
+            // fourk2 clock and its commit discovery read it). Guarded, since
+            // an unconditional update would re-run this effect forever.
+            if (next.acceptedDaa !== undefined && next.acceptedDaa !== match.acceptedDaa)
+              updateMatch(next);
           } else {
             // Trace the spend and adopt whatever continuation it produced (a
             // blind-phase successor — e.g. a fourk commit — can't be

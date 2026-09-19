@@ -8,7 +8,7 @@ import { applyMove, discOf, playerToMove, type State } from "../../lib/game";
 import { isOpen as stateIsOpen } from "../../lib/game";
 import type { Match } from "../../lib/match";
 import type { SpendInfo } from "../../lib/engine";
-import type { ModeView, ModeViewSurface, StatusDescriptor, ViewCtx } from "../types";
+import type { ClockSpec, ModeView, ModeViewSurface, StatusDescriptor, ViewCtx } from "../types";
 import { GENERIC_END, claimTimeoutGate, describeSharedEnd, viewFlags } from "../common";
 
 function isHex64(s: string): boolean {
@@ -50,6 +50,11 @@ function status(m: Match, ctx: ViewCtx, myTurn: boolean, mover: 0 | 1): StatusDe
 export const classicView = {
   roundStarted(m: Match): boolean {
     return m.state.moveCount > 0;
+  },
+
+  /** The forfeit clock: the game UTXO's age since the last move. */
+  clock(m: Match): ClockSpec | null {
+    return m.state.moveCount > 0 ? { kind: "age", daa: m.state.moveTimeout } : null;
   },
 
   inLobby(m: Match): boolean {

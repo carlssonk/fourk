@@ -103,7 +103,11 @@ export async function drawMatch(
   mode: GameMode,
   match: Match,
 ): Promise<string> {
-  return engine.pinnedSplit(rpc, key, mode, match, "claim_draw", []);
+  // The fourk draws are age-gated (a board-filling resolve can hide a
+  // just-completed win); the sequence field carries the age proof.
+  return engine.pinnedSplit(rpc, key, mode, match, "claim_draw", [], {
+    sequence: BigInt(mode.drawAge(match)),
+  });
 }
 
 /** Settle a capped game that outlived its deadline; the tx's lockTime proves
@@ -117,6 +121,7 @@ export async function suddenDeathMatch(
   mode: GameMode,
   match: Match,
 ): Promise<string> {
+  if (mode.actions.settleCap) return mode.actions.settleCap(rpc, key, match);
   const lockTime = BigInt(match.state.deadline);
   const pendingWin = match.simul?.pendingWin ?? 0;
   if (pendingWin !== 0) {
@@ -160,10 +165,10 @@ export function sharedAutoActions(mode: GameMode, m: Match): AutoAction[] {
       // crank for when the UTXO reaches that age. Classic's draw has no such
       // gate and fires immediately. Either door is self-funded (fee from the
       // pot), so no wallet top-up is needed to crank it.
-      ...(m.simul && {
+      ...(mode.drawAge(m) > 0 && {
         scheduleMs: async (rpc) => {
           const age = await engine.gameUtxoAge(rpc, mode, m);
-          return Math.max(0, (m.state.moveTimeout - (age ?? 0)) * 100 + 2000);
+          return Math.max(0, (mode.drawAge(m) - (age ?? 0)) * 100 + 2000);
         },
       }),
       run: async (rpc, key, mm) => {

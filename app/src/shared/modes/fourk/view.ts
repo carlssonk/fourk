@@ -10,7 +10,7 @@ import { type State } from "../../lib/game";
 import { isOpen as stateIsOpen } from "../../lib/game";
 import type { Match } from "../../lib/match";
 import type { SpendInfo } from "../../lib/engine";
-import type { ModeView, ModeViewSurface, StatusDescriptor, ViewCtx } from "../types";
+import type { ClockSpec, ModeView, ModeViewSurface, StatusDescriptor, ViewCtx } from "../types";
 import {
   GENERIC_END,
   claimTimeoutGate,
@@ -157,6 +157,14 @@ function inLobby(m: Match): boolean {
 export const fourkView = {
   roundStarted,
   inLobby,
+
+  /** The forfeit clock: the game UTXO's age since the last transition; a
+   * pending win runs the challenge window, not an obligation. */
+  clock(m: Match): ClockSpec | null {
+    return roundStarted(m) && coreOf(m).pendingWin === 0
+      ? { kind: "age", daa: m.state.moveTimeout }
+      : null;
+  },
 
   view(m: Match, ctx: ViewCtx): ModeView {
     const s = m.state;

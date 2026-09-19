@@ -84,6 +84,12 @@ export const fourkEngine = {
     return { simul: coreOf(m) };
   },
 
+  /** claim_draw waits out one move clock (a board-filling resolve can hide
+   * a just-completed win; see the covenant). */
+  drawAge(m: Match): number {
+    return m.state.moveTimeout;
+  },
+
   /**
    * Enumerable successors. Commit-phase successors embed the opponent's
    * hash and CANNOT be enumerated. Reveal-phase successors are (player ×

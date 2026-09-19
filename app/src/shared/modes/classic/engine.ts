@@ -38,6 +38,11 @@ export const classicEngine = {
     return {};
   },
 
+  /** Classic's draw has no age gate. */
+  drawAge(_m: Match): number {
+    return 0;
+  },
+
   joinFields(_m: Match): Partial<Match> {
     return {};
   },

@@ -18,7 +18,7 @@ export function gameEnd(m: Match, myPk: string, result = m.result ?? null): Game
   const p1 = findWin(m.state.board, 1);
   const p2 = findWin(m.state.board, 2);
   const boardDecided = !!p1 || !!p2 || m.state.moveCount >= CELLS;
-  if (!result && (isOpen(m.state) || m.mode !== "fourk" || !boardDecided)) return null;
+  if (!result && (isOpen(m.state) || !m.mode?.startsWith("fourk") || !boardDecided)) return null;
   const player = myPk === m.state.p1 || myPk === m.state.p2;
   const settling = !result;
   const draw = (message: string): GameEnd => ({

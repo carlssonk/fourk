@@ -174,6 +174,38 @@ function entryDaaScore(entry: UtxoEntryLike): bigint {
   );
 }
 
+/** The consensus acceptance score of a UTXO entry, strictly: throws for a
+ * missing field or the unaccepted sentinel (u64::MAX for mempool outputs),
+ * since fourk2 derives successor addresses from it and a defaulted 0 would
+ * verify locally and die at the node. */
+export function entryAcceptedDaa(entry: UtxoEntryLike): number {
+  const raw = entry.blockDaaScore ?? entry.entry?.blockDaaScore ?? entry.utxoEntry?.blockDaaScore;
+  if (raw === undefined) throw new Error("UTXO entry carries no acceptance score");
+  const daa = BigInt(raw);
+  if (daa < 0n || daa >= 500_000_000_000n) throw new Error("UTXO entry is not accepted yet");
+  return Number(daa);
+}
+
+/** A snapshot with the on-chain hit attached: txid, pot, and the acceptance
+ * score the chain recorded for it (the one place `acceptedDaa` is set). */
+export function withEntry(m: Match, entry: UtxoEntryLike): Match {
+  const raw = entry.blockDaaScore ?? entry.entry?.blockDaaScore ?? entry.utxoEntry?.blockDaaScore;
+  const daa = raw === undefined ? undefined : BigInt(raw);
+  const { acceptedDaa: _stale, ...rest } = m;
+  return {
+    ...rest,
+    txid: entryTxId(entry),
+    value: entryAmount(entry),
+    ...(daa !== undefined && daa >= 0n && daa < 500_000_000_000n && { acceptedDaa: Number(daa) }),
+  };
+}
+
+/** A snapshot whose txid changed without an observation: no stamp. */
+export function withoutEntry(m: Match): Match {
+  const { acceptedDaa: _stale, ...rest } = m;
+  return rest;
+}
+
 function entryIsCoinbase(entry: UtxoEntryLike): boolean {
   return Boolean(
     entry.isCoinbase ?? entry.entry?.isCoinbase ?? entry.utxoEntry?.isCoinbase ?? false,
@@ -228,11 +260,40 @@ export async function untilIndexed(
   spent?: Match,
 ): Promise<Match> {
   for (let i = 0; i < 40; i++) {
-    if (await fetchGameUtxo(rpc, mode, match)) break;
+    const entry = await fetchGameUtxo(rpc, mode, match);
+    if (entry) return withEntry(match, entry);
     if (spent && !(await fetchGameUtxo(rpc, mode, spent))) break;
     await sleep(500);
   }
   return match;
+}
+
+/**
+ * The acceptance score of a transaction the UTXO index no longer holds (its
+ * output was spent onward before this client observed it): walk the virtual
+ * chain forward from `lowHash` to the block that accepted `txid` and read
+ * that block's DAA score — the same score OpTxInputDaaScore saw when the
+ * spend was validated. Null when `txid` is not accepted after `lowHash`.
+ */
+export async function acceptedDaaOf(
+  rpc: Rpc,
+  txid: string,
+  lowHash: string,
+): Promise<number | null> {
+  const res: any = await withRetry(() =>
+    rpc.getVirtualChainFromBlock({ startHash: lowHash, includeAcceptedTransactionIds: true }),
+  );
+  const groups: any[] = res.acceptedTransactionIds ?? res.accepted_transaction_ids ?? [];
+  for (const group of groups) {
+    const ids: unknown[] = group.acceptedTransactionIds ?? group.accepted_transaction_ids ?? [];
+    if (!ids.some((id) => String(id) === txid)) continue;
+    const hash = String(group.acceptingBlockHash ?? group.accepting_block_hash ?? "");
+    if (!hash) return null;
+    const block: any = await withRetry(() => rpc.getBlock({ hash, includeTransactions: false }));
+    const daa = block?.block?.header?.daaScore ?? block?.block?.header?.daa_score;
+    return daa === undefined ? null : Number(BigInt(daa));
+  }
+  return null;
 }
 
 /** Select wallet UTXOs, largest first, until their sum covers `need`.
@@ -591,6 +652,9 @@ export interface MatchTiming {
   /** Total game duration, DAA blocks; 0 = uncapped. Converted to an
    * absolute sudden-death deadline off the chain's current DAA score. */
   totalCap: number;
+  /** fourk2's reveal grace and challenge window, DAA (600 <= R <= the
+   * picking window); defaults to the picking window. */
+  revealTimeout?: number;
 }
 
 /** Genesis: fund a fresh covenant output of `stake` at the mode-derived
@@ -643,19 +707,22 @@ export async function continuation(
   next: { state: State; simul?: SimulCore },
   potDelta: bigint,
   payload = "",
+  opts: { gameUtxo?: UtxoEntryLike } = {},
 ): Promise<Match> {
-  const gameUtxo = await fetchGameUtxo(rpc, mode, match);
+  // A caller that derived `next` from the input's acceptance score (fourk2)
+  // hands over the entry it read, so the successor and the spend agree.
+  const gameUtxo = opts.gameUtxo ?? (await fetchGameUtxo(rpc, mode, match));
   if (!gameUtxo) throw new Error("game UTXO not found on chain. Sync first");
   const funding = await pickFunding(rpc, key, potDelta + FEE_HEADROOM);
   const changeSpk = kaspa.payToAddressScript(new kaspa.Address(walletAddress(key)));
   const pk = walletPubkey(key);
   const nextValue = match.value + potDelta;
-  const nextMatch: Match = {
+  const nextMatch: Match = withoutEntry({
     ...match,
     state: next.state,
     ...(next.simul && { simul: next.simul }),
     value: nextValue,
-  };
+  });
 
   const { txid } = await submitSpec(rpc, [key], (fee) => ({
     network: NETWORK_ID,
@@ -684,13 +751,15 @@ export async function signedTerminal(
   entry: string,
   args: EntryArg[],
   sequence = 0n,
+  opts: { lockTime?: bigint; gameUtxo?: UtxoEntryLike } = {},
 ): Promise<string> {
-  const gameUtxo = await fetchGameUtxo(rpc, mode, match);
+  const gameUtxo = opts.gameUtxo ?? (await fetchGameUtxo(rpc, mode, match));
   if (!gameUtxo) throw new Error("game UTXO not found on chain. Sync first");
   const payoutSpk = kaspa.payToAddressScript(new kaspa.Address(walletAddress(key)));
 
   const { txid } = await submitSpec(rpc, [key], (fee) => ({
     network: NETWORK_ID,
+    lockTime: (opts.lockTime ?? 0n).toString(),
     inputs: [gameInput(mode, match, gameUtxo, entry, args, sequence)],
     outputs: [scriptOutput(payoutSpk, match.value - fee)],
   }));
@@ -709,16 +778,16 @@ export async function pinnedWinner(
   match: Match,
   entry: string,
   winnerPkHex: string,
-  opts: { lockTime?: bigint } = {},
+  opts: { lockTime?: bigint; sequence?: bigint; gameUtxo?: UtxoEntryLike } = {},
 ): Promise<string> {
-  const { lockTime = 0n } = opts;
-  const gameUtxo = await fetchGameUtxo(rpc, mode, match);
+  const { lockTime = 0n, sequence = 0n } = opts;
+  const gameUtxo = opts.gameUtxo ?? (await fetchGameUtxo(rpc, mode, match));
   if (!gameUtxo) throw new Error("game UTXO not found on chain. Sync first");
 
   const { txid } = await submitSpec(rpc, [], (fee) => ({
     network: NETWORK_ID,
     lockTime: lockTime.toString(),
-    inputs: [gameInput(mode, match, gameUtxo, entry, [])],
+    inputs: [gameInput(mode, match, gameUtxo, entry, [], sequence)],
     outputs: [p2pkOutput(winnerPkHex, match.value - fee)],
   }));
   return txid;
@@ -738,10 +807,16 @@ export async function pinnedSplit(
   match: Match,
   entry: string,
   args: EntryArg[],
-  opts: { sequence?: bigint; lockTime?: bigint; signed?: boolean; awaitRefund?: boolean } = {},
+  opts: {
+    sequence?: bigint;
+    lockTime?: bigint;
+    signed?: boolean;
+    awaitRefund?: boolean;
+    gameUtxo?: UtxoEntryLike;
+  } = {},
 ): Promise<string> {
   const { sequence = 0n, lockTime = 0n, signed = false, awaitRefund = false } = opts;
-  const gameUtxo = await fetchGameUtxo(rpc, mode, match);
+  const gameUtxo = opts.gameUtxo ?? (await fetchGameUtxo(rpc, mode, match));
   if (!gameUtxo) throw new Error("game UTXO not found on chain. Sync first");
 
   const { txid } = await submitSpec(rpc, signed ? [key] : [], (fee) => {

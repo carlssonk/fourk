@@ -7,10 +7,10 @@
  */
 
 import { ZERO_PK, type State } from "./game";
-import { NETWORK_ID, type Match, type PlayerProfile } from "./match";
+import { NETWORK_ID, loadCheckpoint, type Match, type PlayerProfile } from "./match";
 import * as engine from "./engine";
 import { MODES, modeOf } from "../modes/registry";
-import type { GameModeKey } from "../modes/types";
+import type { ClockSpec, GameModeKey } from "../modes/types";
 import { drawMatch as modeDraw, suddenDeathMatch as modeSuddenDeath } from "../modes/common";
 
 // Mode-agnostic engine surface, re-exported so consumers keep one import.
@@ -42,12 +42,21 @@ export async function gameUtxoAge(rpc: Rpc, match: Match): Promise<number | null
  * elapsed and a timeout door is open; null means the game UTXO wasn't found.
  * The on-screen countdown can lag an age-fetch — callers gate timeout/dissolve
  * doors on this so a slightly-early click gets minutes, not a sequence-lock
- * rejection.
+ * rejection. `spec` overrides the mode's own clock (the lobby exit).
  */
-export async function moveClockRemaining(rpc: Rpc, match: Match): Promise<number | null> {
-  const age = await gameUtxoAge(rpc, match);
-  if (age === null) return null;
-  return Math.max(0, Math.ceil((match.state.moveTimeout - age) / 600));
+export async function moveClockRemaining(
+  rpc: Rpc,
+  match: Match,
+  spec: ClockSpec | null = modeOf(match).clock(match),
+): Promise<number | null> {
+  if (!spec) return 0;
+  if (spec.kind === "age") {
+    const age = await gameUtxoAge(rpc, match);
+    if (age === null) return null;
+    return Math.max(0, Math.ceil((spec.daa - age) / 600));
+  }
+  const info: any = await engine.withRetry(() => rpc.getBlockDagInfo());
+  return Math.max(0, Math.ceil((spec.daa - Number(info.virtualDaaScore)) / 600));
 }
 
 /** Does pkHex owe this match an action right now? (Classic: my turn; fourk:
@@ -87,7 +96,7 @@ export async function openMatch(
     state: genesis,
     txid: "",
     value: stake,
-    ...mode.genesisFields(),
+    ...mode.genesisFields(timing),
   };
   const { covenantId, txid } = await engine.openCovenant(rpc, key, mode, draft);
   return engine.untilIndexed(rpc, mode, { ...draft, covenantId, txid });
@@ -189,8 +198,9 @@ export async function syncMatch(
   const mode = modeOf(match);
   let advanced = false;
   for (;;) {
-    if (await engine.fetchGameUtxo(rpc, mode, match))
-      return { status: advanced ? "advanced" : "current", match };
+    const entry = await engine.fetchGameUtxo(rpc, mode, match);
+    if (entry)
+      return { status: advanced ? "advanced" : "current", match: engine.withEntry(match, entry) };
     const successor = await findSuccessor(rpc, match);
     if (!successor) return { status: "terminated", match };
     match = successor;
@@ -208,7 +218,7 @@ async function findSuccessor(rpc: Rpc, match: Match): Promise<Match | null> {
   for (const entry of res.entries ?? []) {
     if (String(entry.entry?.covenantId ?? entry.covenantId ?? "") !== match.covenantId) continue;
     const next = byAddress.get(String(entry.address ?? entry.entry?.address ?? ""));
-    if (next) return { ...next, txid: engine.entryTxId(entry), value: engine.entryAmount(entry) };
+    if (next) return engine.withEntry(next, entry);
   }
   return null;
 }
@@ -234,17 +244,27 @@ export async function adoptSpend(
   rpc: Rpc,
   match: Match,
   spend: engine.SpendInfo,
+  lowHash: string | null = null,
 ): Promise<Match | null> {
-  const derived = modeOf(match).rederiveSpend(match, spend);
+  const mode = modeOf(match);
+  // A fourk2 commit successor embeds the cutoff derived from the spent
+  // UTXO's acceptance score. The snapshot usually carries it (stamped when
+  // the UTXO was seen alive); a client that never saw it alive reads it off
+  // the virtual chain from the checkpoint that predates it.
+  if (match.acceptedDaa === undefined && mode.needsAcceptedDaa?.(match, spend)) {
+    const low = lowHash ?? loadCheckpoint(match.covenantId);
+    const daa = low ? await engine.acceptedDaaOf(rpc, match.txid, low).catch(() => null) : null;
+    if (daa === null) return null;
+    match = { ...match, acceptedDaa: daa };
+  }
+  const derived = mode.rederiveSpend(match, spend);
   if (!derived) return null;
   const entries = await engine.utxosAt(rpc, matchAddress(derived));
   const hit = entries.find((e) => !spend.txid || engine.entryTxId(e) === spend.txid);
   if (!hit) return null;
   const p2Profile = spend.kind === "join" ? engine.profileFromPayload(spend.payload) : null;
   return {
-    ...derived,
-    txid: engine.entryTxId(hit),
-    value: engine.entryAmount(hit),
+    ...engine.withEntry(derived, hit),
     ...(p2Profile && { profiles: { ...match.profiles, p2: p2Profile } }),
   };
 }
@@ -262,7 +282,7 @@ export async function discoverAdvance(
 ): Promise<Match | null> {
   const spend = await discoverSpend(rpc, match, lowHash);
   if (!spend) return null;
-  return adoptSpend(rpc, match, spend);
+  return adoptSpend(rpc, match, spend, lowHash);
 }
 
 /** Re-exported for the watcher's ending classification. */
