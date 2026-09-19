@@ -20,6 +20,7 @@ import {
   reveal,
   splitTimeout,
   suddenDeath,
+  sweepWin,
 } from "../src/simul/rules.js";
 import { commitmentOf } from "../src/simul/hash.js";
 import { P1, P2, STAKE, STRANGER, ctx } from "./helpers.js";
@@ -164,7 +165,7 @@ describe("invariants over random legal simul games", () => {
 });
 
 describe("witness scheme vs the naive oracle", () => {
-  test("claimWin pays the line's owner iff the oracle confirms that exact line", () => {
+  test("claimWin opens a challenge for the line's owner iff the oracle confirms that exact line", () => {
     fc.assert(
       fc.property(arbSeeds, arbWitness, fc.nat(1), (seeds, w, player) => {
         const { s } = reachableSimul(seeds);
@@ -174,11 +175,33 @@ describe("witness scheme vs the naive oracle", () => {
         );
         const claim = () => claimWin(s, ctx(pkOf(player as 0 | 1)), w);
         if (oracleSaysWin) {
-          expect(claim()).toEqual([{ to: pkOf(player as 0 | 1), amount: 2n * STAKE }]);
+          const pending = claim();
+          expect(pending.pendingWin).toBe(disc);
+          expect(pending.board).toEqual(s.board);
+          expect(() => sweepWin(pending, ctx(pkOf(player as 0 | 1), s.moveTimeout - 1))).toThrow();
+          expect(sweepWin(pending, ctx(pkOf(player as 0 | 1), s.moveTimeout))).toEqual([
+            { to: pkOf(player as 0 | 1), amount: 2n * STAKE },
+          ]);
         } else {
           expect(claim).toThrow(/invalid win witness|not your line/);
         }
       }),
+      {
+        examples: [
+          [
+            [
+              [0, 0, 0],
+              [2, 3, 0],
+              [2, 0, 0],
+              [5, 5, 0],
+              [3, 0, 0],
+              [4, 4, 0],
+            ],
+            { col: 2, row: 1, dir: 0 },
+            0,
+          ],
+        ],
+      },
     );
   });
 
