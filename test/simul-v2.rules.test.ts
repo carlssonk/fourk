@@ -177,3 +177,43 @@ test("submission order and timing cannot change the cutoff or reward a late seco
     { numRuns: 300, seed: 19092026 },
   );
 });
+
+test("shape builders mirror the doors and the validator holds the V2 invariants", () => {
+  const s = started();
+  expect(v2.applyReady(joined(), 0)).toEqual(v2.ready(joined(), at(P1)));
+  const one = v2.commit(s, at(P1, 1000), pick(0));
+  expect(v2.applyCommit(s, 0, pick(0), 1000)).toEqual(one);
+  const two = v2.commit(one, at(P2, 2199), pick(1));
+  expect(v2.applyCommit(one, 1, pick(1), 2199)).toEqual(two);
+  const revealed = v2.reveal(two, at(P1, 2200), 0, salt(0));
+  expect(v2.applyReveal(two, 0, 0)).toEqual(revealed);
+  expect(v2.applyResolve(revealed, 1, 1)).toEqual(v2.resolve(revealed, at(P2), 1, salt(1)));
+  const board = new Uint8Array(42);
+  board.set([1, 1, 1, 1]);
+  const lined = { ...one, board };
+  expect(v2.applyClaimWin(lined, 1)).toEqual(
+    v2.claimWin(lined, at(P1), { col: 0, row: 0, dir: 1 }),
+  );
+  for (const good of [
+    joined(),
+    v2.ready(joined(), at(P2)),
+    s,
+    one,
+    two,
+    revealed,
+    v2.applyClaimWin(lined, 1),
+  ])
+    expect(() => v2.validateReachableSimulV2State(good)).not.toThrow();
+  const bad: Array<[Partial<v2.State>, RegExp]> = [
+    [{ ...joined(), readyMask: 4 }, /ready mask/],
+    [{ ...one, readyMask: 1 }, /before both ready/],
+    [{ ...one, pickDeadline: 0 }, /below the picking window/],
+    [{ ...one, firstCommitter: 2 }, /mismatch/],
+    [{ ...s, pickDeadline: 2200 }, /cutoff without a commit/],
+    [{ ...revealed, pickDeadline: 2200, firstCommitter: 1 }, /cutoff without a commit/],
+    [{ ...s, revealTimeout: 1201 }, /reveal timeout/],
+    [{ ...v2.newMatch(P1, STAKE, 1200, 100_000, 600), readyMask: 1 }, /open match/],
+  ];
+  for (const [state, why] of bad)
+    expect(() => v2.validateReachableSimulV2State(state as v2.State)).toThrow(why);
+});

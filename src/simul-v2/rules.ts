@@ -1,6 +1,12 @@
 /** Versioned shared-deadline Fourk rulebook. Legacy matches keep src/simul. */
 import * as legacy from "../simul/rules.js";
-import { newSimulMatch, type SimulState, ZERO_HASH, isBoardFull } from "../simul/state.js";
+import {
+  newSimulMatch,
+  type SimulState,
+  ZERO_HASH,
+  isBoardFull,
+  validateReachableSimulState,
+} from "../simul/state.js";
 import { DEADLINE_LIMIT, MIN_MOVE_TIMEOUT_DAA, ZERO_PK, type PubKey } from "../state.js";
 import type { Ctx as LegacyCtx, Payout, LineWitness } from "../rules.js";
 
@@ -246,4 +252,83 @@ export function suddenDeath(s: State, ctx: Ctx): Payout[] {
     req(ctx.txTime >= score + s.moveTimeout, "pick deadline not reached");
   }
   return split(s);
+}
+
+// --- Shape builders (see CONTEXT.md) -----------------------------------------
+//
+// The successor shapes the doors above produce, guards not included, so the
+// app's engine can pose transitions it cannot authorize (an opponent's salt,
+// an opponent's readiness signature) without forking the field list.
+
+/** A player's readiness bit set. */
+export function applyReady(s: State, player: 0 | 1): State {
+  return { ...s, board: s.board.slice(), readyMask: s.readyMask | (player === 0 ? 1 : 2) };
+}
+
+/** A commitment by `player` on a state whose input was accepted at
+ * `inputDaa`: the first commit anchors the shared cutoff, the second stores
+ * the rebase-graced cutoff (see commit). */
+export function applyCommit(s: State, player: 0 | 1, hash: string, inputDaa: number): State {
+  const first = s.commit1 === ZERO_HASH && s.commit2 === ZERO_HASH;
+  return {
+    ...s,
+    board: s.board.slice(),
+    ...(player === 0 ? { commit1: hash } : { commit2: hash }),
+    pickDeadline: first
+      ? inputDaa + s.moveTimeout
+      : Math.max(s.pickDeadline, inputDaa + REBASE_GRACE_DAA),
+    firstCommitter: first ? player + 1 : s.firstCommitter,
+  };
+}
+
+export function applyReveal(s: State, player: 0 | 1, col: number): State {
+  return { ...s, ...legacy.applyReveal(s, player, col), pickDeadline: 0, firstCommitter: 0 };
+}
+
+export function applyResolve(s: State, player: 0 | 1, col: number): State {
+  return { ...s, ...legacy.applyResolve(s, player, col), pickDeadline: 0, firstCommitter: 0 };
+}
+
+export function applyClaimWin(s: State, disc: number): State {
+  return { ...s, ...legacy.applyClaimWin(s, disc), pickDeadline: 0, firstCommitter: 0 };
+}
+
+// --- Reachability ------------------------------------------------------------
+
+function commitCountOf(s: State): number {
+  return Number(s.commit1 !== ZERO_HASH) + Number(s.commit2 !== ZERO_HASH);
+}
+
+/** The V2 counterpart of validateReachableSimulState: every invariant a state
+ * reachable from a legal V2 genesis satisfies, for every decoder of untrusted
+ * V2 state (share codes, stored records). */
+export function validateReachableSimulV2State(s: State): void {
+  validateReachableSimulState(s);
+  req(
+    Number.isInteger(s.revealTimeout) &&
+      s.revealTimeout >= MIN_MOVE_TIMEOUT_DAA &&
+      s.revealTimeout <= s.moveTimeout,
+    "invalid reveal timeout",
+  );
+  req(Number.isInteger(s.readyMask) && s.readyMask >= 0 && s.readyMask <= 3, "bad ready mask");
+  req(Number.isInteger(s.pickDeadline) && s.pickDeadline >= 0, "bad pick deadline");
+  req(s.pickDeadline < DEADLINE_LIMIT, "bad pick deadline");
+  req([0, 1, 2].includes(s.firstCommitter), "bad first committer");
+  if (s.p2 === ZERO_PK) req(s.readyMask === 0, "open match with readiness");
+  // Nothing can happen before both are ready.
+  if (s.readyMask !== 3)
+    req(
+      s.round === 0 && s.commit1 === ZERO_HASH && s.commit2 === ZERO_HASH && s.pendingWin === 0,
+      "round state before both ready",
+    );
+  // The cutoff lives exactly as long as the round is collecting commits: the
+  // first reveal, a resolve and a win claim all clear it.
+  const count = s.reveal1 !== 0 || s.reveal2 !== 0 ? 0 : commitCountOf(s);
+  if (count === 0) req(s.pickDeadline === 0 && s.firstCommitter === 0, "cutoff without a commit");
+  else {
+    req(s.pickDeadline >= s.moveTimeout, "cutoff below the picking window");
+    req(s.firstCommitter === 1 || s.firstCommitter === 2, "commit without a first committer");
+    if (count === 1)
+      req(s.firstCommitter === (s.commit1 !== ZERO_HASH ? 1 : 2), "first committer mismatch");
+  }
 }

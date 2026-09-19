@@ -15,6 +15,8 @@ import {
 } from "./game";
 import type { SimulCore } from "../modes/fourk/core";
 import { simulFromFlatJson, simulToFlatJson } from "../modes/fourk/wire";
+import { core2Of, validateCore2 } from "../modes/fourk2/core";
+import { simul2FromFlatJson, simul2ToFlatJson } from "../modes/fourk2/wire";
 import {
   base64UrlToBytes,
   bytesToBase64Url,
@@ -49,13 +51,20 @@ export interface Match {
   txid: string;
   /** Current pot in sompi. */
   value: bigint;
-  /** Game mode; absent = classic alternating play. "fourk" is simultaneous
-   * commit-reveal play — consensus state (the game address derives from it),
-   * so it always travels in share codes and stored records. */
-  mode?: "fourk";
-  /** The round machine for fourk mode (round, commitments, reveals);
-   * consensus state like `mode`. Absent on classic matches. */
+  /** Game mode; absent = classic alternating play. "fourk" is the legacy
+   * simultaneous commit-reveal protocol, "fourk2" the shared-deadline one —
+   * consensus state (the game address derives from it), so it always travels
+   * in share codes and stored records. */
+  mode?: "fourk" | "fourk2";
+  /** The round machine for the fourk modes (round, commitments, reveals; V2
+   * adds readiness and the picking cutoff — see SimulCore2); consensus state
+   * like `mode`. Absent on classic matches. */
   simul?: SimulCore;
+  /** The DAA score at which the chain accepted `txid`, when it was observed
+   * alive in the UTXO set. Observational, never wire state: fourk2 derives
+   * its commit successors from it, and it is dropped whenever `txid` changes
+   * without an observation. */
+  acceptedDaa?: number;
   /** Whatever identities we've learned; merged as they arrive. */
   profiles?: { p1?: PlayerProfile; p2?: PlayerProfile };
   /** How the game ended, recorded the moment it was seen to finish — so a
@@ -189,6 +198,8 @@ export function matchToJson(m: Match): string {
       moveTimeout: m.state.moveTimeout,
       deadline: m.state.deadline,
       ...(m.mode === "fourk" && { mode: m.mode, ...simulToFlatJson(m.simul) }),
+      ...(m.mode === "fourk2" && { mode: m.mode, ...simul2ToFlatJson(core2Of(m)) }),
+      ...(m.acceptedDaa !== undefined && { acceptedDaa: m.acceptedDaa }),
       ...(m.profiles && { profiles: m.profiles }),
       ...(m.p1Color && { p1Color: m.p1Color }),
       ...(m.result && { result: m.result }),
@@ -225,13 +236,19 @@ const matchJsonSchema = z.object({
   p1Color: z.enum(["red", "blue"]).optional(),
   result: z.string().optional(),
   // Fourk mode (simultaneous): the round machine rides along.
-  mode: z.literal("fourk").optional(),
+  mode: z.enum(["fourk", "fourk2"]).optional(),
   round: z.number().int().min(0).max(255).optional(),
   commit1: hex64.optional(),
   commit2: hex64.optional(),
   reveal1: z.number().int().min(0).max(7).optional(),
   reveal2: z.number().int().min(0).max(7).optional(),
   pendingWin: z.number().int().min(0).max(2).optional(),
+  // Fourk V2: readiness and the shared picking cutoff.
+  readyMask: z.number().int().min(0).max(3).optional(),
+  pickDeadline: z.number().int().nonnegative().optional(),
+  firstCommitter: z.number().int().min(0).max(2).optional(),
+  revealTimeout: z.number().int().positive().optional(),
+  acceptedDaa: z.number().int().nonnegative().optional(),
 });
 
 export function matchFromJson(json: string): Match {
@@ -250,6 +267,8 @@ export function matchFromJson(json: string): Match {
   // Stored records are untrusted (localStorage, legacy share codes) — the
   // rulebook's reachability invariants apply here too, from their one home.
   validateReachableState(state);
+  const simul2 = raw.mode === "fourk2" ? simul2FromFlatJson(raw) : undefined;
+  if (simul2) validateCore2(state, simul2);
   return {
     network: raw.network,
     covenantId: raw.covenantId,
@@ -257,6 +276,8 @@ export function matchFromJson(json: string): Match {
     txid: raw.txid,
     value: BigInt(raw.value),
     ...(raw.mode === "fourk" && { mode: raw.mode, simul: simulFromFlatJson(raw) }),
+    ...(simul2 && { mode: "fourk2" as const, simul: simul2 }),
+    ...(raw.acceptedDaa !== undefined && { acceptedDaa: raw.acceptedDaa }),
     ...(raw.profiles && {
       profiles: {
         ...(raw.profiles.p1 && { p1: raw.profiles.p1 }),

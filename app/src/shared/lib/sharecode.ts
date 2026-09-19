@@ -46,6 +46,7 @@ import {
   type State,
 } from "./game";
 import { ZERO_HASH, type SimulCore } from "../modes/fourk/core";
+import { validateCore2 } from "../modes/fourk2/core";
 import { pushModeSection, takeModeSection } from "../modes/wire";
 import { pushHex32, pushVarint, readVarint, takeByte, takeHex32, takeSmallInt } from "./bytes";
 import { trimName, type Match, type PlayerProfile } from "./match";
@@ -68,7 +69,7 @@ export function encodeMatchBinary(m: Match): Uint8Array {
   const p2Prof = p2Joined ? m.profiles?.p2 : undefined;
   const p1Blue = m.p1Color === "blue";
   const timingStored = s.moveTimeout !== MOVE_TIMEOUT_DAA || s.deadline !== 0;
-  const modeStored = m.mode === "fourk";
+  const modeStored = m.mode === "fourk" || m.mode === "fourk2";
   const hasExtension = !!(p1Prof || p2Prof) || p1Blue || timingStored || modeStored;
 
   let flags = network;
@@ -111,7 +112,7 @@ export function encodeMatchBinary(m: Match): Uint8Array {
       pushVarint(out, BigInt(s.moveTimeout));
       pushVarint(out, BigInt(s.deadline));
     }
-    if (modeStored) pushModeSection(out, "fourk", m.simul);
+    if (modeStored) pushModeSection(out, m.mode!, m.simul);
   }
   return Uint8Array.from(out);
 }
@@ -160,6 +161,7 @@ export function decodeMatchBinary(buf: Uint8Array): Match {
   let moveTimeout = MOVE_TIMEOUT_DAA;
   let deadline = 0;
   let simul: SimulCore | undefined;
+  let mode: "fourk" | "fourk2" | undefined;
   if (flags & 0x80) {
     const pf = takeByte(buf, i);
     if (pf & 0xe0) throw new Error("unknown share-code format version");
@@ -175,7 +177,7 @@ export function decodeMatchBinary(buf: Uint8Array): Match {
       moveTimeout = takeSmallInt(buf, i, MAX_MOVE_TIMEOUT_DAA, "move timeout");
       deadline = takeSmallInt(buf, i, DEADLINE_LIMIT - 1, "deadline");
     }
-    if (pf & 16) simul = takeModeSection(buf, i).simul;
+    if (pf & 16) ({ mode, simul } = takeModeSection(buf, i));
   }
   if (i.p !== buf.length) throw new Error("trailing bytes in share code");
 
@@ -197,13 +199,14 @@ export function decodeMatchBinary(buf: Uint8Array): Match {
   // Share codes are untrusted input — hold the state to the rulebook's own
   // reachability invariants, in their one home.
   validateReachableState(state);
+  if (mode === "fourk2") validateCore2(state, simul as Parameters<typeof validateCore2>[1]);
   return {
     network,
     covenantId,
     txid,
     value,
     state,
-    ...(simul && { mode: "fourk" as const, simul }),
+    ...(mode && simul && { mode, simul }),
     ...(profiles && { profiles }),
     ...(p1Blue && { p1Color: "blue" as const }),
   };

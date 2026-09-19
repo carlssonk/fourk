@@ -341,7 +341,7 @@ describe("fourk mode in share codes", () => {
     const good = encodeMatchBinary({ ...match({ p2: P2 }), mode: "fourk", simul: zeroCore });
     // Mode section trails the code: [modeByte, roundVarint(0), slotMask(0)].
     const modeAt = good.length - 3;
-    const badMode = Uint8Array.from(good.map((x, i) => (i === modeAt ? 2 : x)));
+    const badMode = Uint8Array.from(good.map((x, i) => (i === modeAt ? 3 : x)));
     expect(() => decodeMatchBinary(badMode)).toThrow("unknown game mode");
     const badMask = Uint8Array.from(good.map((x, i) => (i === good.length - 1 ? 0x40 : x)));
     expect(() => decodeMatchBinary(badMask)).toThrow("bad slot mask");
