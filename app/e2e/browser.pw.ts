@@ -165,6 +165,12 @@ test("Fourk keeps both simultaneous picks and reveals after refresh", async ({ p
     await page.getByRole("button", { name: "Private Game", exact: true }).click();
     await guest.goto(await page.getByLabel("Invite link", { exact: true }).inputValue());
     await guest.getByRole("button", { name: "Join", exact: true }).click();
+    // Fourk V2: both players ready up before the first timed round; the
+    // lobby exits are gone the moment the second signature lands.
+    await expect(page.getByRole("button", { name: "Kick opponent", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Ready", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Ready", exact: true })).toHaveCount(0);
+    await guest.getByRole("button", { name: "Ready", exact: true }).click();
     await expect(column(page, 4)).toBeEnabled();
     await expect(column(guest, 4)).toBeEnabled();
     for (let round = 0; round < 2; round++) {

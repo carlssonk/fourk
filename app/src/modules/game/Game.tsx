@@ -117,7 +117,10 @@ export const Game = ({ match }: Props) => {
   // that left a host with no exit from a guest who joined and idled, so it
   // now mirrors the covenant.
   const inLobby = mode.inLobby(match) && !result;
-  const lobbyClock = useMoveClock(match, inLobby && role === "p2");
+  const lobbyClock = useMoveClock(match, inLobby && role === "p2", {
+    kind: "age",
+    daa: s.moveTimeout,
+  });
   const withdrawGated = role === "p2" && !lobbyClock.expired;
 
   // ONE optimistic record for both modes: the column just clicked, keyed to
@@ -249,7 +252,7 @@ export const Game = ({ match }: Props) => {
     runAction(async () => {
       const key = seatKey();
       const rpc = await getRpc();
-      const mins = await cov.moveClockRemaining(rpc, match);
+      const mins = await cov.moveClockRemaining(rpc, match, mode.clock(match));
       if (mins) {
         throw new Error(
           `Your opponent still has about ${mins} minute${mins === 1 ? "" : "s"} to move.`,
@@ -320,7 +323,10 @@ export const Game = ({ match }: Props) => {
       // the age on-chain so a slightly-early click gets minutes, not a
       // sequence-lock rejection.
       if (role === "p2") {
-        const mins = await cov.moveClockRemaining(rpc, match);
+        const mins = await cov.moveClockRemaining(rpc, match, {
+          kind: "age",
+          daa: s.moveTimeout,
+        });
         if (mins) {
           throw new Error(`You can cancel in about ${mins} minute${mins === 1 ? "" : "s"}.`);
         }
@@ -335,6 +341,36 @@ export const Game = ({ match }: Props) => {
       if (role === "p1") await createGame();
     });
   };
+
+  // Fourk V2: both players sign readiness before the first timed round.
+  const readyUp = () =>
+    runAction(async () => {
+      const key = seatKey();
+      const rpc = await getRpc();
+      const ready = mode.actions.ready;
+      if (!ready) return;
+      try {
+        updateMatch(await ready(rpc, key, match));
+      } catch (e) {
+        // The opponent's readiness (or exit) may have crossed ours: adopt the
+        // fresh state and, if our readiness is still owed there, sign it again.
+        const { status, match: next } = await cov.syncMatch(rpc, match);
+        if (status === "terminated") return;
+        if (status !== "advanced") throw e;
+        updateMatch(next);
+        if (
+          mode.view(next, {
+            myPk,
+            role,
+            clockExpired: false,
+            busy: false,
+            pendingCol: null,
+            result: null,
+          }).canReady
+        )
+          updateMatch(await ready(rpc, key, next));
+      }
+    });
 
   const link = inviteLink(match);
   const shown = view.board.shownState;
@@ -568,6 +604,16 @@ export const Game = ({ match }: Props) => {
             Claim timeout win
           </button>
         )}
+        {view.canReady && (
+          <button
+            className="btn"
+            disabled={busy}
+            title="Once both players are ready, the first round starts and the lobby closes."
+            onClick={readyUp}
+          >
+            Ready
+          </button>
+        )}
         {inLobby && iAmPlayer && (
           <button
             className="btn btn-danger"
@@ -576,7 +622,7 @@ export const Game = ({ match }: Props) => {
               role === "p1"
                 ? "Before play starts, you can remove your opponent and get a fresh game with a new invite link."
                 : withdrawGated
-                  ? "You can cancel once the lobby timer ends."
+                  ? "You can cancel once the lobby timer ends. Readying up restarts it."
                   : undefined
             }
             onClick={() => void dissolveGame()}

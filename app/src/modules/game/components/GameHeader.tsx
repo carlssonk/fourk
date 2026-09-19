@@ -135,8 +135,11 @@ export const GameHeader = ({ mode, moveTimeout, busy, ended, capTime, staked, on
           className="space-y-4 text-sm"
         >
           <p>Connect four of your discs horizontally, vertically, or diagonally to win.</p>
-          {mode.key === "fourk" ? (
+          {mode.key !== "classic" ? (
             <ol className="list-decimal space-y-2 pl-5 text-dim">
+              {mode.key === "fourk2" && (
+                <li>Both players ready up. The first round starts once both are ready.</li>
+              )}
               <li>
                 Both players choose a column in secret. Your choice stays hidden until both players
                 have picked.
@@ -159,8 +162,10 @@ export const GameHeader = ({ mode, moveTimeout, busy, ended, capTime, staked, on
           <div className="border-t border-line pt-3">
             <h3 className="mb-1 font-semibold">Move timer</h3>
             <p className="text-dim">
-              This game allows {fmtDaaDuration(moveTimeout)} per {mode.moveNoun}. If you run out of
-              time, your opponent can claim the win. Opening this help does not pause the game.
+              {mode.key === "fourk2"
+                ? `Each round, both players have ${fmtDaaDuration(moveTimeout)} to pick, counted from the same moment. A pick counts once the network confirms it. If only your opponent picks in time, they can claim the win; if neither of you does, the round is a draw.`
+                : `This game allows ${fmtDaaDuration(moveTimeout)} per ${mode.moveNoun}. If you run out of time, your opponent can claim the win.`}{" "}
+              Opening this help does not pause the game.
             </p>
           </div>
           {capTime !== null && (

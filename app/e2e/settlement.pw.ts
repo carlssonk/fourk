@@ -26,6 +26,12 @@ test("a Fourk winner and opponent both reach the settled result", async ({ page,
     await expect(page.getByLabel("Invite link", { exact: true })).toBeVisible();
     await other.goto(await page.getByLabel("Invite link", { exact: true }).inputValue());
     await other.getByRole("button", { name: "Join", exact: true }).click();
+    await page.getByRole("button", { name: "Ready", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Ready", exact: true })).toHaveCount(0);
+    await other.getByRole("button", { name: "Ready", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "drop a disc in column 1", exact: true }),
+    ).toBeEnabled();
     for (let round = 0; round < 4; round++) {
       await Promise.all([
         page.getByRole("button", { name: "drop a disc in column 1", exact: true }).click(),
