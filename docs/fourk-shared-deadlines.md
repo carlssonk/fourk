@@ -1,7 +1,8 @@
 # Fourk shared picking deadlines: feasibility review
 
-Status: versioned reference rules and compiled contract proof implemented. Not
-enabled in the app, live-node verified, or security-approved.
+Status: versioned reference rules, compiled contract proof, app integration
+(the `fourk2` mode) and a local-node verification suite implemented. New Fourk
+games host on V2. Not run on a public network or security-approved.
 
 This review concerns the dependency revisions pinned in `harness/Cargo.toml`,
 not a claim about every Kaspa network or future compiler version. Classic's
@@ -188,13 +189,86 @@ round-start output accepted at/after the cap cannot start another picking round.
    Argent actors covering normal play and terminal guards.
 2. Completed: pinned-compiler artifact generation and real-engine harness
    verification, with legacy contract compatibility checks.
-3. Pending: local-node tests of mining, actual acceptance scores, absolute and
-   relative lock enforcement, mempool handling, collisions, and reorg/revalidation.
-4. Pending: version-aware codecs, share codes, stored matches, successor discovery,
-   transaction specs, and browser WASM rebuild. Preserve the legacy adapter;
-   an already-funded covenant does not acquire new rules through a UI update.
-5. Pending: readiness UI, shared picking countdown, confirmation feedback, and
-   retry/recovery behavior. No app route creates V2 matches yet.
+3. Completed: `app/e2e/simul-v2-live.test.ts` drives the app's real transaction
+   engine for both players against the local simnet node (see "Live-node
+   verification" below). Not covered: reorgs and public-network latency.
+4. Completed: the `fourk2` mode (`app/src/shared/modes/fourk2/`), the share-code
+   mode byte 2 and match.json keys, successor discovery for readiness and
+   commits, the per-door lock-time/sequence gates, and the rebuilt `wasm/pkg`.
+   The legacy `fourk` mode stays registered for its stored matches and is no
+   longer offered for new games.
+5. Completed: the Ready button and lobby statuses, the shared pick countdown
+   (`ClockSpec`: UTXO age until the first pick, the absolute cutoff after it),
+   lateness read off the acceptance stamp, and the stalled-round splits as
+   autopilot duties. Readiness is never automatic.
+
+## App integration
+
+- **Acceptance stamp.** `Match.acceptedDaa` records the DAA score the chain
+  accepted the current `txid` at, set only where the UTXO was observed alive
+  (`engine.withEntry`) and dropped whenever `txid` changes without an
+  observation. It is stored, never shared: a link recipient observes the UTXO
+  itself. A fourk2 commit successor needs the spent output's score; a client
+  that never saw that output alive reads it from the virtual chain
+  (`engine.acceptedDaaOf`, `getVirtualChainFromBlock` + `getBlock`) starting
+  at its persisted checkpoint, which predates the output because checkpoints
+  are saved while the predecessor is current. Adoption declines rather than
+  guessing when neither source has it.
+- **Every V2 transition reads the input's score.** Commits and reveals refuse
+  an unaccepted parent, so the client waits for acceptance instead of
+  chaining on mempool outputs. Each action fetches the entry first, derives
+  the successor from its score with the reference rules, and hands the same
+  entry to the builder.
+- **Gates per door** are computed from the state plus that score and checked
+  against the reference before anything is built: a lone timely commit's
+  claim locks at `max(D, S1 + G)`; a late second commit needs no gate; reveal
+  states, pending wins and the full-board draw carry the reveal grace as
+  sequence; the no-picks split locks at `S + T`; the cap settlement carries
+  whichever of these applies on top of the deadline and pays a decided
+  timeout winner in full.
+- **Reveal grace R = T.** A shorter grace would forfeit a player who
+  committed early and stepped away in a long-clock game (both reveals are
+  owed the moment the second pick lands). One constant in
+  `fourk2Engine.genesisFields`; the protocol allows any `600 <= R <= T`.
+- **Clock copy.** The countdown is an estimate of the chain score; the status
+  says a pick counts once the network confirms it. Readying up restarts the
+  guest's cancel countdown (a fresh UTXO), and the tooltip says so.
+
+## Live-node verification
+
+`SIMNET_E2E=1 VITE_NETWORK_ID=simnet npx vitest run app/e2e/simul-v2-live.test.ts`
+with `localnet/run-node.sh` and `mine.mjs 0` running. Six tests, each with
+fresh keys funded from the miner-paid faucet key:
+
+- A full game through readiness, five rounds, `claim_win` and the sweep, with
+  the first cutoff checked as exactly the round-start acceptance plus T and
+  the second cutoff as `max(D, S1 + G)`.
+- A second pick accepted past the cutoff and the grace: both reveals refused,
+  the late player's claim and the split refused, the first committer paid.
+- A first pick accepted past the window: the timeout claim refused, the split
+  paid; and a round nobody picks in, split after the window.
+- The rebase grace with T = 1200: the first pick five seconds before the
+  cutoff, the second rebuilt after the cutoff but inside the grace, revealed
+  and resolved; the first committer's claim refused.
+- Readiness gates: no double ready, no dissolve after both are ready, a host
+  kick of a half-ready lobby refunded.
+- Divergent clients: a host that never saw the round-start output alive
+  re-derives the joiner's commit from the virtual chain, and declines when
+  its checkpoint is too late.
+
+Result on 2026-09-19 against the local simnet node: 6 of 6 pass. The
+submit-to-acceptance latency over 21 transitions was 1-2 DAA (one or two
+blocks), which says nothing about a public network: a single local node has
+no propagation delay, and the rebase grace of 100 DAA cannot be judged from
+it. Measuring that latency on testnet is the remaining timing gate. The two
+lock-time-gated doors (the one-commit claim and the no-picks split) are
+refused by the mempool as "not finalized" until the chain passes the lock,
+which the actions now check first so the UI gets minutes instead of a node
+error.
+
+The browser suites drive the readiness step in the real UI: the two-browser
+Fourk game, the lobby exits, the layout checks and the settlement flow
+(readiness, four rounds, `claim_win`, the sweep) pass on the local simnet.
 
 ## Acceptance tests before rollout
 
