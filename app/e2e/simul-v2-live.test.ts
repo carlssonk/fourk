@@ -3,9 +3,11 @@
  * simnet node (localnet/run-node.sh + mine.mjs), driving the app's real
  * transaction engine for both players from one process. This is the
  * acceptance-timing and transaction-race verification the design doc lists
- * as a rollout gate: picks are timely by their acceptance score, a late
- * second pick pays the first committer, a late first pick draws, the rebase
- * grace holds, readiness closes the lobby, and a stale client re-derives an
+ * as a rollout gate: picks are timely by their acceptance score, the first
+ * pick of a game starts the other player's window and a stalled first round
+ * is refunded rather than forfeited, a late second pick in a later round
+ * pays the first committer, a late first pick draws, the rebase grace holds,
+ * the lobby exits close at the first pick, and a stale client re-derives an
  * opponent's commit from the virtual chain when it never saw the spent
  * output alive.
  *
@@ -46,7 +48,6 @@ import {
   claimTimeoutMatch,
   claimWinMatch,
   commitMatch,
-  readyMatch,
   revealMatch,
   splitTimeoutMatch,
   sweepWinMatch,
@@ -195,59 +196,76 @@ async function openAndJoin(
   expect(core(m).revealTimeout).toBe(moveTimeout);
   m = await cov.joinMatch(rpc, p2, m);
   expect(m.value).toBe(2n * KAS);
-  expect(core(m).readyMask).toBe(0);
+  expect(core(m).pickDeadline).toBe(0);
+  expect(core(m).firstCommitter).toBe(0);
   return m;
 }
 
-async function bothReady(rpc: cov.Rpc, p1: kaspa.PrivateKey, p2: kaspa.PrivateKey, m: Match) {
-  m = await as1(() => readyMatch(rpc, p1, m));
-  expect(core(m).readyMask).toBe(1);
-  m = await as2(() => timed(rpc, () => readyMatch(rpc, p2, m)));
-  expect(core(m).readyMask).toBe(3);
-  // The round-start output's acceptance anchors the first shared cutoff.
-  expect(m.acceptedDaa).toBeDefined();
-  return m;
+/** The first round played through from the joined lobby: p1's pick starts
+ * p2's window (measured from p1's pick, exactly), both reveal, and the
+ * resolve output — the second round's start — comes back stamped. */
+async function playFirstRound(
+  rpc: cov.Rpc,
+  p1: kaspa.PrivateKey,
+  p2: kaspa.PrivateKey,
+  m: Match,
+  colP1: number,
+  colP2: number,
+) {
+  const one = await as1(() => timed(rpc, () => commitMatch(rpc, p1, m, colP1)));
+  expect(core(one).pickDeadline).toBe(0);
+  expect(core(one).firstCommitter).toBe(1);
+  expect(one.acceptedDaa).toBeDefined();
+  const two = await as2(() => timed(rpc, () => commitMatch(rpc, p2, one, colP2)));
+  expect(core(two).pickDeadline).toBe(one.acceptedDaa! + m.state.moveTimeout);
+  expect(phase(two)).toBe("reveal");
+  const shown = await as1(() => timed(rpc, () => revealMatch(rpc, p1, two)));
+  expect(phase(shown)).toBe("resolve");
+  expect(core(shown).pickDeadline).toBe(0);
+  const next = await as2(() => timed(rpc, () => revealMatch(rpc, p2, shown)));
+  expect(core(next).round).toBe(1);
+  expect(next.acceptedDaa).toBeDefined();
+  return next;
 }
 
 (LIVE ? describe : describe.skip)("fourk V2 on a live simnet chain", () => {
-  test("a full V2 game: readiness, shared cutoffs, rounds, claim_win, sweep", async () => {
+  test("a full V2 game: the first pick starts it, shared cutoffs, rounds, claim_win, sweep", async () => {
     const { rpc, p1, p2 } = await setup();
     let m = await openAndJoin(rpc, p1, p2, 600);
-
-    // Nothing can be picked before both are ready; the reference refuses
-    // exactly where the covenant would.
-    await expect(as1(() => commitMatch(rpc, p1, m, 3))).rejects.toThrow(/ready/);
-    m = await bothReady(rpc, p1, p2, m);
     const decoded = decodeShareCode(encodeShareCode(m));
     expect(decoded.mode).toBe("fourk2");
     expect(decoded.simul).toEqual(core(m));
-
-    // Round 0: a collision. The first commit's cutoff is the round-start
-    // output's acceptance plus the picking window — exactly.
-    const start = m.acceptedDaa!;
-    m = await as1(() => timed(rpc, () => commitMatch(rpc, p1, m, 3)));
-    expect(core(m).pickDeadline).toBe(start + 600);
-    expect(core(m).firstCommitter).toBe(1);
-    expect(cov.isActionable(m, cov.walletPubkey(p1))).toBe(false);
+    // Both players may pick straight from the lobby.
+    expect(cov.isActionable(m, cov.walletPubkey(p1))).toBe(true);
     expect(cov.isActionable(m, cov.walletPubkey(p2))).toBe(true);
+
+    // Round 0: a collision; the first pick closes the lobby.
+    m = await playFirstRound(rpc, p1, p2, m, 3, 3);
+    expect(m.state.board[cellIndex(3, 0)]).toBe(1);
+    expect(m.state.board[cellIndex(3, 1)]).toBe(2);
+
+    // Round 1: the first commit's cutoff is the round-start output's
+    // acceptance plus the picking window — exactly.
+    const start = m.acceptedDaa!;
+    m = await as2(() => timed(rpc, () => commitMatch(rpc, p2, m, 0)));
+    expect(core(m).pickDeadline).toBe(start + 600);
+    expect(core(m).firstCommitter).toBe(2);
+    expect(cov.isActionable(m, cov.walletPubkey(p2))).toBe(false);
+    expect(cov.isActionable(m, cov.walletPubkey(p1))).toBe(true);
     const firstAccepted = m.acceptedDaa!;
-    m = await as2(() => timed(rpc, () => commitMatch(rpc, p2, m, 3)));
+    m = await as1(() => timed(rpc, () => commitMatch(rpc, p1, m, 4)));
     // The second commit stores the graced cutoff, unchanged here because
     // the first commit landed well inside the window.
     expect(core(m).pickDeadline).toBe(Math.max(start + 600, firstAccepted + REBASE_GRACE_DAA));
     expect(phase(m)).toBe("reveal");
-    m = await as1(() => timed(rpc, () => revealMatch(rpc, p1, m)));
-    expect(phase(m)).toBe("resolve");
-    expect(core(m).pickDeadline).toBe(0);
     m = await as2(() => timed(rpc, () => revealMatch(rpc, p2, m)));
-    expect(core(m).round).toBe(1);
-    expect(m.state.board[cellIndex(3, 0)]).toBe(1);
-    expect(m.state.board[cellIndex(3, 1)]).toBe(2);
+    expect(core(m).pickDeadline).toBe(0);
+    m = await as1(() => timed(rpc, () => revealMatch(rpc, p1, m)));
+    expect(core(m).round).toBe(2);
 
-    // Rounds 1-4: p1 lays row 0 across 4,5,6 (with (3,0) already theirs);
-    // p2 stacks column 0 — either commit order works.
+    // Rounds 2-4: p1 lays row 0 across 5,6 then 2 (with (3,0),(4,0) already
+    // theirs); p2 stacks column 0 — either commit order works.
     for (const [colP1, colP2] of [
-      [4, 0],
       [5, 0],
       [6, 0],
       [2, 1],
@@ -278,23 +296,50 @@ async function bothReady(rpc: cov.Rpc, p1: kaspa.PrivateKey, p2: kaspa.PrivateKe
     if (process.env.V2_LATENCY_OUT) fs.writeFileSync(process.env.V2_LATENCY_OUT, report + "\n");
   }, 600_000);
 
-  test("a second pick accepted after the cutoff cannot reveal; the first committer claims", async () => {
+  test("a second pick accepted after the cutoff: refunded in the first round, the first committer's win later", async () => {
     const { rpc, p1, p2 } = await setup();
+    // The first round: p1 picks, p2's window runs from that pick and p2
+    // misses it. The commit is accepted (its own transaction cannot know it
+    // is late), nobody can reveal on it, and nobody can claim: the game is
+    // called off and both stakes come back.
     let m = await openAndJoin(rpc, p1, p2, 600);
-    m = await bothReady(rpc, p1, p2, m);
+    const lone = await as1(() => commitMatch(rpc, p1, m, 0));
+    await expect(as1(() => claimTimeoutMatch(rpc, p1, lone))).rejects.toThrow(/first round/);
+    await untilDaa(rpc, lone.acceptedDaa! + 600 + 20);
+    const lateFirst = await as2(() => commitMatch(rpc, p2, lone, 1));
+    expect(phase(lateFirst)).toBe("reveal");
+    expect(lateFirst.acceptedDaa!).toBeGreaterThan(core(lateFirst).pickDeadline);
+    await expect(as2(() => revealMatch(rpc, p2, lateFirst))).rejects.toThrow(/late/);
+    await expect(as1(() => revealMatch(rpc, p1, lateFirst))).rejects.toThrow(/late/);
+    await expect(as1(() => claimTimeoutMatch(rpc, p1, lateFirst))).rejects.toThrow(/first round/);
+    await expect(as2(() => claimTimeoutMatch(rpc, p2, lateFirst))).rejects.toThrow();
+    const view = fourk2Mode.view(lateFirst, {
+      myPk: cov.walletPubkey(p1),
+      role: "p1",
+      clockExpired: false,
+      busy: false,
+      pendingCol: null,
+      result: null,
+    });
+    expect(view.canClaimTimeout).toBe(false);
+    expect(view.status.segments[1]!.text).toMatch(/called off/);
+    const p2Before = await cov.walletBalance(rpc, cov.walletAddress(p2));
+    await splitTimeoutMatch(rpc, p2, lateFirst);
+    await waitGone(rpc, lateFirst);
+    expectPinnedHalf(await balanceAbove(rpc, p2, p2Before), p2Before);
+
+    // From the second round on the same lateness is the first committer's win.
+    m = await openAndJoin(rpc, p1, p2, 600);
+    m = await playFirstRound(rpc, p1, p2, m, 3, 4);
     const one = await as1(() => commitMatch(rpc, p1, m, 0));
     const cutoff = core(one).pickDeadline;
+    expect(cutoff).toBe(m.acceptedDaa! + 600);
     // Too early: the claim's lock time is the cutoff (or the rebase grace).
     await expect(as1(() => claimTimeoutMatch(rpc, p1, one))).rejects.toThrow(/not reached/);
-
-    // p2 waits past the cutoff AND past the rebase grace, then commits. The
-    // commit is accepted (its own transaction cannot know it is late)...
     await untilDaa(rpc, Math.max(cutoff, one.acceptedDaa! + REBASE_GRACE_DAA) + 20);
     const two = await as2(() => commitMatch(rpc, p2, one, 1));
     expect(phase(two)).toBe("reveal");
     expect(two.acceptedDaa!).toBeGreaterThan(core(two).pickDeadline);
-
-    // ...but nobody can reveal on it, and only the first committer claims.
     await expect(as2(() => revealMatch(rpc, p2, two))).rejects.toThrow(/late/);
     await expect(as1(() => revealMatch(rpc, p1, two))).rejects.toThrow(/late/);
     await expect(as2(() => claimTimeoutMatch(rpc, p2, two))).rejects.toThrow();
@@ -315,12 +360,12 @@ async function bothReady(rpc: cov.Rpc, p1: kaspa.PrivateKey, p2: kaspa.PrivateKe
         result: null,
       }).canClaimTimeout,
     ).toBe(true);
-  }, 600_000);
+  }, 900_000);
 
   test("a first pick accepted after the cutoff draws; no picks at all split after the window", async () => {
     const { rpc, p1, p2 } = await setup();
     let m = await openAndJoin(rpc, p1, p2, 600);
-    m = await bothReady(rpc, p1, p2, m);
+    m = await playFirstRound(rpc, p1, p2, m, 3, 4);
     // Before the window ends nobody can split.
     await expect(splitTimeoutMatch(rpc, p2, m)).rejects.toThrow(/not reached/);
     await untilDaa(rpc, m.acceptedDaa! + 600 + 20);
@@ -337,7 +382,7 @@ async function bothReady(rpc: cov.Rpc, p1: kaspa.PrivateKey, p2: kaspa.PrivateKe
 
     // And a round nobody picks in: the split waits for the window, then pays.
     let n = await openAndJoin(rpc, p1, p2, 600);
-    n = await bothReady(rpc, p1, p2, n);
+    n = await playFirstRound(rpc, p1, p2, n, 3, 4);
     await untilDaa(rpc, n.acceptedDaa! + 600 + 20);
     const p1Before = await cov.walletBalance(rpc, cov.walletAddress(p1));
     await splitTimeoutMatch(rpc, p1, n);
@@ -348,7 +393,7 @@ async function bothReady(rpc: cov.Rpc, p1: kaspa.PrivateKey, p2: kaspa.PrivateKe
   test("rebase grace: a second pick rebuilt after a last-moment first pick still counts", async () => {
     const { rpc, p1, p2 } = await setup();
     let m = await openAndJoin(rpc, p1, p2, 1200);
-    m = await bothReady(rpc, p1, p2, m);
+    m = await playFirstRound(rpc, p1, p2, m, 3, 4);
     const start = m.acceptedDaa!;
     const cutoff = start + 1200;
     // p1 picks with ~5 s of the window left.
@@ -368,31 +413,41 @@ async function bothReady(rpc: cov.Rpc, p1: kaspa.PrivateKey, p2: kaspa.PrivateKe
     let next = await as2(() => revealMatch(rpc, p2, two));
     expect(phase(next)).toBe("resolve");
     next = await as1(() => revealMatch(rpc, p1, next));
-    expect(core(next).round).toBe(1);
+    expect(core(next).round).toBe(2);
     expect(next.state.board[cellIndex(0, 0)]).toBe(1);
     expect(next.state.board[cellIndex(1, 0)]).toBe(2);
   }, 900_000);
 
-  test("readiness gates: no double ready, no lobby exit after both ready, host kicks before", async () => {
+  test("lobby exits close at the first pick; an unanswered first pick is refunded, never forfeited", async () => {
     const { rpc, p1, p2 } = await setup();
+    // The host can kick a joined lobby; the seat is refunded.
     let m = await openAndJoin(rpc, p1, p2, 600);
-    m = await as2(() => readyMatch(rpc, p2, m));
-    expect(core(m).readyMask).toBe(2);
-    await expect(as2(() => readyMatch(rpc, p2, m))).rejects.toThrow(/already/);
-    // The host can still kick a half-ready lobby; the seat is refunded.
     const p2Before = await cov.walletBalance(rpc, cov.walletAddress(p2));
     await cov.dissolveMatch(rpc, p1, m);
     await waitGone(rpc, m);
     expectPinnedHalf(await balanceAbove(rpc, p2, p2Before), p2Before);
 
-    let n = await openAndJoin(rpc, p1, p2, 600);
-    n = await bothReady(rpc, p1, p2, n);
-    await expect(cov.dissolveMatch(rpc, p1, n)).rejects.toThrow();
-    await expect(cov.dissolveMatch(rpc, p2, n)).rejects.toThrow();
-    // Cleanup so the pot does not linger: the no-picks split after the window.
-    await untilDaa(rpc, n.acceptedDaa! + 600 + 20);
-    await splitTimeoutMatch(rpc, p1, n);
-    await waitGone(rpc, n);
+    // The joiner's first pick closes the lobby: neither exit works any more,
+    // and neither does a claim — the pick's own window runs, then the split.
+    const n = await openAndJoin(rpc, p1, p2, 600);
+    const lone = await as2(() => commitMatch(rpc, p2, n, 0));
+    expect(core(lone).pickDeadline).toBe(0);
+    expect(core(lone).firstCommitter).toBe(2);
+    await expect(cov.dissolveMatch(rpc, p1, lone)).rejects.toThrow();
+    await expect(cov.dissolveMatch(rpc, p2, lone)).rejects.toThrow();
+    await expect(as2(() => claimTimeoutMatch(rpc, p2, lone))).rejects.toThrow(/first round/);
+    await expect(splitTimeoutMatch(rpc, p1, lone)).rejects.toThrow(/not reached/);
+    // The seat clock the host would see: the pick's acceptance plus the window.
+    expect(fourk2Mode.clock(lone)).toEqual({
+      kind: "absolute",
+      daa: lone.acceptedDaa! + 600,
+    });
+    await untilDaa(rpc, lone.acceptedDaa! + 600 + 20);
+    await expect(as2(() => claimTimeoutMatch(rpc, p2, lone))).rejects.toThrow(/first round/);
+    const p1Before = await cov.walletBalance(rpc, cov.walletAddress(p1));
+    await splitTimeoutMatch(rpc, p1, lone);
+    await waitGone(rpc, lone);
+    expectPinnedHalf(await balanceAbove(rpc, p1, p1Before), p1Before);
   }, 900_000);
 
   test("divergent clients: a stale host re-derives the joiner's commit from the virtual chain", async () => {
@@ -406,48 +461,34 @@ async function bothReady(rpc: cov.Rpc, p1: kaspa.PrivateKey, p2: kaspa.PrivateKe
     expect((await cov.syncMatch(rpc, A)).status).toBe("terminated");
     A = (await cov.discoverAdvance(rpc, A, cp0))!;
     expect(A).not.toBeNull();
-    expect(core(A).readyMask).toBe(0);
+    expect(core(A).firstCommitter).toBe(0);
 
-    // Readiness is enumerable: each side follows the other by sync alone.
-    A = await as1(() => readyMatch(rpc, p1, A));
-    B = (await cov.syncMatch(rpc, B)).match;
-    expect(core(B).readyMask).toBe(1);
-    // The checkpoint the host's watcher would hold while the one-ready
-    // output was current — it predates the round-start output.
-    const cpBeforeStart = await cov.chainCheckpoint(rpc);
-    B = await as2(() => readyMatch(rpc, p2, B));
-    const synced = await cov.syncMatch(rpc, A);
-    expect(synced.status).toBe("advanced");
-    A = synced.match;
-    expect(core(A).readyMask).toBe(3);
-    expect(A.acceptedDaa).toBeDefined();
-
-    // The joiner commits. The host never saw the round-start output alive
+    // The joiner picks first. The host never saw the join output alive
     // (drop the stamp to model it), so re-deriving the commit successor
-    // needs the acceptance score off the virtual chain.
+    // needs that output's acceptance score off the virtual chain — the
+    // first pick stores no cutoff, but the covenant still reads the score
+    // for the cap check, and the successor must match to the byte.
     const stale = engine.withoutEntry(A);
     B = await as2(() => commitMatch(rpc, p2, B, 4));
+    expect(core(B).pickDeadline).toBe(0);
     expect((await cov.syncMatch(rpc, stale)).status).toBe("terminated");
-    const adopted = await cov.discoverAdvance(rpc, stale, cpBeforeStart);
+    const adopted = await cov.discoverAdvance(rpc, stale, cp0);
     expect(adopted).not.toBeNull();
     expect(core(adopted!)).toEqual(core(B));
     expect(adopted!.txid).toBe(B.txid);
     // Without a checkpoint that predates the spent output, adoption cannot
-    // manufacture a cutoff — it declines rather than guessing.
+    // manufacture the score — it declines rather than guessing.
     const cpAfter = await cov.chainCheckpoint(rpc);
     expect(
-      await cov.adoptSpend(
-        rpc,
-        stale,
-        (await cov.discoverSpend(rpc, stale, cpBeforeStart))!,
-        cpAfter,
-      ),
+      await cov.adoptSpend(rpc, stale, (await cov.discoverSpend(rpc, stale, cp0))!, cpAfter),
     ).toBeNull();
     A = adopted!;
 
-    // The host commits; the joiner (stale, stamped) follows the same way.
+    // The host answers; the joiner (stale, stamped) follows the same way,
+    // and the stored cutoff is the joiner's pick plus the window.
     const cpB = await cov.chainCheckpoint(rpc);
     A = await as1(() => commitMatch(rpc, p1, A, 1));
+    expect(core(A).pickDeadline).toBe(B.acceptedDaa! + 600);
     expect((await cov.syncMatch(rpc, B)).status).toBe("terminated");
     const advancedB = await cov.discoverAdvance(rpc, B, cpB);
     expect(advancedB).not.toBeNull();
