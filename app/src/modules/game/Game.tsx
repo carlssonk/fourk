@@ -342,36 +342,6 @@ export const Game = ({ match }: Props) => {
     });
   };
 
-  // Fourk V2: both players sign readiness before the first timed round.
-  const readyUp = () =>
-    runAction(async () => {
-      const key = seatKey();
-      const rpc = await getRpc();
-      const ready = mode.actions.ready;
-      if (!ready) return;
-      try {
-        updateMatch(await ready(rpc, key, match));
-      } catch (e) {
-        // The opponent's readiness (or exit) may have crossed ours: adopt the
-        // fresh state and, if our readiness is still owed there, sign it again.
-        const { status, match: next } = await cov.syncMatch(rpc, match);
-        if (status === "terminated") return;
-        if (status !== "advanced") throw e;
-        updateMatch(next);
-        if (
-          mode.view(next, {
-            myPk,
-            role,
-            clockExpired: false,
-            busy: false,
-            pendingCol: null,
-            result: null,
-          }).canReady
-        )
-          updateMatch(await ready(rpc, key, next));
-      }
-    });
-
   const link = inviteLink(match);
   const shown = view.board.shownState;
 
@@ -604,16 +574,6 @@ export const Game = ({ match }: Props) => {
             Claim timeout win
           </button>
         )}
-        {view.canReady && (
-          <button
-            className="btn"
-            disabled={busy}
-            title="Once both players are ready, the first round starts and the lobby closes."
-            onClick={readyUp}
-          >
-            Ready
-          </button>
-        )}
         {inLobby && iAmPlayer && (
           <button
             className="btn btn-danger"
@@ -622,7 +582,7 @@ export const Game = ({ match }: Props) => {
               role === "p1"
                 ? "Before play starts, you can remove your opponent and get a fresh game with a new invite link."
                 : withdrawGated
-                  ? "You can cancel once the lobby timer ends. Readying up restarts it."
+                  ? "You can cancel once the lobby timer ends."
                   : undefined
             }
             onClick={() => void dissolveGame()}

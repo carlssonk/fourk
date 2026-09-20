@@ -980,9 +980,10 @@ state SimulV2MatchState {
     int pending_win;
     int move_timeout;
     int deadline;
-    // Monotonic readiness bits: 1 = p1, 2 = p2, 3 = timed play started.
-    int ready_mask;
-    // Derived from the confirmed round-start output; preserved across commits.
+    // The shared picking cutoff, derived from the confirmed round-start
+    // output and preserved across commits. Zero under a lone first-round
+    // commit: that round has no round-start output before the first pick,
+    // so the second commit anchors on the first commit's own acceptance.
     int pick_deadline;
     // Keeps timeout ownership unambiguous if the second commit arrives late.
     int first_committer;
@@ -1024,7 +1025,6 @@ actor FourkSimulV2Lobby owns SimulV2LobbyState {
             pending_win: 0,
             move_timeout: move_timeout,
             deadline: deadline,
-            ready_mask: 0,
             pick_deadline: 0,
             first_committer: 0,
             reveal_timeout: reveal_timeout,
@@ -1053,13 +1053,17 @@ fn v2CommitCount(byte[32] c1, byte[32] c2) -> int {
     return count;
 }
 
-fn v2TimeoutOwner(byte[32] c1, byte[32] c2, int r1, int r2, int first, int cutoff, int grace) -> int {
+fn v2TimeoutOwner(byte[32] c1, byte[32] c2, int r1, int r2, int first, int cutoff, int grace, int round) -> int {
     int owner = first;
     if (r1 != 0 || r2 != 0) {
         require(this.ageDaa >= grace);
         owner = 1;
         if (r2 != 0) { owner = 2; }
     } else {
+        // The first round never forfeits a pick: nobody has proven presence
+        // before their first commit, so a missing or late second pick there
+        // refunds both (split_timeout) instead of paying the first committer.
+        require(round > 0);
         int accepted = v2AcceptedScore();
         int count = v2CommitCount(c1, c2);
         if (count == 1) {
@@ -1081,7 +1085,6 @@ actor FourkSimulV2 owns SimulV2MatchState {
     entry dissolve(sig s, pubkey pk) emits none {
         // Unreachable in honest play (a line needs rounds), but a directly-
         // created covenant UTXO could carry it — belt and braces.
-        require(ready_mask != 3);
         require(pending_win == 0);
         require(round == 0);
         require(commit1 == zero32() && commit2 == zero32());
@@ -1107,7 +1110,6 @@ actor FourkSimulV2 owns SimulV2MatchState {
     }
 
     entry claim_win(sig s, int wcol, int wrow, int wdir) emits pending: FourkSimulV2 {
-        require(ready_mask == 3);
         require(pending_win == 0);
         require(wcol >= 0 && wcol < COLS && wrow >= 0 && wrow < ROWS);
         int disc_num = signed(board[wcol * ROWS + wrow]);
@@ -1151,7 +1153,6 @@ actor FourkSimulV2 owns SimulV2MatchState {
             pending_win: disc_num,
             move_timeout: move_timeout,
             deadline: deadline,
-            ready_mask: ready_mask,
             pick_deadline: 0,
             first_committer: 0,
             reveal_timeout: reveal_timeout,
@@ -1273,33 +1274,48 @@ actor FourkSimulV2 owns SimulV2MatchState {
             require(this.ageDaa >= reveal_timeout);
         } else {
             if (reveal1 != 0 || reveal2 != 0) {
-                owner = v2TimeoutOwner(commit1, commit2, reveal1, reveal2, first_committer, pick_deadline, reveal_timeout);
+                owner = v2TimeoutOwner(commit1, commit2, reveal1, reveal2, first_committer, pick_deadline, reveal_timeout, round);
             } else {
                 int count = v2CommitCount(commit1, commit2);
-                if (count == 1) {
-                    int accepted = v2AcceptedScore();
-                    if (accepted <= pick_deadline) {
-                        owner = v2TimeoutOwner(commit1, commit2, reveal1, reveal2, first_committer, pick_deadline, reveal_timeout);
+                if (count == 0) {
+                    // Nobody has picked: wait out the same window
+                    // split_timeout does, so the cap never shortens a
+                    // live picking round or the lobby clock.
+                    if (round == 0) {
+                        require(this.ageDaa >= move_timeout);
+                    } else {
+                        int accepted = v2AcceptedScore();
+                        int cutoff = accepted + move_timeout;
+                        require(cutoff < DEADLINE_LIMIT);
+                        require(tx.daa >= cutoff);
                     }
                 } else {
-                    if (count == 2) {
-                        int accepted = v2AcceptedScore();
-                        if (accepted > pick_deadline) {
-                            owner = v2TimeoutOwner(commit1, commit2, reveal1, reveal2, first_committer, pick_deadline, reveal_timeout);
-                        } else {
-                            require(this.ageDaa >= reveal_timeout);
-                        }
-                    } else {
-                        // Nobody has picked: wait out the same window
-                        // split_timeout does, so the cap never shortens a
-                        // live picking round or the lobby clock.
-                        if (ready_mask != 3) {
-                            require(this.ageDaa >= move_timeout);
-                        } else {
-                            int accepted = v2AcceptedScore();
+                    int accepted = v2AcceptedScore();
+                    if (round == 0) {
+                        // The first round never forfeits (see v2TimeoutOwner):
+                        // the split waits out the second pick's window after
+                        // the lone first commit, or the reveal grace once two
+                        // timely picks are in; a late second pick splits now.
+                        if (count == 1) {
                             int cutoff = accepted + move_timeout;
                             require(cutoff < DEADLINE_LIMIT);
                             require(tx.daa >= cutoff);
+                        } else {
+                            if (accepted <= pick_deadline) {
+                                require(this.ageDaa >= reveal_timeout);
+                            }
+                        }
+                    } else {
+                        if (count == 1) {
+                            if (accepted <= pick_deadline) {
+                                owner = v2TimeoutOwner(commit1, commit2, reveal1, reveal2, first_committer, pick_deadline, reveal_timeout, round);
+                            }
+                        } else {
+                            if (accepted > pick_deadline) {
+                                owner = v2TimeoutOwner(commit1, commit2, reveal1, reveal2, first_committer, pick_deadline, reveal_timeout, round);
+                            } else {
+                                require(this.ageDaa >= reveal_timeout);
+                            }
                         }
                     }
                 }
@@ -1326,21 +1342,26 @@ actor FourkSimulV2 owns SimulV2MatchState {
         }
     }
 
-    // A late second commit preserves the first committer's win immediately.
+    // A late second commit preserves the first committer's win immediately
+    // (from the second round on; the first round refunds instead).
     entry claim_timeout(sig s) emits none {
-        require(ready_mask == 3 && pending_win == 0);
+        require(pending_win == 0);
         int full = 1;
         for (c, 0, COLS, COLS) {
             if (signed(board[c * ROWS + ROWS - 1]) == 0) { full = 0; }
         }
         require(full == 0);
-        int owner = v2TimeoutOwner(commit1, commit2, reveal1, reveal2, first_committer, pick_deadline, reveal_timeout);
+        int owner = v2TimeoutOwner(commit1, commit2, reveal1, reveal2, first_committer, pick_deadline, reveal_timeout, round);
         pubkey claimant = p1;
         if (owner == 2) { claimant = p2; }
         require(checkSig(s, claimant));
     }
 
-    // No timely picks draw; a single timely pick can never use this door.
+    // No timely picks draw; from the second round on a single timely pick
+    // can never use this door. The first round is the exception: it never
+    // forfeits, so a lone first commit splits once the second pick's window
+    // (its acceptance plus the picking window) has passed, and a late
+    // second pick splits at once.
     entry split_timeout() emits none {
         require(pending_win == 0);
         int full = 1;
@@ -1349,21 +1370,31 @@ actor FourkSimulV2 owns SimulV2MatchState {
         }
         require(full == 0);
         require(reveal1 == 0 && reveal2 == 0);
-        if (ready_mask != 3) {
-            require(this.ageDaa >= move_timeout);
-        } else {
-            int accepted = v2AcceptedScore();
-            int count = v2CommitCount(commit1, commit2);
-            if (count == 0) {
+        int count = v2CommitCount(commit1, commit2);
+        if (count == 0) {
+            if (round == 0) {
+                require(this.ageDaa >= move_timeout);
+            } else {
+                int accepted = v2AcceptedScore();
                 int cutoff = accepted + move_timeout;
                 require(cutoff < DEADLINE_LIMIT);
                 require(tx.daa >= cutoff);
-            } else {
-                if (count == 1) {
-                    require(accepted > pick_deadline);
+            }
+        } else {
+            int accepted = v2AcceptedScore();
+            if (count == 1) {
+                if (round == 0) {
+                    int cutoff = accepted + move_timeout;
+                    require(cutoff < DEADLINE_LIMIT);
+                    require(tx.daa >= cutoff);
                 } else {
-                    require(accepted <= pick_deadline);
+                    require(accepted > pick_deadline);
+                }
+            } else {
+                if (accepted <= pick_deadline) {
                     require(this.ageDaa >= reveal_timeout);
+                } else {
+                    require(round == 0);
                 }
             }
         }
@@ -1379,7 +1410,6 @@ actor FourkSimulV2 owns SimulV2MatchState {
     }
 
     entry reveal(sig s, pubkey pk, int col, byte[32] salt) emits next: FourkSimulV2 {
-        require(ready_mask == 3);
         int accepted = OpTxInputDaaScore(this.activeInputIndex);
         require(accepted >= 0 && accepted < DEADLINE_LIMIT);
         require(accepted <= pick_deadline);
@@ -1432,7 +1462,6 @@ actor FourkSimulV2 owns SimulV2MatchState {
             pending_win: 0,
             move_timeout: move_timeout,
             deadline: deadline,
-            ready_mask: ready_mask,
             pick_deadline: 0,
             first_committer: 0,
             reveal_timeout: reveal_timeout,
@@ -1444,7 +1473,6 @@ actor FourkSimulV2 owns SimulV2MatchState {
     }
 
     entry resolve(sig s, pubkey pk, int col, byte[32] salt) emits next: FourkSimulV2 {
-        require(ready_mask == 3);
         require(pending_win == 0);
         require(pk == p1 || pk == p2);
 
@@ -1531,7 +1559,6 @@ actor FourkSimulV2 owns SimulV2MatchState {
             pending_win: 0,
             move_timeout: move_timeout,
             deadline: deadline,
-            ready_mask: ready_mask,
             pick_deadline: 0,
             first_committer: 0,
             reveal_timeout: reveal_timeout,
@@ -1543,19 +1570,29 @@ actor FourkSimulV2 owns SimulV2MatchState {
     }
 
     entry commit(sig s, pubkey pk, byte[32] h) emits next: FourkSimulV2 {
-        require(ready_mask == 3);
         int accepted = OpTxInputDaaScore(this.activeInputIndex);
         require(accepted >= 0 && accepted < DEADLINE_LIMIT);
         int next_deadline = pick_deadline;
         int next_first = first_committer;
         if (commit1 == zero32() && commit2 == zero32()) {
             require(accepted < deadline);
-            next_deadline = accepted + move_timeout;
-            require(next_deadline < DEADLINE_LIMIT);
+            if (round == 0) {
+                // The first round starts with the first pick, not with a
+                // round-start output: the opponent's window is measured from
+                // this commit's own acceptance, which the second commit reads.
+                next_deadline = 0;
+            } else {
+                next_deadline = accepted + move_timeout;
+                require(next_deadline < DEADLINE_LIMIT);
+            }
             next_first = 1;
             if (pk == p2) { next_first = 2; }
         } else {
-            require(accepted <= pick_deadline);
+            if (round == 0) {
+                next_deadline = accepted + move_timeout;
+            } else {
+                require(accepted <= pick_deadline);
+            }
             // The second cutoff: the shared deadline or the rebase grace after
             // the first commit's acceptance, whichever is later. Reveal and
             // the count-2 timeout branches read this stored value.
@@ -1604,7 +1641,6 @@ actor FourkSimulV2 owns SimulV2MatchState {
             pending_win: 0,
             move_timeout: move_timeout,
             deadline: deadline,
-            ready_mask: ready_mask,
             pick_deadline: next_deadline,
             first_committer: next_first,
             reveal_timeout: reveal_timeout,
@@ -1612,43 +1648,6 @@ actor FourkSimulV2 owns SimulV2MatchState {
 
         require(next.value == self.value);
         require(checkSig(s, pk));
-        become next <- FourkSimulV2(next_match);
-    }
-
-    // Both signatures are bound to this game input. Each player may ready once.
-    entry ready(sig s, pubkey pk) emits next: FourkSimulV2 {
-        require(ready_mask >= 0 && ready_mask < 3);
-        require(round == 0 && pending_win == 0);
-        require(commit1 == zero32() && commit2 == zero32());
-        require(reveal1 == 0 && reveal2 == 0);
-        require(pk == p1 || pk == p2);
-        int next_ready = ready_mask;
-        if (pk == p1) {
-            require(ready_mask == 0 || ready_mask == 2);
-            next_ready = ready_mask + 1;
-        } else {
-            require(ready_mask == 0 || ready_mask == 1);
-            next_ready = ready_mask + 2;
-        }
-        require(checkSig(s, pk));
-        SimulV2MatchState next_match = {
-            p1: p1,
-            p2: p2,
-            board: board,
-            round: round,
-            commit1: commit1,
-            commit2: commit2,
-            reveal1: reveal1,
-            reveal2: reveal2,
-            pending_win: pending_win,
-            move_timeout: move_timeout,
-            deadline: deadline,
-            ready_mask: next_ready,
-            pick_deadline: pick_deadline,
-            first_committer: first_committer,
-            reveal_timeout: reveal_timeout,
-        };
-        require(next.value == self.value);
         become next <- FourkSimulV2(next_match);
     }
 }

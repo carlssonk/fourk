@@ -244,7 +244,6 @@ const matchJsonSchema = z.object({
   reveal2: z.number().int().min(0).max(7).optional(),
   pendingWin: z.number().int().min(0).max(2).optional(),
   // Fourk V2: readiness and the shared picking cutoff.
-  readyMask: z.number().int().min(0).max(3).optional(),
   pickDeadline: z.number().int().nonnegative().optional(),
   firstCommitter: z.number().int().min(0).max(2).optional(),
   revealTimeout: z.number().int().positive().optional(),

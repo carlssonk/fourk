@@ -63,10 +63,12 @@ const POT: u64 = 200_000_000;
 
 #[test]
 fn four_complete_rounds_reach_a_valid_double_win_without_changing_the_clock_rules() {
-    let mut current = ready_state(3);
+    let mut current = initial();
     for round in 0..4 {
         let start = 1000 + round * 5000;
-        let one = committed(&current, 1, start + 1200, 1);
+        // The first round has no round-start output: its first pick stores
+        // no cutoff and its second pick's window runs from the first pick.
+        let one = committed(&current, 1, if round == 0 { 0 } else { start + 1200 }, 1);
         ok(run(
             current.clone(),
             Some(one.clone()),
@@ -76,7 +78,16 @@ fn four_complete_rounds_reach_a_valid_double_win_without_changing_the_clock_rule
             0,
             vec![],
         ));
-        let two = committed(&one, 2, start + 1200, 1);
+        let two = committed(
+            &one,
+            2,
+            if round == 0 {
+                start + 1300
+            } else {
+                start + 1200
+            },
+            1,
+        );
         ok(run(
             one,
             Some(two.clone()),
@@ -96,7 +107,7 @@ fn four_complete_rounds_reach_a_valid_double_win_without_changing_the_clock_rule
             0,
             vec![],
         ));
-        let mut next = ready_state(3);
+        let mut next = initial();
         let mut board = vec![0u8; 42];
         for row in 0..=round as usize {
             board[row] = 1;
@@ -166,16 +177,22 @@ fn initial() -> State {
         p1: pk(1), p2: pk(2), board: vec![0u8;42], round: 0i64,
         commit1: vec![0u8;32], commit2: vec![0u8;32], reveal1: 0i64, reveal2: 0i64,
         pending_win: 0i64, move_timeout: 1200i64, deadline: 100_000i64,
-        ready_mask: 0i64, pick_deadline: 0i64, first_committer: 0i64, reveal_timeout: 600i64,
+        pick_deadline: 0i64, first_committer: 0i64, reveal_timeout: 600i64,
     }
+}
+/// The second round's start: the first round resolved one disc each into
+/// columns 0 and 1. From here every round anchors on a round-start output.
+fn started() -> State {
+    let mut s = initial();
+    let mut board = vec![0u8; 42];
+    board[0] = 1;
+    board[6] = 2;
+    s.insert("board".into(), ArtifactValue::Bytes(board));
+    number(&mut s, "round", 1);
+    s
 }
 fn number(s: &mut State, name: &str, value: i64) {
     s.insert(name.into(), ArtifactValue::Int(value));
-}
-fn ready_state(mask: i64) -> State {
-    let mut s = initial();
-    number(&mut s, "ready_mask", mask);
-    s
 }
 fn run(
     active: State,
@@ -219,9 +236,6 @@ fn run(
     execute_transaction_with_covenants(&mut tx, vec![utxo]).map_err(|e| format!("script: {e}"))?;
     Ok(tx)
 }
-fn ready(player: u8) -> EntryCall<'static> {
-    EntryCall::new("ready").args_with(move |tx, idx| args![sign(tx, idx, player), pk(player)])
-}
 fn ok(result: Result<Transaction, String>) {
     assert!(result.is_ok(), "{result:?}");
 }
@@ -230,61 +244,264 @@ fn rejected(result: Result<Transaction, String>) {
 }
 
 #[test]
-fn readiness_is_signed_monotonic_and_cannot_restart_a_game() {
-    ok(run(
-        initial(),
-        Some(ready_state(1)),
-        ready(1),
-        1000,
-        0,
-        0,
-        vec![],
-    ));
-    ok(run(
-        ready_state(1),
-        Some(ready_state(3)),
-        ready(2),
-        1100,
-        0,
-        0,
-        vec![],
-    ));
-    rejected(run(
-        ready_state(1),
-        Some(ready_state(1)),
-        ready(1),
-        1100,
-        0,
-        0,
-        vec![],
-    ));
-    rejected(run(
-        initial(),
-        Some(ready_state(3)),
-        ready(1),
-        1000,
-        0,
-        0,
-        vec![],
-    ));
-    rejected(run(
-        initial(),
-        Some(ready_state(1)),
-        ready(3),
-        1000,
-        0,
-        0,
-        vec![],
-    ));
-    rejected(run(
-        ready_state(3),
-        Some(ready_state(3)),
-        ready(1),
-        1200,
-        0,
-        0,
-        vec![],
-    ));
+fn the_first_round_starts_with_a_pick_and_refunds_instead_of_forfeiting() {
+    for first in [1u8, 2] {
+        let second = 3 - first;
+        // The first pick stores no cutoff: there is no round-start output
+        // to measure from, so the opponent's window runs from this pick.
+        let one = committed(&initial(), first, 0, first as i64);
+        ok(run(
+            initial(),
+            Some(one.clone()),
+            commit(first),
+            1000,
+            0,
+            0,
+            vec![],
+        ));
+        rejected(run(
+            initial(),
+            Some(committed(&initial(), first, 2200, first as i64)),
+            commit(first),
+            1000,
+            0,
+            0,
+            vec![],
+        ));
+        rejected(run(
+            initial(),
+            Some(one.clone()),
+            commit(first),
+            100_000,
+            0,
+            0,
+            vec![],
+        ));
+        // The second commit stores that window: its input's acceptance plus
+        // the picking duration, nothing else.
+        let two = committed(&one, second, 6200, first as i64);
+        ok(run(
+            one.clone(),
+            Some(two.clone()),
+            commit(second),
+            5000,
+            0,
+            0,
+            vec![],
+        ));
+        for forged in [6300i64, 2200, 0] {
+            rejected(run(
+                one.clone(),
+                Some(committed(&one, second, forged, first as i64)),
+                commit(second),
+                5000,
+                0,
+                0,
+                vec![],
+            ));
+        }
+        // No forfeit: the first committer's claim is refused at any score,
+        // and the permissionless split waits out the window after the pick.
+        let win = vec![(spk(first), POT)];
+        rejected(run(
+            one.clone(),
+            None,
+            timeout(first),
+            5000,
+            6200,
+            9999,
+            win.clone(),
+        ));
+        rejected(run(
+            one.clone(),
+            None,
+            timeout(first),
+            5000,
+            99_999,
+            9999,
+            win.clone(),
+        ));
+        rejected(run(
+            one.clone(),
+            None,
+            EntryCall::new("split_timeout"),
+            5000,
+            6199,
+            9999,
+            split(),
+        ));
+        ok(run(
+            one.clone(),
+            None,
+            EntryCall::new("split_timeout"),
+            5000,
+            6200,
+            0,
+            split(),
+        ));
+        // The lobby exits closed at the first pick.
+        for player in [1u8, 2] {
+            rejected(run(
+                one.clone(),
+                None,
+                dissolve(player),
+                5000,
+                0,
+                9999,
+                split(),
+            ));
+        }
+        // Two timely picks reveal up to the stored cutoff and no later.
+        ok(run(
+            two.clone(),
+            Some(revealed(&two, first)),
+            reveal_entry("reveal", first),
+            6200,
+            0,
+            0,
+            vec![],
+        ));
+        rejected(run(
+            two.clone(),
+            Some(revealed(&two, first)),
+            reveal_entry("reveal", first),
+            6201,
+            0,
+            0,
+            vec![],
+        ));
+        // A late second pick refunds at once and is never the first
+        // committer's win; timely picks nobody reveals split after the grace.
+        rejected(run(
+            two.clone(),
+            None,
+            timeout(first),
+            6201,
+            9999,
+            9999,
+            win.clone(),
+        ));
+        ok(run(
+            two.clone(),
+            None,
+            EntryCall::new("split_timeout"),
+            6201,
+            0,
+            0,
+            split(),
+        ));
+        rejected(run(
+            two.clone(),
+            None,
+            EntryCall::new("split_timeout"),
+            6200,
+            9999,
+            599,
+            split(),
+        ));
+        ok(run(
+            two.clone(),
+            None,
+            EntryCall::new("split_timeout"),
+            6200,
+            9999,
+            600,
+            split(),
+        ));
+        // The cap keeps those waits and never pays a first-round pick.
+        rejected(run(
+            one.clone(),
+            None,
+            EntryCall::new("sudden_death"),
+            99_950,
+            100_000,
+            9999,
+            split(),
+        ));
+        ok(run(
+            one.clone(),
+            None,
+            EntryCall::new("sudden_death"),
+            99_950,
+            101_150,
+            0,
+            split(),
+        ));
+        rejected(run(
+            one.clone(),
+            None,
+            EntryCall::new("sudden_death"),
+            99_950,
+            101_150,
+            0,
+            win.clone(),
+        ));
+        ok(run(
+            two.clone(),
+            None,
+            EntryCall::new("sudden_death"),
+            6201,
+            100_000,
+            0,
+            split(),
+        ));
+        rejected(run(
+            two.clone(),
+            None,
+            EntryCall::new("sudden_death"),
+            6201,
+            100_000,
+            0,
+            win.clone(),
+        ));
+        rejected(run(
+            two.clone(),
+            None,
+            EntryCall::new("sudden_death"),
+            6200,
+            100_000,
+            599,
+            split(),
+        ));
+        ok(run(
+            two.clone(),
+            None,
+            EntryCall::new("sudden_death"),
+            6200,
+            100_000,
+            600,
+            split(),
+        ));
+        // A reveal on the table is a proven obligation even in the first round.
+        let shown = revealed(&two, first);
+        rejected(run(
+            shown.clone(),
+            None,
+            timeout(first),
+            6300,
+            0,
+            599,
+            win.clone(),
+        ));
+        ok(run(
+            shown.clone(),
+            None,
+            timeout(first),
+            6300,
+            0,
+            600,
+            win.clone(),
+        ));
+        ok(run(
+            shown,
+            None,
+            EntryCall::new("sudden_death"),
+            6300,
+            100_000,
+            600,
+            win,
+        ));
+    }
 }
 
 fn hash(player: u8) -> Vec<u8> {
@@ -315,7 +532,7 @@ fn commit(player: u8) -> EntryCall<'static> {
 fn commits_use_the_confirmed_round_start_and_preserve_the_shared_deadline() {
     for first in [1u8, 2] {
         let second = 3 - first;
-        let start = ready_state(3);
+        let start = started();
         let one = committed(&start, first, 2200, first as i64);
         ok(run(
             start.clone(),
@@ -397,7 +614,6 @@ fn commits_use_the_confirmed_round_start_and_preserve_the_shared_deadline() {
         for field in [
             "pick_deadline",
             "first_committer",
-            "ready_mask",
             "move_timeout",
             "reveal_timeout",
             "deadline",
@@ -440,7 +656,7 @@ fn revealed(s: &State, player: u8) -> State {
 fn only_two_timely_picks_can_reveal_and_resolve_into_the_next_round() {
     for first in [1u8, 2] {
         let second = 3 - first;
-        let one = committed(&ready_state(3), first, 2200, first as i64);
+        let one = committed(&started(), first, 2200, first as i64);
         let two = committed(&one, second, 2200, first as i64);
         // A graced second commit reveals up to its stored cutoff and no later.
         let graced = committed(&one, second, 2300, first as i64);
@@ -491,12 +707,14 @@ fn only_two_timely_picks_can_reveal_and_resolve_into_the_next_round() {
                 0,
                 vec![],
             ));
-            let mut next = ready_state(3);
+            let mut next = started();
             let mut board = vec![0u8; 42];
             board[0] = 1;
+            board[1] = 1;
             board[6] = 2;
+            board[7] = 2;
             next.insert("board".into(), ArtifactValue::Bytes(board));
-            number(&mut next, "round", 1);
+            number(&mut next, "round", 2);
             ok(run(
                 shown.clone(),
                 Some(next.clone()),
@@ -547,7 +765,7 @@ fn timeout(player: u8) -> EntryCall<'static> {
 fn late_commits_cannot_steal_or_reset_timeout_entitlements() {
     for first in [1u8, 2] {
         let second = 3 - first;
-        let one = committed(&ready_state(3), first, 2200, first as i64);
+        let one = committed(&started(), first, 2200, first as i64);
         let win = vec![(spk(first), POT)];
         rejected(run(
             one.clone(),
@@ -716,7 +934,7 @@ fn late_commits_cannot_steal_or_reset_timeout_entitlements() {
         ));
     }
     rejected(run(
-        ready_state(3),
+        started(),
         None,
         EntryCall::new("split_timeout"),
         1000,
@@ -725,7 +943,7 @@ fn late_commits_cannot_steal_or_reset_timeout_entitlements() {
         split(),
     ));
     ok(run(
-        ready_state(3),
+        started(),
         None,
         EntryCall::new("split_timeout"),
         1000,
@@ -734,7 +952,7 @@ fn late_commits_cannot_steal_or_reset_timeout_entitlements() {
         split(),
     ));
     rejected(run(
-        ready_state(3),
+        started(),
         None,
         EntryCall::new("split_timeout"),
         1000,
@@ -743,7 +961,7 @@ fn late_commits_cannot_steal_or_reset_timeout_entitlements() {
         vec![(spk(1), POT)],
     ));
     rejected(run(
-        ready_state(3),
+        started(),
         None,
         EntryCall::new("split_timeout"),
         1000,
@@ -756,7 +974,7 @@ fn late_commits_cannot_steal_or_reset_timeout_entitlements() {
 #[test]
 fn cap_cleanup_pays_the_timeout_winner_and_cannot_shorten_response_windows() {
     for first in [1u8, 2] {
-        let one = committed(&ready_state(3), first, 2200, first as i64);
+        let one = committed(&started(), first, 2200, first as i64);
         let two = committed(&one, 3 - first, 2200, first as i64);
         let win = vec![(spk(first), POT)];
         ok(run(
@@ -870,7 +1088,7 @@ fn cap_cleanup_pays_the_timeout_winner_and_cannot_shorten_response_windows() {
         ));
     }
     // A picking deadline that extends past the overall cap is not shortened.
-    let one = committed(&ready_state(3), 1, 101_100, 1);
+    let one = committed(&started(), 1, 101_100, 1);
     rejected(run(
         one.clone(),
         None,
@@ -890,7 +1108,7 @@ fn cap_cleanup_pays_the_timeout_winner_and_cannot_shorten_response_windows() {
         vec![(spk(1), POT)],
     ));
     rejected(run(
-        ready_state(3),
+        started(),
         None,
         EntryCall::new("sudden_death"),
         1000,
@@ -899,7 +1117,7 @@ fn cap_cleanup_pays_the_timeout_winner_and_cannot_shorten_response_windows() {
         split(),
     ));
     ok(run(
-        ready_state(3),
+        started(),
         None,
         EntryCall::new("sudden_death"),
         1000,
@@ -910,7 +1128,7 @@ fn cap_cleanup_pays_the_timeout_winner_and_cannot_shorten_response_windows() {
     // With nobody picked, the cap waits out the full picking window (or the
     // lobby clock), not the shorter reveal grace.
     rejected(run(
-        ready_state(3),
+        started(),
         None,
         EntryCall::new("sudden_death"),
         99_950,
@@ -919,7 +1137,7 @@ fn cap_cleanup_pays_the_timeout_winner_and_cannot_shorten_response_windows() {
         split(),
     ));
     ok(run(
-        ready_state(3),
+        started(),
         None,
         EntryCall::new("sudden_death"),
         99_950,
@@ -927,33 +1145,31 @@ fn cap_cleanup_pays_the_timeout_winner_and_cannot_shorten_response_windows() {
         0,
         split(),
     ));
-    for mask in [0i64, 1, 2] {
-        rejected(run(
-            ready_state(mask),
-            None,
-            EntryCall::new("sudden_death"),
-            99_950,
-            100_000,
-            1199,
-            split(),
-        ));
-        ok(run(
-            ready_state(mask),
-            None,
-            EntryCall::new("sudden_death"),
-            99_950,
-            100_000,
-            1200,
-            split(),
-        ));
-    }
+    rejected(run(
+        initial(),
+        None,
+        EntryCall::new("sudden_death"),
+        99_950,
+        100_000,
+        1199,
+        split(),
+    ));
+    ok(run(
+        initial(),
+        None,
+        EntryCall::new("sudden_death"),
+        99_950,
+        100_000,
+        1200,
+        split(),
+    ));
 }
 
 #[test]
 fn board_wins_keep_their_challenge_window_and_double_win_contest() {
     let mut board = vec![0u8; 42];
     board[0..4].fill(1);
-    let mut won = ready_state(3);
+    let mut won = started();
     won.insert("board".into(), ArtifactValue::Bytes(board.clone()));
     let mut pending = won.clone();
     number(&mut pending, "pending_win", 1);
@@ -1044,7 +1260,7 @@ fn board_wins_keep_their_challenge_window_and_double_win_contest() {
         0,
         split(),
     ));
-    let mut full = ready_state(3);
+    let mut full = started();
     full.insert("board".into(), ArtifactValue::Bytes(vec![1u8; 42]));
     rejected(run(
         full.clone(),
@@ -1104,63 +1320,48 @@ fn dissolve(player: u8) -> EntryCall<'static> {
 }
 
 #[test]
-fn joining_enforces_timing_bounds_and_lobby_exits_end_at_readiness() {
+fn joining_enforces_timing_bounds_and_lobby_exits_end_at_the_first_pick() {
     ok(join_game(600, initial(), 2, POT));
     rejected(join_game(599, initial(), 2, POT));
     rejected(join_game(1201, initial(), 2, POT));
     rejected(join_game(600, initial(), 1, POT));
-    rejected(join_game(600, ready_state(3), 2, POT));
+    rejected(join_game(600, started(), 2, POT));
+    rejected(join_game(600, committed(&initial(), 2, 0, 2), 2, POT));
     rejected(join_game(600, initial(), 2, POT - 1));
-    for mask in [0i64, 1, 2] {
-        ok(run(
-            ready_state(mask),
-            None,
-            dissolve(1),
-            1000,
-            0,
-            0,
-            split(),
-        ));
-        rejected(run(
-            ready_state(mask),
-            None,
-            dissolve(2),
-            1000,
-            0,
-            1199,
-            split(),
-        ));
-        ok(run(
-            ready_state(mask),
-            None,
-            dissolve(2),
-            1000,
-            0,
-            1200,
-            split(),
-        ));
-        ok(run(
-            ready_state(mask),
-            None,
-            EntryCall::new("split_timeout"),
-            1000,
-            0,
-            1200,
-            split(),
-        ));
-        rejected(run(
-            ready_state(mask),
-            None,
-            dissolve(3),
-            1000,
-            0,
-            1200,
-            split(),
-        ));
-    }
+    ok(run(initial(), None, dissolve(1), 1000, 0, 0, split()));
+    rejected(run(initial(), None, dissolve(2), 1000, 0, 1199, split()));
+    ok(run(initial(), None, dissolve(2), 1000, 0, 1200, split()));
+    rejected(run(
+        initial(),
+        None,
+        EntryCall::new("split_timeout"),
+        1000,
+        0,
+        1199,
+        split(),
+    ));
+    ok(run(
+        initial(),
+        None,
+        EntryCall::new("split_timeout"),
+        1000,
+        0,
+        1200,
+        split(),
+    ));
+    rejected(run(initial(), None, dissolve(3), 1000, 0, 1200, split()));
     for player in [1u8, 2] {
         rejected(run(
-            ready_state(3),
+            started(),
+            None,
+            dissolve(player),
+            1000,
+            0,
+            9999,
+            split(),
+        ));
+        rejected(run(
+            committed(&initial(), 1, 0, 1),
             None,
             dissolve(player),
             1000,

@@ -92,9 +92,6 @@ export interface ModeView {
   };
   /** Show the "Time's up — claim the win" button. */
   canClaimTimeout: boolean;
-  /** Show the "Ready" button (fourk2: both players ready up before the
-   * first timed round). */
-  canReady?: boolean;
 }
 
 export type DropResult =
@@ -140,8 +137,6 @@ export interface ModeActions {
   drop(rpc: Rpc, key: PrivateKey, m: Match, col: number): Promise<DropResult>;
   /** The timeout door: classic claim_forfeit; fourk claim_timeout. */
   claimTimeout(rpc: Rpc, key: PrivateKey, m: Match): Promise<string>;
-  /** fourk2: sign readiness for the first timed round. */
-  ready?(rpc: Rpc, key: PrivateKey, m: Match): Promise<Match>;
   /** The whole-game cap door, when the mode's sudden_death has a shape the
    * shared crank (modes/common.ts) does not know — fourk2 pays a decided
    * timeout winner in full. */

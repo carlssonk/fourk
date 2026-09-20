@@ -269,13 +269,6 @@
           "emits": { "kind": "outputs", "outputs": [{ "name": "next", "auth_index": 0, "actors": ["FourkSimulV2"] }] },
           "consumes": [],
           "routes": [{ "output": "next", "successor": { "kind": "constructed", "actor": "FourkSimulV2", "state": "next_match" } }]
-        },
-        {
-          "name": "ready",
-          "kind": "leader",
-          "emits": { "kind": "outputs", "outputs": [{ "name": "next", "auth_index": 0, "actors": ["FourkSimulV2"] }] },
-          "consumes": [],
-          "routes": [{ "output": "next", "successor": { "kind": "constructed", "actor": "FourkSimulV2", "state": "next_match" } }]
         }
       ]
     },

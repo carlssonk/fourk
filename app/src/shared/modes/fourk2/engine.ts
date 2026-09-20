@@ -2,13 +2,14 @@
  * Fourk V2 (shared picking deadlines), engine surface: the
  * FourkSimulV2Lobby/FourkSimulV2 actor pair.
  *
- * Two structural differences from the legacy fourk engine. Both players
- * sign readiness before the first timed round (an enumerable phase: two
- * successors). And a commit successor embeds the shared picking cutoff,
- * which the covenant derives from the SPENT UTXO's acceptance score — so
- * re-deriving an opponent's commit needs that score (Match.acceptedDaa,
- * stamped whenever the UTXO was seen alive; the adopter fetches it off the
- * virtual chain otherwise).
+ * One structural difference from the legacy fourk engine: a commit
+ * successor embeds the shared picking cutoff, which the covenant derives
+ * from the SPENT UTXO's acceptance score — so re-deriving an opponent's
+ * commit needs that score (Match.acceptedDaa, stamped whenever the UTXO was
+ * seen alive; the adopter fetches it off the virtual chain otherwise). The
+ * first round is the exception in the rules, not the plumbing: its first
+ * commit stores no cutoff and its second is measured from the first
+ * commit's own acceptance, so both still read the spent output's score.
  */
 
 import { phaseOf, toHex, type Match } from "../../lib/match";
@@ -20,7 +21,7 @@ import { legalSimulColumns, myObligation, roundPhase, simulProgress } from "../f
 import { pruneSalts } from "../fourk/saltStore";
 import { core2Of, fromV2State, toV2State, v2, zeroCore2 } from "./core";
 
-const CONTINUATIONS = new Set<string>(["ready", "commit", "reveal", "resolve", "claim_win"]);
+const CONTINUATIONS = new Set<string>(["commit", "reveal", "resolve", "claim_win"]);
 
 function isOpen(s: State): boolean {
   return phaseOf(s) === 0;
@@ -71,7 +72,6 @@ export const fourk2Engine = {
       pending_win: ss.pendingWin,
       move_timeout: ss.moveTimeout,
       deadline: ss.deadline,
-      ready_mask: ss.readyMask,
       pick_deadline: ss.pickDeadline,
       first_committer: ss.firstCommitter,
       reveal_timeout: ss.revealTimeout,
@@ -102,21 +102,14 @@ export const fourk2Engine = {
   },
 
   /**
-   * Enumerable successors: readiness (one per unset bit), then the round
-   * continuations as in the legacy engine. The commit phase stays blind (an
-   * opponent's hash is unknowable).
+   * Enumerable successors: the round continuations as in the legacy engine.
+   * The commit phase stays blind (an opponent's hash is unknowable).
    */
   successors(m: Match): Match[] {
     if (isOpen(m.state)) return [];
     const ss = v2Snapshot(m);
     if (ss.pendingWin !== 0) return [];
     const out: v2.State[] = [];
-    if (ss.readyMask !== 3) {
-      for (const player of [0, 1] as const) {
-        if ((ss.readyMask & (player + 1)) === 0) out.push(v2.applyReady(ss, player));
-      }
-      return out.map((next) => ({ ...m, ...fromV2State(next) }));
-    }
     for (const disc of [1, 2] as const) {
       if (findWin(ss.board, disc)) out.push(v2.applyClaimWin(ss, disc));
     }
@@ -136,26 +129,19 @@ export const fourk2Engine = {
     if (isOpen(m.state)) return false;
     const ss = v2Snapshot(m);
     if (ss.pendingWin !== 0) return false;
-    return ss.readyMask !== 3 || roundPhase(ss) !== "commit";
+    return roundPhase(ss) !== "commit";
   },
 
-  /** Joins, readiness and the round continuations: lift the pushes, pose the
-   * successor, hand it back for address verification (the adopter checks the
-   * derived address holds the covenant, which is what makes this trustless). */
+  /** Joins and the round continuations: lift the pushes, pose the successor,
+   * hand it back for address verification (the adopter checks the derived
+   * address holds the covenant, which is what makes this trustless). */
   rederiveSpend(m: Match, spend: SpendInfo): Match | null {
     if (spend.kind === "join") return rederiveJoin(m, spend, { simul: core2Of(m) });
     if (isOpen(m.state)) return null;
     const ss = v2Snapshot(m);
     let next: v2.State;
     try {
-      if (spend.kind === "ready") {
-        // ABI order: sig(65), pk(32).
-        const [, pk] = spend.pushes;
-        if (!pk || pk.length !== 32) return null;
-        const player = playerOf(m, toHex(pk));
-        if (player === null) return null;
-        next = v2.ready(ss, v2Ctx(toHex(pk)));
-      } else if (spend.kind === "commit") {
+      if (spend.kind === "commit") {
         // ABI order: sig(65), pk(32), hash(32). The successor's cutoff is
         // derived from the spent UTXO's acceptance score.
         if (m.acceptedDaa === undefined) return null;
@@ -199,22 +185,15 @@ export const fourk2Engine = {
     return !spend || CONTINUATIONS.has(spend.kind) ? "continuation" : "terminal";
   },
 
-  /** Readiness bits order the pre-game snapshots; once both are ready the
-   * legacy round key takes over (scaled so it always outranks them). */
   progress(m: Match): number {
-    const core = core2Of(m);
-    return simulProgress(core) * 4 + core.readyMask;
+    return simulProgress(core2Of(m));
   },
 
-  /** Before the first round a seat owes its readiness; afterwards the round
-   * obligations apply as in the legacy engine. */
+  /** The round obligations as in the legacy engine: a joined lobby owes
+   * both players their first pick. */
   isActionable(m: Match, pkHex: string): boolean {
     if (isOpen(m.state)) return false;
-    const core = core2Of(m);
-    const player = playerOf(m, pkHex);
-    if (player === null) return false;
-    if (core.readyMask !== 3) return (core.readyMask & (player + 1)) === 0;
-    return myObligation(m.state, core, pkHex) !== null;
+    return myObligation(m.state, core2Of(m), pkHex) !== null;
   },
 
   onMatchesPruned(keptCovenantIds: string[]): void {

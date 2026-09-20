@@ -2,8 +2,8 @@
  * Fourk V2 (shared picking deadlines) bridge: the reference rules from
  * fourk/src/simul-v2 adapted to the app's Match model. Everything the legacy
  * fourk core does still applies — a V2 match keeps the classic `State` plus a
- * round machine — and the round machine grows four fields: readiness bits,
- * the shared picking cutoff, who committed first, and the reveal grace.
+ * round machine — and the round machine grows three fields: the shared
+ * picking cutoff, who committed first, and the reveal grace.
  */
 
 import * as v2 from "../../../../../src/simul-v2/rules";
@@ -13,9 +13,9 @@ import { ZERO_CORE, toSimulState, type SimulCore } from "../fourk/core";
 export { v2 };
 
 export interface SimulCore2 extends SimulCore {
-  /** 1 = p1 ready, 2 = p2 ready, 3 = timed play started. */
-  readyMask: number;
-  /** The shared picking cutoff (DAA score) while a commit is on the table. */
+  /** The shared picking cutoff (DAA score) while a commit is on the table;
+   * 0 under a lone first-round pick, whose opponent's window runs from that
+   * pick's own acceptance instead (see the reference rules). */
   pickDeadline: number;
   /** 1/2 = which player committed first this round; 0 between rounds. */
   firstCommitter: number;
@@ -24,13 +24,12 @@ export interface SimulCore2 extends SimulCore {
 }
 
 export function zeroCore2(revealTimeout: number): SimulCore2 {
-  return { ...ZERO_CORE, readyMask: 0, pickDeadline: 0, firstCommitter: 0, revealTimeout };
+  return { ...ZERO_CORE, pickDeadline: 0, firstCommitter: 0, revealTimeout };
 }
 
 export function isCore2(c: SimulCore | undefined): c is SimulCore2 {
   return (
     !!c &&
-    typeof (c as SimulCore2).readyMask === "number" &&
     typeof (c as SimulCore2).pickDeadline === "number" &&
     typeof (c as SimulCore2).firstCommitter === "number" &&
     typeof (c as SimulCore2).revealTimeout === "number"
@@ -47,7 +46,6 @@ export function core2Of(m: { simul?: SimulCore | undefined }): SimulCore2 {
 export function toV2State(s: State, core: SimulCore2): v2.State {
   return {
     ...toSimulState(s, core),
-    readyMask: core.readyMask,
     pickDeadline: core.pickDeadline,
     firstCommitter: core.firstCommitter,
     revealTimeout: core.revealTimeout,
@@ -76,7 +74,6 @@ export function fromV2State(ss: v2.State): { state: State; simul: SimulCore2 } {
       reveal1: ss.reveal1,
       reveal2: ss.reveal2,
       pendingWin: ss.pendingWin,
-      readyMask: ss.readyMask,
       pickDeadline: ss.pickDeadline,
       firstCommitter: ss.firstCommitter,
       revealTimeout: ss.revealTimeout,

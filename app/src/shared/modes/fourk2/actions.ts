@@ -15,7 +15,14 @@ import { commitmentOf, myObligation, priorityPlayer, roundPhase } from "../fourk
 import { loadSalt, saveSalt } from "../fourk/saltStore";
 import { commitCount, core2Of, fromV2State, v2 } from "./core";
 import { fourk2Engine, v2Ctx, v2Snapshot } from "./engine";
-import { capOwner, claimScore, lateFirstCommit, lateSecondCommit } from "./view";
+import {
+  FIRST_ROUND_LATE_MESSAGE,
+  FIRST_ROUND_STALL_MESSAGE,
+  capOwner,
+  lateFirstCommit,
+  lateSecondCommit,
+  lonePickScore,
+} from "./view";
 
 async function liveEntry(rpc: engine.Rpc, m: Match): Promise<engine.UtxoEntryLike> {
   const entry = await engine.fetchGameUtxo(rpc, fourk2Engine, m);
@@ -36,27 +43,10 @@ async function assertLockReached(rpc: engine.Rpc, lockTime: bigint): Promise<voi
   }
 }
 
-export async function readyMatch(
-  rpc: engine.Rpc,
-  key: engine.PrivateKey,
-  match: Match,
-): Promise<Match> {
-  const pkHex = engine.walletPubkey(key);
-  const next = fromV2State(v2.ready(v2Snapshot(match), v2Ctx(pkHex)));
-  return engine.continuation(
-    rpc,
-    key,
-    fourk2Engine,
-    match,
-    "ready",
-    [{ sig: 0 }, { bytes: pkHex }],
-    next,
-    0n,
-  );
-}
-
 /** Seal a pick. The successor's cutoff derives from the current UTXO's
- * acceptance score, so the entry is read first and handed to the builder. */
+ * acceptance score, so the entry is read first and handed to the builder.
+ * Straight from the joined lobby too: the first pick to land starts the
+ * other player's window. */
 export async function commitMatch(
   rpc: engine.Rpc,
   key: engine.PrivateKey,
@@ -175,6 +165,12 @@ export async function claimSplitMatch(
   ]);
 }
 
+/** The score a lone pick's settlement waits for, given the pick's
+ * observed acceptance (see lonePickScore; never null with a stamp). */
+function lonePickLock(match: Match, accepted: number): bigint {
+  return BigInt(lonePickScore({ ...match, acceptedDaa: accepted }) ?? 0);
+}
+
 /** The gates a timeout claim carries, per state: a reveal on the table is
  * relative (the reveal grace as sequence); a lone timely commit is absolute
  * (lock time at the cutoff or the rebase grace, whichever is later); a late
@@ -183,8 +179,7 @@ function timeoutGates(match: Match, accepted: number): { lockTime: bigint; seque
   const core = core2Of(match);
   if (core.reveal1 !== 0 || core.reveal2 !== 0)
     return { lockTime: 0n, sequence: BigInt(core.revealTimeout) };
-  if (commitCount(core) === 1)
-    return { lockTime: BigInt(claimScore({ ...match, acceptedDaa: accepted })), sequence: 0n };
+  if (commitCount(core) === 1) return { lockTime: lonePickLock(match, accepted), sequence: 0n };
   return { lockTime: 0n, sequence: 0n };
 }
 
@@ -215,14 +210,21 @@ export async function claimTimeoutMatch(
 }
 
 /** The symmetric stalls: nobody picked by the cutoff, the lone pick landed
- * late, or both picked and nobody revealed within the grace — and the
- * pre-ready lobby after one clock. Permissionless even split. */
+ * late, or both picked and nobody revealed within the grace; the joined
+ * lobby after one clock; and the first round's refunds — a lone pick nobody
+ * answered within its window, or a second pick that landed late.
+ * Permissionless even split. */
 function splitGates(match: Match, accepted: number): { lockTime: bigint; sequence: bigint } {
   const core = core2Of(match);
-  if (core.readyMask !== 3) return { lockTime: 0n, sequence: BigInt(match.state.moveTimeout) };
   const count = commitCount(core);
-  if (count === 0) return { lockTime: BigInt(accepted + match.state.moveTimeout), sequence: 0n };
-  if (count === 1) return { lockTime: 0n, sequence: 0n };
+  const window = BigInt(accepted + match.state.moveTimeout);
+  if (count === 0)
+    return core.round === 0
+      ? { lockTime: 0n, sequence: BigInt(match.state.moveTimeout) }
+      : { lockTime: window, sequence: 0n };
+  if (count === 1)
+    return core.round === 0 ? { lockTime: window, sequence: 0n } : { lockTime: 0n, sequence: 0n };
+  if (accepted > core.pickDeadline) return { lockTime: 0n, sequence: 0n };
   return { lockTime: 0n, sequence: BigInt(core.revealTimeout) };
 }
 
@@ -252,19 +254,17 @@ function capGates(match: Match, accepted: number): { lockTime: bigint; sequence:
   const max = (a: bigint, b: bigint) => (a > b ? a : b);
   if (core.pendingWin !== 0 || core.reveal1 !== 0 || core.reveal2 !== 0)
     return { lockTime: deadline, sequence: BigInt(core.revealTimeout) };
-  if (core.readyMask !== 3)
-    return { lockTime: deadline, sequence: BigInt(match.state.moveTimeout) };
   const count = commitCount(core);
   const late = accepted > core.pickDeadline;
+  const window = BigInt(accepted + match.state.moveTimeout);
   if (count === 0)
-    return { lockTime: max(deadline, BigInt(accepted + match.state.moveTimeout)), sequence: 0n };
+    return core.round === 0
+      ? { lockTime: deadline, sequence: BigInt(match.state.moveTimeout) }
+      : { lockTime: max(deadline, window), sequence: 0n };
   if (count === 1)
-    return late
+    return late && core.round > 0
       ? { lockTime: deadline, sequence: 0n }
-      : {
-          lockTime: max(deadline, BigInt(claimScore({ ...match, acceptedDaa: accepted }))),
-          sequence: 0n,
-        };
+      : { lockTime: max(deadline, lonePickLock(match, accepted)), sequence: 0n };
   return late
     ? { lockTime: deadline, sequence: 0n }
     : { lockTime: deadline, sequence: BigInt(core.revealTimeout) };
@@ -317,10 +317,6 @@ export const fourk2Actions: ModeActions = {
     return { kind: "continued", match: await commitMatch(rpc, key, match, col) };
   },
   claimTimeout: claimTimeoutMatch,
-  async ready(rpc, key, match) {
-    await ensureFunds(rpc, key, engine.FEE_HEADROOM, { staked: isStaked(match) });
-    return readyMatch(rpc, key, match);
-  },
   settleCap: suddenDeathMatch,
 };
 
@@ -333,8 +329,9 @@ const STALL_MESSAGE = "The game stalled on both sides. It timed out and the pot 
  * Fourk V2's automatic duties. Reveals, resolves and win claims as in the
  * legacy mode; the contest and the sweep on a pending win; and — new — the
  * permissionless splits of a stalled round, which are all draws: nobody
- * picked by the cutoff, the lone pick landed late, or both picked and
- * nobody can reveal within the grace. Readiness stays a button.
+ * picked by the cutoff, the lone pick landed late, both picked and nobody
+ * can reveal within the grace, and the first round's refunds. The joined
+ * lobby keeps its manual exits (kick, cancel); nothing splits it.
  */
 export function fourk2AutoActions(m: Match, ctx: AutoCtx): AutoAction[] {
   const out: AutoAction[] = [];
@@ -374,8 +371,6 @@ export function fourk2AutoActions(m: Match, ctx: AutoCtx): AutoAction[] {
     }
     return out;
   }
-
-  if (core.readyMask !== 3) return out;
 
   const full = m.state.moveCount >= CELLS;
   const obligation = full ? null : myObligation(m.state, core, ctx.myPk);
@@ -419,7 +414,7 @@ export function fourk2AutoActions(m: Match, ctx: AutoCtx): AutoAction[] {
   }
 
   // The stalled-round splits. Self-funded (fee from the pot), so no top-up.
-  if (!full && phase === "commit" && commitCount(core) === 0) {
+  if (!full && phase === "commit" && commitCount(core) === 0 && core.round > 0) {
     out.push({
       key: "no-picks",
       oncePer: "utxo",
@@ -443,6 +438,33 @@ export function fourk2AutoActions(m: Match, ctx: AutoCtx): AutoAction[] {
         return { kind: "finished", message: NO_PICKS_MESSAGE };
       },
       onTerminated: NO_PICKS_MESSAGE,
+    });
+  } else if (!full && core.round === 0 && phase === "commit" && commitCount(core) === 1) {
+    // The first round's lone pick: the refund waits out the picking window
+    // after it (the lone-commit UTXO's age, which is what the lock reads).
+    out.push({
+      key: "first-round-stall",
+      oncePer: "utxo",
+      scheduleMs: async (rpc) => {
+        const age = await engine.gameUtxoAge(rpc, fourk2Engine, m);
+        if (age === null) return 3000;
+        return Math.max(0, (m.state.moveTimeout - age) * 100 + 2000);
+      },
+      run: async (rpc, key, mm) => {
+        await splitTimeoutMatch(rpc, key, mm);
+        return { kind: "finished", message: FIRST_ROUND_STALL_MESSAGE };
+      },
+      onTerminated: FIRST_ROUND_STALL_MESSAGE,
+    });
+  } else if (!full && core.round === 0 && lateSecondCommit(m)) {
+    out.push({
+      key: "first-round-late",
+      oncePer: "utxo",
+      run: async (rpc, key, mm) => {
+        await splitTimeoutMatch(rpc, key, mm);
+        return { kind: "finished", message: FIRST_ROUND_LATE_MESSAGE };
+      },
+      onTerminated: FIRST_ROUND_LATE_MESSAGE,
     });
   } else if (!full && phase === "reveal" && !salt && !lateSecondCommit(m)) {
     out.push({

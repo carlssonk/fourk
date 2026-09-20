@@ -1,7 +1,7 @@
 /**
  * Fourk V2's app surface without a chain: the shared clock the seats count
- * down, the readiness lobby, lateness read off the acceptance stamp, and the
- * engine's enumeration / re-derivation rules.
+ * down, the joined lobby where the first picks happen, lateness read off the
+ * acceptance stamp, and the engine's enumeration / re-derivation rules.
  */
 
 import { describe, expect, test, vi } from "vitest";
@@ -22,6 +22,7 @@ vi.stubGlobal("localStorage", {
 const P1 = "11".repeat(32);
 const P2 = "22".repeat(32);
 const HASH = "ef".repeat(32);
+const HASH2 = "ac".repeat(32);
 
 function at(
   core: Partial<SimulCore2> = {},
@@ -59,57 +60,117 @@ const ctx = (role: ViewCtx["role"], clockExpired = false): ViewCtx => ({
   result: null,
 });
 
-const started = { readyMask: 3 };
-const one = { readyMask: 3, commit1: HASH, pickDeadline: 6200, firstCommitter: 1 };
+const twoDiscs = (() => {
+  const board = new Uint8Array(42);
+  board[0] = 1;
+  board[6] = 2;
+  return { board, moveCount: 2 };
+})();
+/** The second round's start (one disc each landed in the first). */
+const started = at({ round: 1 }, {}, twoDiscs);
+const later = (core: Partial<SimulCore2>, over: Partial<Match> = {}) =>
+  at({ round: 1, ...core }, over, twoDiscs);
+const one = { commit1: HASH, pickDeadline: 6200, firstCommitter: 1 };
 const two = { ...one, commit2: HASH };
+/** The first round: the lone pick carries no cutoff, the second pick's
+ * window runs from the lone pick's own acceptance. */
+const firstOne = { commit1: HASH, pickDeadline: 0, firstCommitter: 1 };
+const firstTwo = { ...firstOne, commit2: HASH, pickDeadline: 6200 };
 
 describe("fourk2 clock", () => {
   test("follows the round: age until a commit, absolute cutoff, reveal grace", () => {
-    expect(fourk2Mode.clock(at({ readyMask: 1 }))).toBeNull();
-    expect(fourk2Mode.clock(at(started))).toEqual({ kind: "age", daa: 1200 });
-    expect(fourk2Mode.clock(at(one))).toEqual({ kind: "absolute", daa: 6200 });
+    expect(fourk2Mode.clock(started)).toEqual({ kind: "age", daa: 1200 });
+    expect(fourk2Mode.clock(later(one))).toEqual({ kind: "absolute", daa: 6200 });
     // Once the first commit's acceptance is known, the claim waits for the
     // rebase grace after it when that is later than the cutoff.
-    expect(fourk2Mode.clock(at(one, { acceptedDaa: 6150 }))).toEqual({
+    expect(fourk2Mode.clock(later(one, { acceptedDaa: 6150 }))).toEqual({
       kind: "absolute",
       daa: 6250,
     });
-    expect(fourk2Mode.clock(at(one, { acceptedDaa: 5000 }))).toEqual({
+    expect(fourk2Mode.clock(later(one, { acceptedDaa: 5000 }))).toEqual({
       kind: "absolute",
       daa: 6200,
     });
-    expect(fourk2Mode.clock(at(two))).toEqual({ kind: "age", daa: 600 });
-    expect(fourk2Mode.clock(at({ readyMask: 3, commit2: HASH, reveal1: 4 }))).toEqual({
+    expect(fourk2Mode.clock(later(two))).toEqual({ kind: "age", daa: 600 });
+    expect(fourk2Mode.clock(later({ commit2: HASH, reveal1: 4 }))).toEqual({
       kind: "age",
       daa: 600,
     });
-    expect(fourk2Mode.clock(at({ readyMask: 3, pendingWin: 1 }))).toBeNull();
+    expect(fourk2Mode.clock(later({ pendingWin: 1 }))).toBeNull();
     // A lone commit accepted after the cutoff decides the round (a draw).
-    expect(fourk2Mode.clock(at(one, { acceptedDaa: 6201 }))).toBeNull();
+    expect(fourk2Mode.clock(later(one, { acceptedDaa: 6201 }))).toBeNull();
+  });
+
+  test("the first round: no lobby clock, the lone pick's window once its acceptance is known", () => {
+    expect(fourk2Mode.clock(at())).toBeNull();
+    expect(fourk2Mode.clock(at(firstOne))).toBeNull();
+    expect(fourk2Mode.clock(at(firstOne, { acceptedDaa: 5000 }))).toEqual({
+      kind: "absolute",
+      daa: 6200,
+    });
+    expect(fourk2Mode.clock(at(firstTwo))).toEqual({ kind: "age", daa: 600 });
   });
 });
 
 describe("fourk2 view", () => {
-  test("the lobby asks each player to ready up and closes at both", () => {
-    const lobby = at({ readyMask: 1 });
+  test("the joined lobby is where both players pick; the first pick closes it", () => {
+    const lobby = at();
     expect(fourk2Mode.inLobby(lobby)).toBe(true);
     expect(fourk2Mode.roundStarted(lobby)).toBe(false);
-    expect(fourk2Mode.view(lobby, ctx("p1")).canReady).toBe(false);
-    expect(fourk2Mode.view(lobby, ctx("p1")).status.segments[0]!.text).toMatch(/Waiting/);
-    expect(fourk2Mode.view(lobby, ctx("p2")).canReady).toBe(true);
-    expect(fourk2Mode.view(lobby, ctx("p2")).status.segments[0]!.text).toBe("Ready up to start");
-    expect(fourk2Mode.view(lobby, ctx("spectator")).canReady).toBe(false);
-    const live = at(started);
-    expect(fourk2Mode.inLobby(live)).toBe(false);
-    expect(fourk2Mode.roundStarted(live)).toBe(true);
-    expect(fourk2Mode.view(live, ctx("p1")).canReady).toBe(false);
-    expect(fourk2Mode.view(live, ctx("p1")).status.segments[0]!.text).toBe("Pick a column");
+    for (const role of ["p1", "p2"] as const) {
+      const v = fourk2Mode.view(lobby, ctx(role));
+      expect(v.status.segments[0]!.text).toBe("Pick a column");
+      expect(v.status.segments[1]!.text).toMatch(/first pick to land starts/);
+      expect(v.board.interactive).toBe(true);
+      expect(v.seats.every((seat) => seat.active && !seat.showClock)).toBe(true);
+    }
+    expect(fourk2Mode.isActionable(lobby, P1)).toBe(true);
     expect(fourk2Mode.isActionable(lobby, P2)).toBe(true);
-    expect(fourk2Mode.isActionable(lobby, P1)).toBe(false);
+    const picked = at(firstOne, { acceptedDaa: 5000 });
+    expect(fourk2Mode.inLobby(picked)).toBe(false);
+    expect(fourk2Mode.roundStarted(picked)).toBe(true);
+    expect(fourk2Mode.view(picked, ctx("p1")).status.segments[0]!.text).toMatch(/Pick saved/);
+    expect(fourk2Mode.view(picked, ctx("p2")).status.segments[0]!.text).toBe("Pick a column");
+    expect(fourk2Mode.view(picked, ctx("p2")).seats[1]!.showClock).toBe(true);
+    expect(fourk2Mode.isActionable(picked, P1)).toBe(false);
+    expect(fourk2Mode.isActionable(picked, P2)).toBe(true);
+    expect(fourk2Mode.inLobby(started)).toBe(false);
+    expect(fourk2Mode.view(started, ctx("p1")).status.segments[1]!.text).toMatch(/shared timer/);
   });
 
-  test("a late second commit hands the first committer the claim", () => {
-    const late = at(two, { acceptedDaa: 6201 });
+  test("the first round never offers a timeout claim; a stall is called off", () => {
+    const stalled = at(firstOne, { acceptedDaa: 5000 });
+    expect(fourk2Mode.view(stalled, ctx("p1", true)).canClaimTimeout).toBe(false);
+    expect(fourk2Mode.view(stalled, ctx("p1", true)).status.segments[1]!.text).toMatch(
+      /called off/,
+    );
+    expect(fourk2Mode.view(stalled, ctx("p2", true)).status.segments[0]!.text).toBe(
+      "Your time is up",
+    );
+    expect(fourk2Mode.view(stalled, ctx("p2", true)).status.segments[1]!.text).toMatch(
+      /called off/,
+    );
+    const late = at(firstTwo, { acceptedDaa: 6201 });
+    for (const role of ["p1", "p2"] as const) {
+      const v = fourk2Mode.view(late, ctx(role));
+      expect(v.canClaimTimeout).toBe(false);
+      expect(v.status.segments[1]!.text).toMatch(/called off/);
+      expect(v.board.interactive).toBe(false);
+    }
+    expect(fourk2Mode.view(at(firstTwo, { acceptedDaa: 6200 }), ctx("p1")).canClaimTimeout).toBe(
+      false,
+    );
+    // A reveal on the table is a proven obligation even in the first round.
+    const shown = at({ commit2: HASH, reveal1: 4 });
+    expect(fourk2Mode.view(shown, ctx("p1", true)).canClaimTimeout).toBe(true);
+    const split = { kind: "split_timeout", txid: "", pushes: [], args: [], payload: "" } as const;
+    expect(fourk2Mode.describeEnd(split, stalled, P1)).toMatch(/second pick never landed/);
+    expect(fourk2Mode.describeEnd(split, late, P2)).toMatch(/after the deadline/);
+    expect(fourk2Mode.describeEnd(split, started, P1)).toMatch(/Neither player picked/);
+  });
+
+  test("a late second commit hands the first committer the claim from the second round on", () => {
+    const late = later(two, { acceptedDaa: 6201 });
     const first = fourk2Mode.view(late, ctx("p1"));
     expect(first.canClaimTimeout).toBe(true);
     expect(first.status.segments[0]!.text).toMatch(/opponent's pick arrived too late/);
@@ -118,7 +179,7 @@ describe("fourk2 view", () => {
     expect(second.status.tone).toBe("danger");
     expect(second.seats.every((seat) => !seat.showClock)).toBe(true);
     // Timely: both owe a reveal, nobody can claim yet.
-    const timely = at(two, { acceptedDaa: 6200 });
+    const timely = later(two, { acceptedDaa: 6200 });
     expect(fourk2Mode.view(timely, ctx("p1")).canClaimTimeout).toBe(false);
     expect(
       fourk2Mode.describeEnd(
@@ -137,33 +198,27 @@ describe("fourk2 view", () => {
   });
 
   test("the timeout claim on a lone pick waits for the expired shared clock", () => {
-    const m = at(one);
+    const m = later(one);
     expect(fourk2Mode.view(m, ctx("p1")).canClaimTimeout).toBe(false);
     expect(fourk2Mode.view(m, ctx("p1", true)).canClaimTimeout).toBe(true);
     expect(fourk2Mode.view(m, ctx("p2", true)).canClaimTimeout).toBe(false);
     expect(fourk2Mode.view(m, ctx("p2", true)).status.segments[0]!.text).toBe("Your time is up");
-    expect(fourk2Mode.view(at(started), ctx("p2", true)).status.segments[0]!.text).toBe(
-      "Time is up",
-    );
+    expect(fourk2Mode.view(m, ctx("p2", true)).status.segments[1]!.text).toMatch(/claim the win/);
+    expect(fourk2Mode.view(started, ctx("p2", true)).status.segments[0]!.text).toBe("Time is up");
   });
 });
 
 describe("fourk2 engine", () => {
-  test("readiness is enumerable, commits stay blind, rounds enumerate as before", () => {
-    const lobby = at();
-    expect(fourk2Mode.canEnumerate(lobby)).toBe(true);
-    expect(fourk2Mode.successors(lobby).map((m) => (m.simul as SimulCore2).readyMask)).toEqual([
-      1, 2,
-    ]);
-    expect(
-      fourk2Mode.successors(at({ readyMask: 2 })).map((m) => (m.simul as SimulCore2).readyMask),
-    ).toEqual([3]);
-    expect(fourk2Mode.canEnumerate(at(started))).toBe(false);
-    expect(fourk2Mode.successors(at(started))).toEqual([]);
-    expect(fourk2Mode.canEnumerate(at(two))).toBe(true);
-    expect(fourk2Mode.successors(at(two))).toHaveLength(14);
-    for (const next of fourk2Mode.successors(at(two)))
+  test("commits stay blind, rounds enumerate as before", () => {
+    expect(fourk2Mode.canEnumerate(at())).toBe(false);
+    expect(fourk2Mode.successors(at())).toEqual([]);
+    expect(fourk2Mode.canEnumerate(started)).toBe(false);
+    expect(fourk2Mode.successors(started)).toEqual([]);
+    expect(fourk2Mode.canEnumerate(later(two))).toBe(true);
+    expect(fourk2Mode.successors(later(two))).toHaveLength(14);
+    for (const next of fourk2Mode.successors(later(two)))
       expect((next.simul as SimulCore2).pickDeadline).toBe(0);
+    expect(fourk2Mode.successors(at(firstTwo))).toHaveLength(14);
   });
 
   test("re-deriving a commit needs the spent UTXO's acceptance score", () => {
@@ -176,48 +231,55 @@ describe("fourk2 engine", () => {
       args: [],
       payload: "",
     };
-    const live = at(started);
-    expect(fourk2Mode.needsAcceptedDaa!(live, spend)).toBe(true);
-    expect(fourk2Mode.rederiveSpend(live, spend)).toBeNull();
-    const derived = fourk2Mode.rederiveSpend({ ...live, acceptedDaa: 5000 }, spend)!;
+    expect(fourk2Mode.needsAcceptedDaa!(started, spend)).toBe(true);
+    expect(fourk2Mode.rederiveSpend(started, spend)).toBeNull();
+    const derived = fourk2Mode.rederiveSpend({ ...started, acceptedDaa: 5000 }, spend)!;
     expect(derived.simul).toMatchObject({ commit2: HASH, pickDeadline: 6200, firstCommitter: 2 });
     // The successor is unobserved: no stamp rides along.
     expect(derived.acceptedDaa).toBe(5000);
-    const ready = {
-      kind: "ready",
-      txid: "",
-      pushes: [new Uint8Array(65), pk],
-      args: [],
-      payload: "",
-    };
-    expect(
-      (fourk2Mode.rederiveSpend(at({ readyMask: 1 }), ready)!.simul as SimulCore2).readyMask,
-    ).toBe(3);
+    // The first round: the lone pick stores no cutoff (it still needs the
+    // join's score for the cap check), the second stores S1 + T.
+    expect(fourk2Mode.rederiveSpend(at(), spend)).toBeNull();
+    const lone = fourk2Mode.rederiveSpend({ ...at(), acceptedDaa: 5000 }, spend)!;
+    expect(lone.simul).toMatchObject({ commit2: HASH, pickDeadline: 0, firstCommitter: 2 });
+    const pk1 = Uint8Array.from(Buffer.from(P1, "hex"));
+    const other = Uint8Array.from(Buffer.from(HASH2, "hex"));
+    const answer = fourk2Mode.rederiveSpend(
+      { ...at({ commit2: HASH, firstCommitter: 2 }), acceptedDaa: 7000 },
+      { ...spend, pushes: [new Uint8Array(65), pk1, other] },
+    )!;
+    expect(answer.simul).toMatchObject({ commit1: HASH2, pickDeadline: 8200, firstCommitter: 2 });
   });
 
-  test("progress orders readiness before the round key", () => {
-    const a = at({ readyMask: 1 });
-    const b = at({ readyMask: 3 });
-    const c = at(one);
+  test("progress follows the round key", () => {
+    const a = at();
+    const b = at(firstOne);
+    const c = later(one);
     expect(fresherOf(a, b)).toBe(b);
     expect(fresherOf(c, b)).toBe(c);
-    expect(fourk2Mode.progress(at())).toBeLessThan(fourk2Mode.progress(a));
+    expect(fresherOf(started, b)).toBe(started);
   });
 
-  test("duties: no readiness automation, stalled rounds split themselves", () => {
+  test("duties: the lobby keeps its manual exits, stalled rounds split themselves", () => {
     const keys = (m: Match, role: "p1" | "p2" = "p1") =>
       fourk2Mode.autoActions(m, { myPk: role === "p1" ? P1 : P2, role }).map((a) => a.key);
-    // Only the cap crank applies to an unstarted lobby (an abandoned one
-    // still gets cleaned up at the deadline); readiness is a button.
-    expect(keys(at({ readyMask: 1 }))).toEqual(["sudden-death"]);
-    expect(keys(at(started))).toContain("no-picks");
-    expect(keys(at(one))).not.toContain("no-picks");
-    expect(keys(at(one, { acceptedDaa: 6201 }))).toContain("late-pick");
+    // Only the cap crank applies to the joined lobby (an abandoned one still
+    // gets cleaned up at the deadline); kick and cancel are buttons.
+    expect(keys(at())).toEqual(["sudden-death"]);
+    expect(keys(started)).toContain("no-picks");
+    expect(keys(later(one))).not.toContain("no-picks");
+    expect(keys(later(one, { acceptedDaa: 6201 }))).toContain("late-pick");
     // Both picked but this browser holds no salt: the reveal grace split.
-    expect(keys(at(two))).toContain("no-reveals");
-    expect(keys(at(two, { acceptedDaa: 6201 }))).not.toContain("no-reveals");
-    expect(keys(at(started))).toContain("sudden-death");
-    expect(keys(at(started)).filter((k) => k === "sudden-death")).toHaveLength(1);
+    expect(keys(later(two))).toContain("no-reveals");
+    expect(keys(later(two, { acceptedDaa: 6201 }))).not.toContain("no-reveals");
+    // The first round's refunds: an unanswered lone pick, a late second pick.
+    expect(keys(at(firstOne))).toContain("first-round-stall");
+    expect(keys(at(firstOne))).not.toContain("late-pick");
+    expect(keys(at(firstTwo, { acceptedDaa: 6201 }))).toContain("first-round-late");
+    expect(keys(at(firstTwo, { acceptedDaa: 6201 }))).not.toContain("no-reveals");
+    expect(keys(at(firstTwo, { acceptedDaa: 6200 }))).toContain("no-reveals");
+    expect(keys(started)).toContain("sudden-death");
+    expect(keys(started).filter((k) => k === "sudden-death")).toHaveLength(1);
   });
 });
 
