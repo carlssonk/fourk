@@ -8,7 +8,7 @@ conversation reveals it was fuzzy.
 
 - **ChainOps** — the app-side interface to the chain: balances, transfers,
   opening and joining matches, funding seats. The seam behind the match
-  actions (`createGame`, `takeSeat`, `switchAccount`). Two adapters: the
+  actions (`createGame`, `takeSeat`). Two adapters: the
   covenant facade bound to the live RPC (prod) and an in-memory ledger
   (tests). The adapter owns the connection — `connect()` is an explicit
   step (it is what the "Connecting to the Kaspa network" UI step ticks on);

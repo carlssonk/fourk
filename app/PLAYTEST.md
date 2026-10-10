@@ -70,7 +70,7 @@ the staked scenario. Its funding helper refuses non-simnet addresses/nodes.
 # Repository root
 pnpm test
 pnpm typecheck
-SIMNET_E2E=1 VITE_NETWORK_ID=simnet pnpm exec vitest run app/e2e/simul-live.test.ts
+./localnet/live.sh   # classic, Fourk and edge suites on a throwaway chain
 
 # app/
 pnpm exec playwright install chromium  # once, if Chromium is not installed

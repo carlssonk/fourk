@@ -61,6 +61,11 @@ jobs:
       - run: pnpm build
         env:
           VITE_COMMIT_SHA: ${{ github.sha }}
+      # The built bundle must actually reach a node through the public
+      # resolver: dev servers and pinned-node builds never take that path,
+      # which is how a minified bundle that could not connect went unseen.
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: node scripts/check-dist.mjs --timeout 90
 
   covenant:
     name: covenant (harness + wasm + artifact)
@@ -79,15 +84,49 @@ jobs:
             harness
             wasm
       # The compiled covenants against the real script engine.
-      - run: cargo test
+      - run: cargo test --locked
         working-directory: harness
       # The browser transaction path, natively, plus the wasm32 build.
-      - run: cargo test
+      - run: cargo test --locked
         working-directory: wasm
       - run: cargo check --target wasm32-unknown-unknown
         working-directory: wasm
       # The committed artifact must be exactly what the pinned argentc
       # produces from contracts/fourk.ag.
-      - run: cargo install --git https://github.com/argent-lang/argent --rev 867b080b973f93d75c4b7ca8ce06950a963accbb argent
+      - run: cargo install --locked --git https://github.com/argent-lang/argent --rev 867b080b973f93d75c4b7ca8ce06950a963accbb argent
       - run: argentc build contracts/fourk.ag --out contracts/build
-      - run: git diff --exit-code contracts/build
+      # Untracked new outputs count as drift too, not just modified ones.
+      - run: test -z "$(git status --porcelain -- contracts/build)" || (git status -- contracts/build; exit 1)
+
+  live:
+    name: live simnet suites (localnet/live.sh)
+    # A throwaway kaspad at the harness's rusty-kaspa pin, a miner, and the
+    # app's real transaction engine against it: app/e2e/*-live.test.ts.
+    # Building kaspad (rocksdb included) is the slow part on a cold cache;
+    # rust-cache keeps the installed binary afterwards.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: kaspad-a41a333b08848f41bf737b72592e463a6011b8ac
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+      - run: |
+          command -v kaspad || cargo install --locked --git https://github.com/kaspanet/rusty-kaspa \
+            --rev a41a333b08848f41bf737b72592e463a6011b8ac kaspad
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
+        working-directory: app
+      - run: ./localnet/live.sh
+      # The browser suite through the real UI, on its own throwaway chain.
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: app
+      - run: ./localnet/live.sh ./localnet/browser.sh

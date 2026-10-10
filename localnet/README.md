@@ -65,3 +65,46 @@ again).
 The wallet keys survive by design: the app's browser wallet and
 `faucet/faucet.key` are the same keys on any chain, only their balances are
 gone — mirroring a real reset.
+
+## Live suites in one command
+
+```sh
+./localnet/live.sh
+```
+
+Starts its own throwaway node on a fresh data dir (stop the dev node first;
+both use port 17510), mines past coinbase maturity, runs
+`app/e2e/*-live.test.ts`, and tears everything down. Any other command runs
+against the same chain instead: `./localnet/live.sh node my-script.mjs`.
+`kaspad` comes from `$KASPAD`, the `PATH`, or the `rusty-kaspa` checkout
+above; the script's header has the `cargo install` line for the pinned
+revision.
+
+Tests that need the chain to stop at an exact DAA score
+(`app/e2e/simul-v2-edges-live.test.ts`) hold the background miner by
+creating the file `MINE_PAUSE_FILE` names (live.sh exports it) and mine
+their own blocks. The browser suite runs against the same kind of chain:
+
+```sh
+./localnet/live.sh ./localnet/browser.sh
+```
+
+It funds the dispenser, waits out the lane cooldown, serves the app pinned
+to the chain on port 5199 and runs `app/e2e/*.pw.ts`.
+
+## When something fails
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `live.sh`: something already listens on 127.0.0.1:17510 | The dev node from `run-node.sh` is up | Stop it; `live.sh` brings its own |
+| `live.sh`: kaspad not found | No built `kaspad` | Set `KASPAD`, or run the `cargo install` line in the script header |
+| App: `node ws://127.0.0.1:17510 is unreachable` | Node not running | `./localnet/run-node.sh` |
+| App: node `is still syncing` / `running without the UTXO index` / `on …, not simnet` | Wrong flags or network | Start it with `run-node.sh` (it passes `--utxoindex --enable-unsynced-mining`); check `VITE_NETWORK_ID` in `app/.env.local` |
+| Nothing confirms; the clock stands still | Miner not running | `node localnet/mine.mjs 0` |
+| Funding fails with `one of the transaction inputs spends an immature UTXO` | Faucet coinbases younger than 1000 DAA | Keep mining (~2 min after a fresh start) |
+| Free games: "temporarily unavailable" (`DISPENSER_EMPTY`) | Dispenser has no lanes on this chain | Fund it (command above) |
+| New games: "try again in a minute" (`DISPENSER_COOLING`) | Every lane drained or cooling (1200 DAA) | Wait, or fund more lanes |
+| A timed door: `transaction input #0 is not finalized`, or the app's "pick deadline not reached (about N minutes)" | Its lock time is ahead of the chain | Wait for the chain to pass it; the app's countdown shows when |
+| A timed door: `one of the transaction sequence locks conditions was not met` | The game UTXO is younger than the door's clock | Wait out the clock |
+| A move or pick: `already spent by transaction` / `is an orphan` | The opponent's transition landed first | Nothing: the app resyncs and replays a still-legal pick |
+| Banner "the test network was reset" after `reset.sh` | Expected: the DAA score fell below the high-water mark | None; unfinished games are marked gone |

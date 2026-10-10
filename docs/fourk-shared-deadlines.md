@@ -38,9 +38,9 @@ The subsequent contract-proof stage is also implemented:
 - Nine real-script-engine tests in `harness/tests/simul_v2_tests.rs` cover the
   transition matrix, deadline boundaries, both player orders, invalid metadata,
   settlement precedence, lobby exits, and a complete four-round double win.
-- The four legacy template hashes are unchanged (the generated `.sil` files
-  gain the shared V2 structs and helpers, but the legacy templates do not). A
-  regression test pins the original hashes. Existing matches retain their rules.
+- The first simultaneous protocol (`FourkSimulLobby`/`FourkSimul`) has since
+  been retired from the contract and the app: nothing was in production, and
+  it let a joiner's lone first-round pick forfeit an absent host.
 
 The harness supplies input acceptance scores and checks scripts, not the full
 consensus timing pipeline. These results do not replace live-node validation.
@@ -215,15 +215,14 @@ start another picking round.
 1. Completed: versioned TypeScript reference, adversarial/property tests, and
    Argent actors covering normal play and terminal guards.
 2. Completed: pinned-compiler artifact generation and real-engine harness
-   verification, with legacy contract compatibility checks.
+   verification.
 3. Completed: `app/e2e/simul-v2-live.test.ts` drives the app's real transaction
    engine for both players against the local simnet node (see "Live-node
    verification" below). Not covered: reorgs and public-network latency.
 4. Completed: the `fourk2` mode (`app/src/shared/modes/fourk2/`), the share-code
    mode byte 2 and match.json keys, successor discovery for commits, the
    per-door lock-time/sequence gates, and the rebuilt `wasm/pkg`. The legacy
-   `fourk` mode stays registered for its stored matches and is no longer
-   offered for new games.
+   `fourk` mode has since been removed (share-code mode byte 1 is refused).
 5. Completed: the lobby as the first picking phase, the shared pick countdown
    (`ClockSpec`: UTXO age until the first pick of a later round, the absolute
    cutoff after any lone pick), lateness read off the acceptance stamp, and
@@ -268,7 +267,12 @@ start another picking round.
 ## Live-node verification
 
 `SIMNET_E2E=1 VITE_NETWORK_ID=simnet npx vitest run app/e2e/simul-v2-live.test.ts`
-with `localnet/run-node.sh` and `mine.mjs 0` running. Six tests, each with
+with `localnet/run-node.sh` and `mine.mjs 0` running, or `pnpm test:live`
+(`localnet/live.sh`), which brings its own chain and also runs in CI. The
+edge suite (`simul-v2-edges-live.test.ts`) needs live.sh: it holds the miner
+and steps the chain block by block to land transactions at exact scores, races
+a timeout claim against a late pick on the node, and drives the cap,
+`claim_split` and `claim_draw` settlements. The main suite has six tests, each with
 fresh keys funded from the miner-paid faucet key:
 
 - A full game from the joined lobby: the first pick stores no cutoff, the
@@ -319,9 +323,17 @@ rounds, `claim_win`, the sweep) pass on the local simnet.
 - A second commit rebuilt on a first commit accepted within G of D is timely up
   to S1 + G and no later, and the first committer's timeout claim is not valid
   before that score.
-- The input acceptance score read by the script and the contextual score used
-  for the lock-time check refer to the same block score on a live node, so a
-  pick accepted at the cutoff and a timeout claim after it cannot both stand.
+- A pick accepted at the cutoff and a timeout claim after it cannot both
+  stand. The two scores involved are not the same block's: a new output
+  records the DAA score of the chain block that ACCEPTED it
+  (`utxo_validation.rs`), which is what `OpTxInputDaaScore` reads, while a
+  lock time is checked against the block that INCLUDES the transaction, or
+  the virtual score in the mempool (`lock_time < score`,
+  `tx_validation_in_header_context.rs`). An accepting chain block always
+  scores above the blocks it merges, so a claim locked at D2 lands strictly
+  after D2, and a commit accepted by then has already spent its input.
+  `app/e2e/simul-v2-edges-live.test.ts` checks both edges on a node, one
+  block at a time.
 - Unaccepted/sentinel metadata cannot validate a pick or manufacture a cutoff.
 - Simultaneous submissions, stalled confirms, dropped transactions, accepted
   score changes, and restart recovery produce correct outcomes on a live node.
@@ -329,7 +341,7 @@ rounds, `claim_win`, the sweep) pass on the local simnet.
   refunds both and never pays either. Timeout, reveal, cap, and win-challenge
   exits remain live.
 - Correct fees and recipients for every outcome; no multi-match aggregation or
-  wrong-player payout; Classic and old Fourk matches remain usable.
+  wrong-player payout; Classic matches remain usable.
 
 These are rollout gates. The reference and script-engine tests cover protocol
 decisions; consensus, recovery, and browser behavior still require integration

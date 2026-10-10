@@ -3,10 +3,13 @@
 Three layers, one rulebook:
 
 - `src/` — TypeScript reference implementation of the transition system, the
-  single source of truth for the rules.
+  single source of truth for the rules: classic (`src/rules.ts`) and the
+  shared-deadline Fourk rules (`src/simul-v2/`, built on the round rules in
+  `src/simul/`).
 - `contracts/fourk.ag` — the Argent covenant, a require-for-require port of
-  `src/rules.ts` (classic) and `src/simul/rules.ts` (fourk mode): four actors,
-  `FourkLobby`/`FourkMatch` and `FourkSimulLobby`/`FourkSimul`. Rebuild with
+  those rulebooks: four actors, `FourkLobby`/`FourkMatch` and
+  `FourkSimulV2Lobby`/`FourkSimulV2`. (The first simultaneous protocol,
+  `FourkSimulLobby`/`FourkSimul`, is retired.) Rebuild with
   `argentc build contracts/fourk.ag --out contracts/build` (from the repo
   root, so the artifact's recorded source path stays relative), which
   regenerates `contracts/build/`
@@ -17,6 +20,16 @@ Three layers, one rulebook:
   against the real rusty-kaspa script engine with real Schnorr signatures and
   covenant bindings (KIP-20). This is the suite that audits the machine that
   will actually hold money.
+- `test/vectors/differential.json` — what keeps the two hand-kept sources
+  (the TS rulebooks and `fourk.ag`) from drifting apart. A seeded generator
+  (`test/differential/generate.ts`) walks random games through each
+  rulebook, attempts every door from the states it visits (every signer,
+  both sides of every clock boundary), and records each attempt as a spend
+  with the TS verdict; mutated successors and wrong-player payouts are
+  recorded as spends the TS refuses. `wasm/tests/differential.rs` replays
+  the file through the browser's transaction builder on the real engine and
+  requires the same verdict, with refusals coming from the script itself.
+  `pnpm test` fails if the file is stale; regenerate with `pnpm vectors`.
 - `wasm/` — `fourk-wasm`: a wasm-bindgen crate embedding the contract and
   exposing two things: an actor state → script public key (addresses) and a
   transaction builder. The app describes every covenant spend as a JSON spec
@@ -31,8 +44,8 @@ Three layers, one rulebook:
   (recovery-phrase sign-in, add funds, cash out) speak strictly web2
   vocabulary. Transactions are built and signed in the browser via the
   kaspa wasm SDK + fourk-wasm; invite links carry a compact binary share
-  code in the `#g=` fragment, and stored matches use the same JSON schema
-  as the CLI's match.json.
+  code in the `#g=` fragment, and matches are stored as JSON records
+  (`app/src/shared/lib/match.ts`).
 - `contracts/drip.sil` — the on-chain dispenser: a 63-byte stateless covenant
   that funds fresh player seats permissionlessly. Claims are UNSIGNED spends
   (fee paid out of the drip), so an empty wallet can claim; the address never
@@ -42,20 +55,30 @@ Three layers, one rulebook:
 - `faucet/` — `fund-dispenser.mjs` refills the dispenser (the only ongoing
   operational task free mode has).
 
+Root scripts are the one entry point:
+
 ```
-npm test                        # TS reference: adversarial + property tests
-npm run typecheck
-cd harness && cargo test        # compiled covenant vs the real engine
-# live e2e vs a local chain (start localnet/run-node.sh + mine.mjs first):
-SIMNET_E2E=1 VITE_NETWORK_ID=simnet npx vitest run app/e2e/simul-live.test.ts
+pnpm check            # types (root + app), the TS suites, app lint
+pnpm test             # TS reference: adversarial + property tests, vector freshness
+pnpm vectors          # regenerate test/vectors/ after a rules change
+pnpm test:covenant    # harness + wasm: compiled covenant vs the real engine, the vectors
+pnpm test:live        # live e2e suites on a throwaway local chain (localnet/live.sh)
+pnpm build:wasm       # rebuild wasm/pkg after a contract or builder change
 ```
+
+`pnpm test:live` needs a `kaspad` built at the pinned rusty-kaspa revision
+(the command is at the top of the script); it starts the node on a fresh
+data dir, mines, funds the faucet key, runs `app/e2e/*-live.test.ts`, and
+tears everything down. CI runs it too.
 
 Every toolchain dependency is git-pinned, so a clean clone builds without
 sibling checkouts: the [Argent](https://github.com/argent-lang/argent)
 runtime (`argent-runtime`, which drives `contracts/fourk.ag`'s committed
 artifact in both the harness and the wasm crate),
 [Silverscript](https://github.com/kaspanet/silverscript) v1.0.0 (which
-compiles `contracts/drip.sil`), and rusty-kaspa (v2.0.1 plus one commit) are
+compiles `contracts/drip.sil`), and rusty-kaspa (`a41a333`, v2.0.1 plus eight
+commits; public testnet-10 runs v2.1.0, whose consensus, script engine, mass
+and fee rules are unchanged for everything fourk uses) are
 pinned in `harness/Cargo.toml` and `wasm/Cargo.toml` to the exact revisions
 argent's own workspace pins — the three must stay equal because
 `argent-runtime` re-exports types from the other two. The compiler comes
@@ -87,7 +110,7 @@ state in the P2SH redeem-script preimage, eight classic entrypoints:
 | `winning_move`  | playing | `move` + win witness; terminal, pays mover the pot |
 | `claim_draw`    | playing | move count = 42; splits pot; permissionless crank |
 | `claim_forfeit` | playing | `this.ageDaa >= move_timeout`; waiting player takes the pot |
-| `sudden_death`  | playing | `tx.daa >= deadline`; splits pot; permissionless crank — the guaranteed exit |
+| `sudden_death`  | playing | `tx.daa >= deadline` and one move clock of age; pays the waiting player (an unmoved or full board splits); permissionless crank — the guaranteed exit |
 
 **Join-time genesis gates** (a genesis violating them is simply unjoinable):
 `MIN_MOVE_TIMEOUT <= move_timeout <= MAX_MOVE_TIMEOUT` (a near-instant clock
@@ -115,14 +138,16 @@ Key decisions (and why):
   can never sit unclaimed while the opponent races the board toward a draw.
   Consequence, tested and documented: a player who declines to claim on every
   remaining turn can lose the win to the move-42 draw. Their choice.
-- **No deadline field in state.** Every transition creates a fresh UTXO, so
+- **No per-move deadline in state.** Every transition creates a fresh UTXO, so
   `this.ageDaa` *is* "time since the last move" and resets automatically. Forfeit
-  is `require(this.ageDaa >= MOVE_TIMEOUT_DAA)` with a compile-time constant
-  (DAA blocks; ~10/s on mainnet).
-- **No turn or phase fields either.** Turn = `moveCount & 1` (P1 opens);
-  phase = whether `p2` is still the zero key. State is just
-  `board[42] | moveCount | p1 | p2 | stake` (115 bytes, canonical layout in
-  `src/state.ts`).
+  is `require(this.ageDaa >= move_timeout)`, the clock chosen at creation
+  and bounded at join (DAA blocks; ~10/s on mainnet). The one absolute time
+  in state is the whole-game `deadline`.
+- **No turn or phase fields either.** Turn = `move_count & 1` (P1 opens);
+  phase = which actor holds the UTXO (`FourkLobby` is open, `FourkMatch` is
+  live). Match state is just `p1 | p2 | board[42] | move_count |
+  move_timeout | deadline`; the stake is the UTXO's value (see the mapping
+  below; the TS's canonical layout is in `src/state.ts`).
 - **Board is `byte[42]`, column-major, row 0 at the bottom** — a column is one
   contiguous 6-byte slice, so the gravity/height check is a short unrolled scan.
   No bitboards: bitwise ops are covenant-gated in Silverscript and the witness
@@ -146,20 +171,28 @@ fields in `modes/wire.ts` / the codecs).
 
 The signature mode, and the default for new games ("classic" alternating
 play stays selectable): each round both players seal a column pick as
-`blake2b(colByte || salt32)`, then both reveal, and the second reveal drops
+`blake2b(playerByte || colByte || salt32)`, then both reveal, and the second reveal drops
 BOTH discs in one transition. Same-column picks stack, with the round's
 priority player (`round % 2`, 0 = p1) underneath — on a column's last free
 slot the non-priority disc vanishes. A commitment to an already-full column
 can never be revealed; its owner loses through the timeout door.
 
-Reference in `src/simul/` (state + rules, same pure-function contract);
-covenant as a second Argent actor pair in `contracts/fourk.ag` —
-`FourkSimulLobby` (join/cancel) and `FourkSimul`, whose doors are, in
-selector order: `dissolve`, `commit`, `reveal`, `resolve`, `claim_win`,
-`claim_split`, `claim_draw`, `claim_timeout`, `split_timeout`,
-`sudden_death`, `sweep_win` (appended last so earlier doors keep their
-selector indexes). The classic actors' sources are untouched, so classic
-play is unaffected.
+New games run on shared picking deadlines (`src/simul-v2/`, the
+`FourkSimulV2Lobby`/`FourkSimulV2` pair, the app's `fourk2` mode): both
+players' picks in a round must be accepted on-chain by one cutoff derived
+from the round-start output's acceptance score, the first round refunds
+instead of forfeiting, and lateness is read off acceptance scores rather
+than UTXO age. The design, its timing facts and its verification are in
+`docs/fourk-shared-deadlines.md`.
+
+The round rules underneath: reference in `src/simul/` (state + rules, same
+pure-function contract), extended by `src/simul-v2/`; covenant as the
+`FourkSimulV2Lobby` (join/cancel) and `FourkSimulV2` actors, whose doors are
+`dissolve`, `commit`, `reveal`, `resolve`, `claim_win`, `claim_split`,
+`claim_draw`, `claim_timeout`, `split_timeout`, `sudden_death` and
+`sweep_win`. (A first protocol without shared deadlines, the
+`FourkSimulLobby`/`FourkSimul` pair, is retired: it let a joiner's lone
+first-round pick forfeit an absent host.)
 
 Design notes, mirroring the classic decisions:
 
@@ -195,32 +228,45 @@ Design notes, mirroring the classic decisions:
   settle that, and the UI warns.
 - **Sync**: reveal- and resolve-phase successors are enumerable (≤14 / ≤7
   addresses); a commit successor embeds the opponent's unpredictable hash
-  and gets the join treatment — trace the spending tx, lift the pushes,
-  verify the derived address holds the covenant UTXO.
+  and gets the join treatment. When the game UTXO is gone the client
+  replays the chain from a checkpoint (`followChain` in
+  `app/src/shared/lib/covenant.ts`): every *accepted* spend of the lineage
+  in order, each re-derived and checked against the address the spending
+  transaction paid. Only accepted spends count (a DAG can hold the losing
+  side of a double spend in a block too), and a successor that was already
+  spent onward (an opponent's commit and their reveal a second later) is
+  followed, not lost.
 - **Compute budget**: measured, not declared — the builder executes every
   input and commits the budget the engine actually charged. Fourk-mode
   continuations are the dear ones (~15 units for join: every continuation
-  rebuilds and hashes the ~4.3 KB `FourkSimul` successor template
+  rebuilds and hashes the ~7.4 KB `FourkSimulV2` successor template
   in-script) against ~11 for classic.
 
 ## TS reference ↔ covenant mapping
 
-The covenant state deviates from the TS reference in two deliberate ways:
+The covenant state deviates from the TS reference in two deliberate ways
+(the field-for-field correspondence itself is what the differential vectors
+check):
 
 - **`stake` is not a covenant state field.** The UTXO value *is* the pot: join
   enforces doubling (`output == 2 * input`), moves enforce preservation, and
   the terminal doors spend it. Fees therefore ride on a second wallet input,
   which also keeps storage mass at zero per KIP-9.
-- **`phase` is an explicit int** (0 open, 1 live) where the TS derives it from
-  `p2 == ZERO_PK`: an int compare is cheaper and safer in script than a
-  32-byte compare. `join` re-checks the genesis invariants (empty board, zero
-  move count), so a malformed genesis is simply unjoinable.
+- **`phase` is not a field: it is the actor.** The TS derives it from
+  `p2 == ZERO_PK`; the covenant holds an open seat as a lobby actor and a
+  joined match as a match actor, so entering a door on the wrong phase is
+  impossible by construction. `join` builds the match's genesis state itself
+  and re-checks the lobby's gates, so a malformed genesis is simply
+  unjoinable.
 
-Payout enforcement is asymmetric on purpose: `claim_draw` is permissionless,
-so both payout outputs are pinned to the players' keys; `cancel`,
-`winning_move`, and `claim_forfeit` are signed by the party the whole pot
+Payout enforcement is asymmetric on purpose: the permissionless doors
+(`claim_draw`, `sudden_death`, and in Fourk `claim_split` and
+`split_timeout`) and `dissolve`, whose signer refunds the other player too,
+pin their outputs to the players' keys and pay the fee out of the pot,
+capped by `MAX_FEE`; `cancel`, `winning_move`, `claim_forfeit`,
+`claim_timeout` and `sweep_win` are signed by the party the whole pot
 belongs to, so they direct funds freely like any wallet spend (no forced
-address reuse). All four terminal doors require zero authorized covenant
+address reuse). Every terminal door requires zero authorized covenant
 outputs, ending the KIP-20 lineage cleanly.
 
 Two engine facts learned the hard way, for future porters:
@@ -235,48 +281,51 @@ Two engine facts learned the hard way, for future porters:
 
 The app is the front-end: `cd app && pnpm install && pnpm start`. It uses the
 public node resolver by default; a pinned node (Toccata-active testnet-10 with
-`--utxoindex`) can be set via `VITE_NODE_URL` in `app/.env.local`. A Python
-CLI once lived in `tool/` — it's in git history if a scriptable client is
-ever needed again.
+`--utxoindex`) can be set via `VITE_NODE_URL` in `app/.env.local`.
 
-Transaction shapes and conventions (see `app/src/shared/lib/covenant.ts` for
-details):
+Transaction shapes and conventions (`app/src/shared/lib/engine.ts` builds
+them, `app/src/shared/lib/covenant.ts` is the facade):
 
 - All transactions are **v1** with per-input compute budgets, measured by
   executing each input before submission.
-- `open` derives the covenant id from the funding outpoint via
+- Opening a game derives the covenant id from the funding outpoint via
   `populate_genesis_covenants`; the id is the match's stable handle forever.
-- `join`/`move` preserve the pot exactly, so fees ride on a wallet funding
-  input with change; the signed terminal doors pay fees out of the pot.
-- The sighash ignores signature scripts, so the tool signs a
-  placeholder-shaped transaction and splices real signatures in afterwards.
-- `sync` exploits that Connect Four successors are enumerable: it computes the
-  P2SH address of every legal next state (≤ 7) and polls
-  `get_utxos_by_addresses`, adopting whichever carries the match's covenant
-  id. The one thing it cannot enumerate is a join (the successor embeds the
-  joiner's unknown pubkey) — the joiner sends the updated match file back
-  instead. `win` finds its own witness by scanning the successor board.
-- `move` refuses to play a winning disc as a plain move unless `--force` — a
-  guard against the "unclaimed win lost to the draw" edge in the design.
+- Continuations (join, move, commit, reveal, resolve, claim_win) preserve
+  the pot exactly (join doubles it), so fees ride on a wallet funding input
+  with change; the terminal doors pay fees out of the pot.
+- Sync exploits that successors are mostly enumerable: the app computes the
+  P2SH address of every legal next state (≤ 7 in classic) and polls
+  `getUtxosByAddresses`, adopting whichever carries the match's covenant id.
+  What it cannot enumerate (a join's unknown pubkey, a Fourk commit's
+  unknown hash) it recovers by tracing the spending transaction from a
+  saved chain checkpoint and re-deriving the successor from its pushes.
+- In classic, a drop that completes four in a row is always sent as
+  `winning_move`, never as a plain move — the guard against the "unclaimed
+  win lost to the draw" edge in the design.
+- Node rejections are read by one classifier (`classifyFailure` in
+  `app/src/shared/lib/errors.ts`): a spent input means resync and rebuild,
+  an unreached lock means wait, a lost connection means retry; the node
+  error texts it relies on are pinned in `app/test/failures.test.ts`.
 
 ## The React app
 
 Fully client-side; anyone can host it and any two browsers can play.
 
 ```
-# one-time: build the two wasm packages
-cd ../rusty-kaspa/wasm && ./build-web --sdk         # -> wasm/web/kaspa
-cd ../../fourk/wasm && wasm-pack build --target web --release  # -> wasm/pkg
-
-cd ../app
-npm install
-npm run dev        # or: npm run build && npm run preview
+cd app
+pnpm install
+pnpm start         # or: pnpm build && pnpm preview
 ```
 
+Both wasm packages are committed (`wasm/pkg/`, `vendor/kaspa-wasm/`), so no
+Rust toolchain is needed; after a contract or builder change, rebuild
+`wasm/pkg` with `pnpm build:wasm`.
+
 Both the app and the drip service default to the **public node resolver** —
-no local node needed (verified live: public testnet-10 nodes are v2.0.1,
-synced, Toccata-active, utxoindex-enabled, and serve wss so browsers connect
-from anywhere). A local node still works via `VITE_NODE_URL` in
+no local node needed (public testnet-10 nodes run v2.1.0, synced,
+Toccata-active, utxoindex-enabled, and serve wss so browsers connect from
+anywhere; `app/scripts/check-dist.mjs` proves a production build reaches
+one). A local node still works via `VITE_NODE_URL` in
 `app/.env.local` or `KASPA_RPC_URL`.
 
 Fund the on-chain dispenser (fresh seats then fund themselves invisibly —
@@ -304,7 +353,7 @@ The web3 layer stays backstage even with real money in play — the UI speaks
 only "account / balance / add funds / cash out / recovery phrase / pot":
 
 - **Two kinds of key, deliberately kept apart** (`app/src/shared/state/wallet.ts`,
-  stored as `fourk.account` v2). The **guest** key is the original invisible
+  stored as `fourk.account` v3). The **guest** key is the original invisible
   seat: created on first visit, never shown, never given a phrase, funded
   entirely by the drip dispenser, and it signs free games forever. The
   **owned** key is one the player deliberately created or imported; it is
@@ -324,16 +373,19 @@ only "account / balance / add funds / cash out / recovery phrase / pot":
   written down here restores the same funds in Kaspium/Kasware and vice versa
   (`app/src/shared/lib/mnemonic.ts`, pinned by a derivation vector in
   `app/test/account.test.ts`). Sign-in takes a phrase and nothing else — one
-  kind of secret, one thing to write down.
+  kind of secret, one thing to write down. The phrase itself is kept in this
+  browser's storage (persistence is requested so it is not evicted), which
+  is why the test build's sign-in screen says to use only phrases made here,
+  never one that holds real KAS.
 
-  Creating and signing in are the *same* operation: `switchAccount(phrase)`
-  moves any balance off the outgoing account and then `adoptAccount` sets the
-  new one, and that is the only way an account is ever set. A new phrase is
-  generated on the acknowledgement screen and stored nowhere until the player
-  confirms it, so abandoning that screen — backdrop, refresh, closed tab —
-  leaves nothing behind rather than an account whose phrase was never read.
-  There is likewise no drawer of retired keys: unfinished games on the
-  outgoing account are what the switch confirmation warns about.
+  Creating and signing in are the *same* operation: `adoptAccount(phrase)`
+  makes the phrase the active account, and that is the only way an account
+  is ever set. Switching moves no money: every stored account stays listed,
+  keeps its funds and can still sign its own games. A new phrase is
+  generated on the acknowledgement screen and stored nowhere until the
+  player confirms it, so abandoning that screen — backdrop, refresh, closed
+  tab — leaves nothing behind rather than an account whose phrase was never
+  read.
 - **Staked matches.** An account holder picks a stake (or Free). Whether a
   game is staked is *read off the covenant's own stake* — `isStaked(m)` is
   `state.stake !== FREE_STAKE` — never claimed by the invite: a share code is
@@ -367,19 +419,15 @@ already run through the script engine locally.
 ## Status / next steps
 
 - [x] TS reference + adversarial property tests
-- [x] Silverscript port, compiled and engine-verified (all six entrypoints)
-- [x] Deployment CLI: v1 covenant transactions, genesis binding, all six
-  transitions, chain sync/watcher (live on testnet-10: genesis, join, and
-  moves confirmed; fee floor fixed after a live rejection)
+- [x] Silverscript port, compiled and engine-verified (since retired for
+  the Argent contract, see below)
+- [x] Deployment CLI: v1 covenant transactions, genesis binding, chain
+  sync/watcher, live on testnet-10 (since retired; the app does all of it)
 - [x] React UI: client-side covenant compilation (fourk-wasm), tx build/sign
   in browser, lobby/board/watcher
-- [x] Fourk mode (simultaneous commit-reveal play, the default): reference in
-  `src/simul/`, `FourkSimulLobby`/`FourkSimul` actors, harness suite, wasm
-  bindings, share-code mode section, salt store, round UI; verified live on
-  a local simnet chain through join, collision rounds, `claim_win`,
-  `claim_timeout`, and a classic regression game
-  (`app/e2e/simul-live.test.ts` — the compute-budget bump to 20 came out of
-  a live rejection there)
+- [x] Fourk mode (simultaneous commit-reveal play): reference in
+  `src/simul/`, share-code mode section, salt store, round UI (its first
+  covenant pair has since been replaced by V2, below)
 - [x] Production-readiness hardening pass: mandatory join-time deadline +
   clock bounds (a hostile invite can no longer trap or hostage a stake, and
   no pot can be stranded forever — liveness is a property test), the
@@ -392,6 +440,22 @@ already run through the script engine locally.
 - [x] Single covenant source: the hand-ported `fourk.sil` and its parallel
   suite retired in favor of the Argent contract (`docs/adr/0001`);
   genesis-gate constants pinned across TS/.ag/harness by a cross-source test
+- [x] Fourk V2, shared picking deadlines (the default for new games):
+  `src/simul-v2/`, the `FourkSimulV2*` actors, harness suite, the `fourk2`
+  app mode; verified on a local simnet node (`app/e2e/simul-v2-live.test.ts`,
+  `docs/fourk-shared-deadlines.md`)
+- [x] Differential vectors: the TS rulebooks and the compiled covenant
+  agree door for door (`test/vectors/`, `wasm/tests/differential.rs`)
+- [x] Live simnet suites in one command and in CI (`localnet/live.sh`),
+  including exact DAA boundaries and on-node races with the miner held
+  (`app/e2e/simul-v2-edges-live.test.ts`), and the browser suite against the
+  same throwaway chain (`localnet/browser.sh`)
+- [x] Release-candidate hardening: production bundles that reach a node
+  (checked in CI), builds that refuse local-only settings, chain replay
+  through accepted spends only, settlements recorded only once the chain
+  took them, duties followed for every unfinished game in the background,
+  fees clamped to the covenant ceiling, classic's cap no longer splits an
+  owed forfeit, exact-drip dispenser claims
 - [ ] Live browser-vs-browser game on testnet-10 through every terminal path
 - [x] Browser transactions built by argent-runtime's `TxBuilder` inside
   fourk-wasm (`docs/adr/0002`): engine-verified before submission, budgets
