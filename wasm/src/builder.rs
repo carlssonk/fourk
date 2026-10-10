@@ -41,7 +41,8 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 
 use argent_runtime::{
-    ArgValue, Artifact, ArtifactValue, EntryCall, InputSigScript, TxBuilder, TxContext,
+    ArgValue, Artifact, ArtifactValue, BuilderError, EntryCall, InputSigScript, TxBuilder,
+    TxContext,
 };
 use kaspa_consensus_core::config::params::{
     Params, DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS,
@@ -68,6 +69,18 @@ const GENESIS_GROUP: &str = "launch::fourk";
 
 #[derive(Debug)]
 pub struct BuildError(pub String);
+
+/// Message prefix of a spend the script engine itself refused (a covenant
+/// `require` failed), as opposed to a spec the builder could not assemble.
+const SCRIPT_REJECTED: &str = "script rejected: ";
+
+impl BuildError {
+    /// Whether the script engine refused an input (as opposed to the spec
+    /// failing to decode, sign, or assemble before any script ran).
+    pub fn is_script_rejection(&self) -> bool {
+        self.0.starts_with(SCRIPT_REJECTED)
+    }
+}
 
 impl fmt::Display for BuildError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -693,9 +706,13 @@ pub fn build(spec: &Spec, secrets: &[u8]) -> BuildResult<Built> {
 
     // Signs, assembles, executes every input on the engine, commits budgets,
     // and checks the consensus mass limits.
-    let mut tx = builder
-        .build(&context)
-        .map_err(|e| BuildError(e.to_string()))?;
+    let mut tx = builder.build(&context).map_err(|e| match e {
+        BuilderError::InputScript {
+            input_index,
+            source,
+        } => BuildError(format!("{SCRIPT_REJECTED}input #{input_index}: {source}")),
+        other => BuildError(other.to_string()),
+    })?;
     tx.finalize();
 
     let calculator = MassCalculator::new_with_consensus_params(&params);

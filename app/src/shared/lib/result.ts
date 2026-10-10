@@ -48,7 +48,7 @@ export function gameEnd(m: Match, myPk: string, result = m.result ?? null): Game
   if (tone !== "neutral")
     return {
       title: tone === "win" ? "You win!" : "You lose",
-      message: /by timeout|ran out of time|timer ran out/i.test(result)
+      message: /by timeout|ran out of time|timer ran out|total time limit/i.test(result)
         ? tone === "win"
           ? "Your opponent ran out of time."
           : "You ran out of time."
@@ -58,19 +58,32 @@ export function gameEnd(m: Match, myPk: string, result = m.result ?? null): Game
       tone,
       settling,
     };
+  // Order matters: refund and draw endings both mention the split, so the
+  // more specific causes are read first.
   if (/both connected four/i.test(result))
     return draw("You both connected four in the same round.");
-  if (/draw|split|stalled/i.test(result))
-    return draw(
-      /time|stalled/i.test(result) ? "The game reached its time limit." : "The board is full.",
-    );
-  if (/called off|dissolved|left before/i.test(result))
+  if (/dissolved|left before|before anyone joined/i.test(result))
     return {
       title: "Game cancelled",
       message: "This game ended before the first move.",
       tone,
       settling,
     };
+  if (/called off/i.test(result))
+    return {
+      title: "Game called off",
+      message: /arrived after/i.test(result)
+        ? "The second pick arrived too late, so nobody won or lost."
+        : /never landed/i.test(result)
+          ? "The second pick never arrived, so nobody won or lost."
+          : "Nobody won or lost.",
+      tone,
+      settling,
+    };
+  if (/total time limit/i.test(result)) return draw("The game reached its time limit.");
+  if (/neither player picked/i.test(result)) return draw("Neither player picked in time.");
+  if (/stalled/i.test(result)) return draw("Neither player revealed in time.");
+  if (/draw|split/i.test(result)) return draw("The board is full.");
   if (!player && /connected four|winner took/i.test(result)) {
     const color = p1 ? (m.p1Color ?? "red") : m.p1Color === "blue" ? "red" : "blue";
     return {
@@ -98,7 +111,8 @@ export function gameEnd(m: Match, myPk: string, result = m.result ?? null): Game
 
 /** Classify personal outcomes without treating "no winner" as a defeat. */
 export function resultTone(result: string, match?: Match, myPk?: string): ResultTone {
-  if (/you win/i.test(result)) return "win";
+  if (/you win|\byou took the pot/i.test(result)) return "win";
+  if (/your opponent took the pot/i.test(result)) return "loss";
   if (result.includes("winner took the pot") && match && myPk) {
     const winner = match.simul?.pendingWin;
     if (winner) return (winner === 1 ? match.state.p1 : match.state.p2) === myPk ? "win" : "loss";

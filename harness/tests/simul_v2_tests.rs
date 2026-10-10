@@ -20,45 +20,6 @@ use std::sync::OnceLock;
 
 type State = BTreeMap<String, ArtifactValue>;
 
-#[test]
-fn legacy_script_templates_remain_compatible_with_existing_matches() {
-    // Golden template IDs recorded from the deployed artifact BEFORE adding V2.
-    let json: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../contracts/build/artifact.json"
-        ))
-        .unwrap(),
-    )
-    .unwrap();
-    for (actor, expected) in [
-        (
-            "FourkLobby",
-            "ddfb4b996112c5b9b5acdb06f8d319642ea38e88f3e3c99fcbbb79c71ea21a15",
-        ),
-        (
-            "FourkMatch",
-            "659e0597d475bc43c85ded262b3c1271e170a869d719cac747b13d1374282a44",
-        ),
-        (
-            "FourkSimul",
-            "6944f862e52cede9fa21e0cd86ed1affde7b210a124f93a2f04768e5a6a52dd2",
-        ),
-        (
-            "FourkSimulLobby",
-            "bdd11c222b23be98a1c0f7ac68e14efe9bbcd215d56056d17bc8cba773fada5d",
-        ),
-    ] {
-        let bytes = json["sil_abi"]["contracts"][actor]["compiled"]["template_hash"]
-            .as_array()
-            .unwrap();
-        let actual: String = bytes
-            .iter()
-            .map(|b| format!("{:02x}", b.as_u64().unwrap()))
-            .collect();
-        assert_eq!(actual, expected, "{actor} must not change when adding V2");
-    }
-}
 const POT: u64 = 200_000_000;
 
 #[test]
@@ -1370,4 +1331,51 @@ fn joining_enforces_timing_bounds_and_lobby_exits_end_at_the_first_pick() {
             split(),
         ));
     }
+}
+
+/// The ceiling MAX_FEE in contracts/fourk.ag.
+const MAX_FEE: u64 = 2_000_000;
+
+fn split_paying_fee(fee: u64) -> Vec<(ScriptPublicKey, u64)> {
+    let each = (POT - fee) / 2;
+    vec![(spk(1), each), (spk(2), each)]
+}
+
+#[test]
+fn the_self_funded_split_pays_at_most_the_fee_ceiling() {
+    // The untouched first round splits after one picking window: the pot
+    // pays the crank fee, never more than MAX_FEE.
+    let stalled = || run(initial(), None, EntryCall::new("split_timeout"), 1000, 0, 1200, split_paying_fee(40_000));
+    ok(stalled());
+    ok(run(initial(), None, EntryCall::new("split_timeout"), 1000, 0, 1200, split_paying_fee(MAX_FEE)));
+    rejected(run(
+        initial(),
+        None,
+        EntryCall::new("split_timeout"),
+        1000,
+        0,
+        1200,
+        split_paying_fee(MAX_FEE + 2),
+    ));
+}
+
+#[test]
+fn timing_proofs_cannot_be_forged_by_encoding() {
+    // A revealed pick owes the opponent a resolve within the reveal grace
+    // (600): the revealer's claim proves the age with its sequence. A
+    // sequence with the disable bit set, or the "final" all-ones value,
+    // must not count as an age.
+    let shown = revealed(&committed(&started(), 1, 2200, 1), 1);
+    let claim = || timeout(1);
+    let win = || vec![(spk(1), POT)];
+    ok(run(shown.clone(), None, claim(), 2300, 0, 600, win()));
+    rejected(run(shown.clone(), None, claim(), 2300, 0, 600 | (1 << 63), win()));
+    rejected(run(shown.clone(), None, claim(), 2300, 0, u64::MAX, win()));
+    // A lone timely pick's claim proves the cutoff with its lock time. A
+    // lock time in the timestamp range (>= 5e11) is a different clock and
+    // must not satisfy a DAA-score gate.
+    let lone = committed(&started(), 1, 2200, 1);
+    ok(run(lone.clone(), None, timeout(1), 2100, 2200, 0, win()));
+    rejected(run(lone.clone(), None, timeout(1), 2100, 500_000_000_000 + 2200, 0, win()));
+    rejected(run(lone, None, timeout(1), 2100, 2200, u64::MAX, win()));
 }

@@ -11,7 +11,7 @@ test("home promotes optional stakes without adding money copy to free gameplay",
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await page.getByRole("button", { name: "about", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("You can also play for stakes.");
-  await expect(page.getByRole("dialog")).toContainText("testnet KAS");
+  await expect(page.getByRole("dialog")).toContainText("any stakes are test money");
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await page.getByRole("button", { name: "Private Game", exact: true }).click();
   await expect(page.getByLabel("Invite link", { exact: true })).toBeVisible();

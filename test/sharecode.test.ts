@@ -134,7 +134,10 @@ describe("binary share codes", () => {
   test.each([
     ["truncated", (b: Uint8Array) => b.slice(0, b.length - 3)],
     ["trailing bytes", (b: Uint8Array) => Uint8Array.from([...b, 0])],
-    ["profile bit without a profile section", (b: Uint8Array) => Uint8Array.from([b[0]! | 0x80, ...b.slice(1)])],
+    [
+      "profile bit without a profile section",
+      (b: Uint8Array) => Uint8Array.from([b[0]! | 0x80, ...b.slice(1)]),
+    ],
     // joined layout: flags(1) + 4 * 32 hashes puts the board-length byte at 129
     ["bad board length", (b: Uint8Array) => Uint8Array.from(b.map((x, i) => (i === 129 ? 99 : x)))],
   ])("corrupt code (%s) throws instead of decoding garbage", (_label, corrupt) => {
@@ -244,10 +247,13 @@ describe("fourk mode in share codes", () => {
     reveal1: 0,
     reveal2: 0,
     pendingWin: 0,
+    pickDeadline: 0,
+    firstCommitter: 0,
+    revealTimeout: 600,
   };
 
   test("an open fourk lobby round-trips with its mode", () => {
-    const m: Match = { ...match({}), mode: "fourk", simul: zeroCore };
+    const m: Match = { ...match({}), mode: "fourk2", simul: zeroCore };
     expectEqual(m, roundTrip(m));
   });
 
@@ -257,8 +263,8 @@ describe("fourk mode in share codes", () => {
     board[6] = 2;
     const m: Match = {
       ...match({ p2: P2, board, moveCount: 2 }),
-      mode: "fourk",
-      simul: { ...zeroCore, round: 1 },
+      mode: "fourk2",
+      simul: { ...zeroCore, round: 1 } as NonNullable<Match["simul"]>,
     };
     expectEqual(m, roundTrip(m));
   });
@@ -266,16 +272,22 @@ describe("fourk mode in share codes", () => {
   test("mid-round slots travel: commitments and a reveal", () => {
     const bothCommitted: Match = {
       ...match({ p2: P2 }),
-      mode: "fourk",
-      simul: { ...zeroCore, commit1: H1, commit2: H2 },
+      mode: "fourk2",
+      simul: {
+        ...zeroCore,
+        commit1: H1,
+        commit2: H2,
+        pickDeadline: 50_000,
+        firstCommitter: 1,
+      } as NonNullable<Match["simul"]>,
     };
     expectEqual(bothCommitted, roundTrip(bothCommitted));
 
     // After the first reveal: the revealer's commitment is zeroed.
     const halfRevealed: Match = {
       ...match({ p2: P2 }),
-      mode: "fourk",
-      simul: { ...zeroCore, round: 3, commit2: H2, reveal1: 4 },
+      mode: "fourk2",
+      simul: { ...zeroCore, round: 3, commit2: H2, reveal1: 4 } as NonNullable<Match["simul"]>,
     };
     expectEqual(halfRevealed, roundTrip(halfRevealed));
   });
@@ -288,8 +300,8 @@ describe("fourk mode in share codes", () => {
     }
     const pending: Match = {
       ...match({ p2: P2, board, moveCount: 7 }),
-      mode: "fourk",
-      simul: { ...zeroCore, round: 4, pendingWin: 1 },
+      mode: "fourk2",
+      simul: { ...zeroCore, round: 4, pendingWin: 1 } as NonNullable<Match["simul"]>,
     };
     expectEqual(pending, roundTrip(pending));
 
@@ -297,8 +309,14 @@ describe("fourk mode in share codes", () => {
     // that cannot exist on-chain.
     const contradictory: Match = {
       ...match({ p2: P2, board, moveCount: 7 }),
-      mode: "fourk",
-      simul: { ...zeroCore, round: 4, pendingWin: 2, commit1: H1 },
+      mode: "fourk2",
+      simul: {
+        ...zeroCore,
+        round: 4,
+        pendingWin: 2,
+        commit1: H1,
+        firstCommitter: 1,
+      } as NonNullable<Match["simul"]>,
     };
     expect(() => roundTrip(contradictory)).toThrow("pending win with round slots");
   });
@@ -306,8 +324,8 @@ describe("fourk mode in share codes", () => {
   test("mode composes with profiles, colour, and timing", () => {
     const m: Match = {
       ...match({ p2: P2, moveTimeout: 3000, deadline: 12_345 }),
-      mode: "fourk",
-      simul: { ...zeroCore, commit1: H1 },
+      mode: "fourk2",
+      simul: { ...zeroCore, commit1: H1, firstCommitter: 1 } as NonNullable<Match["simul"]>,
       profiles: { p1: { name: "Alice", avatar: "0123456789abcdef" } },
       p1Color: "blue" as const,
     };
@@ -322,8 +340,8 @@ describe("fourk mode in share codes", () => {
   test("an open lobby claiming round state is rejected", () => {
     const m: Match = {
       ...match({}),
-      mode: "fourk",
-      simul: { ...zeroCore, commit1: H1 },
+      mode: "fourk2",
+      simul: { ...zeroCore, commit1: H1, firstCommitter: 1 } as NonNullable<Match["simul"]>,
     };
     expect(() => roundTrip(m)).toThrow("open match with round state");
   });
@@ -331,19 +349,23 @@ describe("fourk mode in share codes", () => {
   test("both reveals set is rejected (unrepresentable in a stored state)", () => {
     const m: Match = {
       ...match({ p2: P2 }),
-      mode: "fourk",
-      simul: { ...zeroCore, reveal1: 3, reveal2: 5 },
+      mode: "fourk2",
+      simul: { ...zeroCore, reveal1: 3, reveal2: 5 } as NonNullable<Match["simul"]>,
     };
     expect(() => roundTrip(m)).toThrow("bad reveal");
   });
 
-  test("unknown mode byte and slot-mask bits are rejected", () => {
-    const good = encodeMatchBinary({ ...match({ p2: P2 }), mode: "fourk", simul: zeroCore });
-    // Mode section trails the code: [modeByte, roundVarint(0), slotMask(0)].
-    const modeAt = good.length - 3;
-    const badMode = Uint8Array.from(good.map((x, i) => (i === modeAt ? 3 : x)));
-    expect(() => decodeMatchBinary(badMode)).toThrow("unknown game mode");
-    const badMask = Uint8Array.from(good.map((x, i) => (i === good.length - 1 ? 0x40 : x)));
+  test("unknown and retired mode bytes, and slot-mask bits, are rejected", () => {
+    const good = encodeMatchBinary({ ...match({ p2: P2 }), mode: "fourk2", simul: zeroCore });
+    // Mode section trails the code: [modeByte, round 0, slotMask 0,
+    // pickDeadline 0, firstCommitter 0, revealTimeout varint(600) x2].
+    const modeAt = good.length - 7;
+    expect(good[modeAt]).toBe(2);
+    for (const retiredOrUnknown of [1, 3]) {
+      const bad = Uint8Array.from(good.map((x, i) => (i === modeAt ? retiredOrUnknown : x)));
+      expect(() => decodeMatchBinary(bad)).toThrow("unknown game mode");
+    }
+    const badMask = Uint8Array.from(good.map((x, i) => (i === modeAt + 2 ? 0x40 : x)));
     expect(() => decodeMatchBinary(badMask)).toThrow("bad slot mask");
   });
 });

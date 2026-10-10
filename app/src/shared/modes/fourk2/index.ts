@@ -20,7 +20,7 @@ export const fourk2Mode: GameMode = {
   // the shared draw crank applies as is.
   autoActions: (m, ctx) => [
     ...fourk2AutoActions(m, ctx),
-    ...sharedAutoActions(fourk2Mode, m).filter((a) => a.key !== "sudden-death"),
-    ...fourk2CapAction(m),
+    ...sharedAutoActions(fourk2Mode, m, ctx.myPk).filter((a) => a.key !== "sudden-death"),
+    ...fourk2CapAction(m, ctx.myPk),
   ],
 };

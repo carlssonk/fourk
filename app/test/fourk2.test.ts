@@ -284,11 +284,10 @@ describe("fourk2 engine", () => {
 });
 
 describe("registry", () => {
-  test("new games host on fourk2; legacy fourk records keep their mode", () => {
+  test("new games host on fourk2; a remembered legacy setting hosts fourk2", () => {
     expect(parseModeKey("fourk")).toBe("fourk2");
     expect(parseModeKey("classic")).toBe("classic");
     expect(parseModeKey(null)).toBe("fourk2");
     expect(modeOf(at()).meta.key).toBe("fourk2");
-    expect(modeOf({ ...at(), mode: "fourk" }).meta.key).toBe("fourk");
   });
 });

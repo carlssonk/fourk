@@ -48,7 +48,7 @@ export function mountCapHeader(seconds = 86400, failFirst = false) {
     return (
       <div className="mx-auto max-w-262">
         <GameHeader
-          mode={MODES.fourk.meta}
+          mode={MODES.fourk2.meta}
           moveTimeout={600}
           busy={false}
           ended={ended}

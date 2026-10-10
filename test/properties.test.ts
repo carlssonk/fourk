@@ -226,7 +226,7 @@ describe("liveness: no reachable state can strand the pot", () => {
         const stranger = "33".repeat(32);
         const exits = [
           () => claimDraw(s, ctx(stranger)),
-          () => suddenDeath(s, ctx(stranger, 0, s.deadline)),
+          () => suddenDeath(s, ctx(stranger, s.moveTimeout, s.deadline)),
         ];
         const payouts = exits.flatMap((exit) => {
           try {

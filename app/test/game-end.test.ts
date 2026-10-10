@@ -1,11 +1,11 @@
 import { expect, test } from "vitest";
 import { gameEnd } from "../src/shared/lib/result";
 import { FREE_STAKE, type Match } from "../src/shared/lib/match";
-import { ZERO_CORE } from "../src/shared/modes/fourk/core";
+import { zeroCore2 } from "../src/shared/modes/fourk2/core";
 
 const match: Match = {
   network: "testnet-10",
-  mode: "fourk",
+  mode: "fourk2",
   covenantId: "ab".repeat(32),
   txid: "cd".repeat(32),
   value: FREE_STAKE * 2n,
@@ -18,7 +18,7 @@ const match: Match = {
     moveTimeout: 600,
     deadline: 100_000,
   },
-  simul: { ...ZERO_CORE, pendingWin: 1 },
+  simul: { ...zeroCore2(600), pendingWin: 1 },
 };
 const money = /\b(pot|stake|payout|refund|balance|fee|winnings)\b/i;
 
@@ -35,7 +35,7 @@ test("a decided board shows both results without marking settlement complete", (
   });
   expect(gameEnd(match, "spectator")).toMatchObject({ title: "Red wins!", tone: "neutral" });
   expect(match.result).toBeUndefined();
-  expect(gameEnd({ ...match, simul: { ...ZERO_CORE } }, match.state.p1)?.title).toBe("You win!");
+  expect(gameEnd({ ...match, simul: zeroCore2(600) }, match.state.p1)?.title).toBe("You win!");
 });
 
 test("P2 wins, color overrides, and a second line are classified correctly", () => {
@@ -91,4 +91,71 @@ test("network reset overrides the board, and staked wins are not called paid ear
 test("unknown saved endings do not reintroduce old punctuation or emojis", () => {
   const ending = gameEnd(match, match.state.p1, "The game ended — reconnect later. 🎉")!;
   expect(ending.message).toBe("The game ended. Reconnect later.");
+});
+
+// Every ending the current modes write, each with the title it must read as.
+// Refund endings mention the split too, so a classifier that tests "split"
+// first once called a refunded first round "It's a draw! The board is full."
+test.each([
+  [
+    "The second pick never landed. The game was called off and the pot split evenly.",
+    "Game called off",
+    "The second pick never arrived, so nobody won or lost.",
+  ],
+  [
+    "The second pick arrived after the deadline. The game was called off and the pot split evenly.",
+    "Game called off",
+    "The second pick arrived too late, so nobody won or lost.",
+  ],
+  [
+    "Neither player picked before the timer ended. The pot split evenly.",
+    "It's a draw!",
+    "Neither player picked in time.",
+  ],
+  [
+    "The game stalled on both sides. It timed out and the pot split evenly.",
+    "It's a draw!",
+    "Neither player revealed in time.",
+  ],
+  [
+    "Time's up. The game hit its total time limit and the pot split evenly.",
+    "It's a draw!",
+    "The game reached its time limit.",
+  ],
+  [
+    "Time's up. The game hit its total time limit and you took the pot.",
+    "You win!",
+    "Your opponent ran out of time.",
+  ],
+  [
+    "Time's up. The game hit its total time limit and your opponent took the pot.",
+    "You lose",
+    "You ran out of time.",
+  ],
+  ["It's a draw. The board filled up with no winner.", "It's a draw!", "The board is full."],
+  [
+    "You both connected four in the same drop. The pot split evenly.",
+    "It's a draw!",
+    "You both connected four in the same round.",
+  ],
+  [
+    "The game was called off before anyone joined.",
+    "Game cancelled",
+    "This game ended before the first move.",
+  ],
+  [
+    "Your opponent ran out of time. You win by timeout.",
+    "You win!",
+    "Your opponent ran out of time.",
+  ],
+  ["The pick timer ran out and your opponent claimed the pot.", "You lose", "You ran out of time."],
+])("current ending reads right: %s", (result, title, message) => {
+  const ending = gameEnd(
+    { ...match, state: { ...match.state, board: new Uint8Array(42) } },
+    match.state.p1,
+    result,
+  )!;
+  expect(ending.title).toBe(title);
+  expect(ending.message).toBe(message);
+  expect(ending.message).not.toMatch(money);
 });

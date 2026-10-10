@@ -1,7 +1,13 @@
 {
   "name": "fourk-wasm",
   "type": "module",
+  "description": "Browser transaction builder for the fourk covenants",
   "version": "0.1.0",
+  "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/carlssonk/fourk"
+  },
   "files": [
     "fourk_wasm_bg.wasm",
     "fourk_wasm.js",

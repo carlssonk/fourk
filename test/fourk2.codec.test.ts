@@ -75,14 +75,9 @@ describe("fourk2 wire formats", () => {
     roundTrips(v2Match({ round: 4, pendingWin: 1 }, { board, moveCount: 4 }));
   });
 
-  test("the legacy mode byte still decodes as legacy fourk", () => {
-    const legacy: Match = { ...v2Match(), mode: "fourk", simul: { ...zeroCore2(600) } };
-    delete (legacy.simul as Partial<SimulCore2>).pickDeadline;
-    delete (legacy.simul as Partial<SimulCore2>).firstCommitter;
-    delete (legacy.simul as Partial<SimulCore2>).revealTimeout;
-    const decoded = decodeMatchBinary(encodeMatchBinary(legacy));
-    expect(decoded.mode).toBe("fourk");
-    expect(decoded.simul).toEqual(legacy.simul);
+  test("records of the retired first Fourk protocol are refused", () => {
+    const json = JSON.parse(matchToJson(v2Match()));
+    expect(() => matchFromJson(JSON.stringify({ ...json, mode: "fourk" }))).toThrow();
   });
 
   test("the observational acceptance stamp is stored, never shared", () => {

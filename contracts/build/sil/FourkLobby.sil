@@ -34,26 +34,6 @@ contract FourkLobby(
         int move_timeout;
         int deadline;
     }
-    struct SimulLobbyState {
-        // :: user declared fields
-        pubkey p1;
-        int move_timeout;
-        int deadline;
-    }
-    struct SimulMatchState {
-        // :: user declared fields
-        pubkey p1;
-        pubkey p2;
-        byte[42] board;
-        int round;
-        byte[32] commit1;
-        byte[32] commit2;
-        int reveal1;
-        int reveal2;
-        int pending_win;
-        int move_timeout;
-        int deadline;
-    }
     struct SimulV2MatchState {
         // :: user declared fields
         pubkey p1;

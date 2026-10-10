@@ -1,6 +1,6 @@
 import { beforeEach, expect, test, vi } from "vitest";
-import { fourkAutoActions } from "../src/shared/modes/fourk/actions";
-import { ZERO_CORE } from "../src/shared/modes/fourk/core";
+import { fourk2AutoActions } from "../src/shared/modes/fourk2/actions";
+import { zeroCore2 } from "../src/shared/modes/fourk2/core";
 import { FREE_STAKE, type Match } from "../src/shared/lib/match";
 import * as engine from "../src/shared/lib/engine";
 import { ensureFunds } from "../src/shared/lib/dispenser";
@@ -14,7 +14,7 @@ vi.mock("../src/shared/lib/dispenser", () => ({ ensureFunds: vi.fn() }));
 
 const match: Match = {
   network: "testnet-10",
-  mode: "fourk",
+  mode: "fourk2",
   covenantId: "ab".repeat(32),
   txid: "cd".repeat(32),
   value: FREE_STAKE * 2n,
@@ -27,12 +27,12 @@ const match: Match = {
     moveTimeout: 600,
     deadline: 100_000,
   },
-  simul: { ...ZERO_CORE, pendingWin: 1 },
+  simul: { ...zeroCore2(600), pendingWin: 1 },
 };
 const rpc = {} as engine.Rpc;
 const key = {} as engine.PrivateKey;
 const sweep = () =>
-  fourkAutoActions(match, { myPk: match.state.p1, role: "p1" }).find((a) => a.key === "sweep")!;
+  fourk2AutoActions(match, { myPk: match.state.p1, role: "p1" }).find((a) => a.key === "sweep")!;
 beforeEach(() => vi.clearAllMocks());
 
 test("the sweep is ready only when the chain reaches the challenge age", async () => {

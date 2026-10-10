@@ -69,7 +69,7 @@ export function encodeMatchBinary(m: Match): Uint8Array {
   const p2Prof = p2Joined ? m.profiles?.p2 : undefined;
   const p1Blue = m.p1Color === "blue";
   const timingStored = s.moveTimeout !== MOVE_TIMEOUT_DAA || s.deadline !== 0;
-  const modeStored = m.mode === "fourk" || m.mode === "fourk2";
+  const modeStored = m.mode === "fourk2";
   const hasExtension = !!(p1Prof || p2Prof) || p1Blue || timingStored || modeStored;
 
   let flags = network;
@@ -161,7 +161,7 @@ export function decodeMatchBinary(buf: Uint8Array): Match {
   let moveTimeout = MOVE_TIMEOUT_DAA;
   let deadline = 0;
   let simul: SimulCore | undefined;
-  let mode: "fourk" | "fourk2" | undefined;
+  let mode: "fourk2" | undefined;
   if (flags & 0x80) {
     const pf = takeByte(buf, i);
     if (pf & 0xe0) throw new Error("unknown share-code format version");

@@ -6,7 +6,7 @@ import { useCopy } from "@shared/components/useCopy";
 import * as cov from "@shared/lib/covenant";
 import { friendlyCatch } from "@shared/lib/errors";
 import { generatePhrase, parsePhrase } from "@shared/lib/mnemonic";
-import { fmtKas, fmtKasExact, parseKas } from "@shared/lib/match";
+import { NETWORK_ID, fmtKas, fmtKasExact, parseKas } from "@shared/lib/match";
 import {
   FEE_MARGIN,
   accountPanelAtom,
@@ -286,8 +286,10 @@ const CashOut = () => {
   // margin so it can still be played out. Free games don't count — the
   // guest key pays their fees out of dispenser funds.
   const ownedPk = ownedWallet()?.myPk;
-  const playing = !!ownedPk && unfinishedGamesOn(matches, ownedPk).length > 0;
-  const maxOut = balance === null ? null : playing ? bigMax(balance - FEE_MARGIN, 0n) : balance;
+  const open = ownedPk ? unfinishedGamesOn(matches, ownedPk).length : 0;
+  const playing = open > 0;
+  const reserve = FEE_MARGIN * BigInt(open);
+  const maxOut = balance === null ? null : playing ? bigMax(balance - reserve, 0n) : balance;
 
   const submit = async () => {
     setError(null);
@@ -355,7 +357,7 @@ const CashOut = () => {
       </div>
       {playing && (
         <p className="mb-2 text-xs text-dim">
-          We're keeping {fmtKas(FEE_MARGIN)} KAS aside so you can finish your open games.
+          We're keeping {fmtKas(reserve)} KAS aside so you can finish your open games.
         </p>
       )}
       {error && <p className="mb-2 text-sm text-red">{error}</p>}
@@ -482,6 +484,12 @@ const SignIn = () => {
         account you want to use.
         {accounts.length > 0 && " Your current account stays saved on this device."}
       </p>
+      {NETWORK_ID !== "mainnet" && (
+        <p className="mb-3 text-sm text-red">
+          This is a test version, and recovery phrases are kept in this browser. Only use a phrase
+          you created here, never one that holds real KAS.
+        </p>
+      )}
       <textarea
         className="input mb-2 h-20 resize-none"
         placeholder="recovery phrase…"

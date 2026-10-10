@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useAtomValue, useSetAtom } from "jotai";
 import { AccountChip, AccountPanel } from "@modules/account";
-import { Game } from "@modules/game";
+import { Game, MatchKeepers } from "@modules/game";
 import { Home } from "@modules/home";
 import { ConfirmDialog } from "@shared/components/ConfirmDialog";
 import { ConnectingScreen } from "@shared/components/ConnectingScreen";
@@ -83,6 +83,7 @@ export default function App() {
       </header>
       {accountAvailable && <AccountPanel />}
       <ConfirmDialog />
+      <MatchKeepers />
       <main className={`mx-auto ${connecting ? "flex w-full flex-1 flex-col" : ""}`}>
         {offline && (
           <div className="mx-auto mb-4 max-w-175 rounded-lg border border-red bg-red/10 px-3.5 py-2.5">

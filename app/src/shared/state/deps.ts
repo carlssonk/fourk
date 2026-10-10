@@ -28,8 +28,16 @@ export interface ChainOps {
     stake: bigint,
     timing: MatchTiming,
     modeKey: GameModeKey,
+    onSubmit?: (m: Match) => void,
   ): Promise<Match>;
-  joinMatch(key: PrivateKey, invite: Match, profile: PlayerProfile): Promise<Match>;
+  /** `onSubmit` sees the record-to-be just before the transaction leaves,
+   * so it can be stored first (a reload mid-submit must not lose it). */
+  joinMatch(
+    key: PrivateKey,
+    invite: Match,
+    profile: PlayerProfile,
+    onSubmit?: (m: Match) => void,
+  ): Promise<Match>;
   assertJoinableDeadline(invite: Match): Promise<void>;
 }
 
@@ -54,11 +62,11 @@ export const realChain: ChainOps = {
   async chainCheckpoint() {
     return cov.chainCheckpoint(await getRpc());
   },
-  async openMatch(key, stake, timing, modeKey) {
-    return cov.openMatch(await getRpc(), key, stake, timing, modeKey);
+  async openMatch(key, stake, timing, modeKey, onSubmit) {
+    return cov.openMatch(await getRpc(), key, stake, timing, modeKey, onSubmit);
   },
-  async joinMatch(key, invite, profile) {
-    return cov.joinMatch(await getRpc(), key, invite, profile);
+  async joinMatch(key, invite, profile, onSubmit) {
+    return cov.joinMatch(await getRpc(), key, invite, profile, onSubmit);
   },
   async assertJoinableDeadline(invite) {
     await cov.assertJoinableDeadline(await getRpc(), invite);

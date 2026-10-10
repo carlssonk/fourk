@@ -181,64 +181,75 @@ export const Game = ({ match }: Props) => {
   const submitDrop = async (m: Match, col: number) => {
     const key = seatKey();
     const rpc = await getRpc();
+    const low = await cov.chainCheckpoint(rpc);
     const outcome = await mode.actions.drop(rpc, key, m, col);
-    if (outcome.kind === "ended") {
-      // End on the finished position (lighting up the winning line) —
-      // the covenant is terminal, so the watcher will never deliver it.
-      finish(outcome.message, outcome.match);
-    } else {
+    if (outcome.kind === "continued") {
       updateMatch(outcome.match);
+      return;
     }
+    // A winning drop ends the game only once the chain took it: a timeout
+    // claim by the opponent can still win the input through another node.
+    const settled = await cov.awaitSettlement(rpc, m, low, 30_000);
+    if (settled?.status === "ended") {
+      // End on the finished position (lighting up the winning line) — the
+      // covenant is terminal, so the watcher will never deliver it.
+      const ours = settled.spend.kind === "winning_move";
+      finish(
+        ours ? outcome.message : mode.describeEnd(settled.spend, m, myPk),
+        ours ? outcome.match : mode.finalSnapshot(settled.spend, m),
+      );
+    } else if (settled?.status === "advanced") updateMatch(settled.match);
+  };
+
+  /** After a lost race for the game UTXO: wait for the winning transition
+   * to land and follow the chain to it. Null if the game ended instead or
+   * nothing showed up in time. */
+  const catchUp = async (from: Match): Promise<Match | null> => {
+    const rpc = await getRpc();
+    const checkpoint = loadCheckpoint(from.covenantId);
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const synced = await cov.syncMatch(rpc, from);
+      if (synced.status === "advanced") return synced.match;
+      if (synced.status === "terminated" && checkpoint) {
+        const followed = await cov.followChain(rpc, from, checkpoint).catch(() => null);
+        if (followed?.status === "advanced") return followed.match;
+        if (followed?.status === "ended") return null;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    return null;
   };
 
   const drop = (col: number) => {
     setPending({ onTxid: match.txid, col });
     runAction(async () => {
-      try {
-        await submitDrop(match, col);
-      } catch (e) {
-        // A stale-UTXO rejection means the pick raced another transition
-        // (usually the opponent's, landing mid-click). The pick itself is
-        // still what the player wants: resync and replay it against the
-        // fresh state, and only hand the click back if it no longer fits
-        // there (column full, game over, not our move anymore).
-        if (!isStaleMatchError(String((e as Error)?.message ?? e))) {
-          setPending(null);
-          throw e;
-        }
-        const rpc = await getRpc();
-        let { status, match: next } = await cov.syncMatch(rpc, match);
-        // A simultaneous secret pick cannot be enumerated. Trace the winning
-        // commit, allowing a short interval for its mempool spend to land.
-        const checkpoint = loadCheckpoint(match.covenantId);
-        for (let attempt = 0; attempt < 8 && status !== "advanced"; attempt++) {
-          if (status === "terminated" && checkpoint) {
-            const adopted = await cov.discoverAdvance(rpc, next, checkpoint);
-            if (adopted) {
-              next = adopted;
-              status = "advanced";
-              break;
-            }
-          }
-          await new Promise((resolve) => setTimeout(resolve, 300));
-          ({ status, match: next } = await cov.syncMatch(rpc, match));
-        }
-        if (status === "advanced") updateMatch(next);
-        const replayable =
-          status === "advanced" &&
-          cov.isActionable(next, myPk) &&
-          heightOf(next.state.board, col) < ROWS;
-        if (!replayable) {
-          setPending(null);
-          throw e;
-        }
-        setPending({ onTxid: next.txid, col });
+      // A stale-UTXO rejection (or a lost race the chain reports) means the
+      // pick raced another transition — usually the opponent's commit landing
+      // first, which a Fourk second pick must be rebuilt on. The pick itself
+      // is still what the player wants: follow the chain and replay it,
+      // repeatedly if the race recurs, while it still fits (column open, our
+      // move). Speed matters: near the cutoff the rebuilt pick has the rebase
+      // grace (~10 s after the opponent's pick) to be accepted.
+      let target = match;
+      for (let attempt = 0; ; attempt++) {
         try {
-          await submitDrop(next, col);
-        } catch (e2) {
-          // The chain said no twice — take the pick back and surface it.
-          setPending(null);
-          throw e2;
+          await submitDrop(target, col);
+          return;
+        } catch (e) {
+          if (!isStaleMatchError(String((e as Error)?.message ?? e)) || attempt >= 4) {
+            setPending(null);
+            throw e;
+          }
+          const next = await catchUp(target);
+          if (next) updateMatch(next);
+          const replayable =
+            next !== null && cov.isActionable(next, myPk) && heightOf(next.state.board, col) < ROWS;
+          if (!replayable) {
+            setPending(null);
+            throw e;
+          }
+          setPending({ onTxid: next.txid, col });
+          target = next;
         }
       }
     });
@@ -258,16 +269,26 @@ export const Game = ({ match }: Props) => {
           `Your opponent still has about ${mins} minute${mins === 1 ? "" : "s"} to move.`,
         );
       }
+      const low = await cov.chainCheckpoint(rpc);
       try {
         await mode.actions.claimTimeout(rpc, key, match);
-        finish("Your opponent ran out of time. You win by timeout.");
       } catch (e) {
         // The opponent may have moved (or another claim landed) at the last
         // second — resync instead of surfacing a spent-UTXO error.
         const { status, match: next } = await cov.syncMatch(rpc, match);
         if (status === "advanced") updateMatch(next);
         else if (status !== "terminated") throw e;
+        return;
       }
+      // The claim is in a mempool, which proves nothing yet: a late move can
+      // still win the input. Record the ending the chain actually accepted.
+      const settled = await cov.awaitSettlement(rpc, match, low, 30_000);
+      if (settled?.status === "ended")
+        finish(
+          mode.describeEnd(settled.spend, match, myPk),
+          mode.finalSnapshot(settled.spend, match),
+        );
+      else if (settled?.status === "advanced") updateMatch(settled.match);
     });
 
   // Cancellation is separate from Home, which always preserves live games.
@@ -475,7 +496,7 @@ export const Game = ({ match }: Props) => {
               disabled={!importVal.trim()}
               onClick={() =>
                 runAction(async () => {
-                  importMatch(importVal);
+                  await importMatch(importVal);
                   setImportVal("");
                 })
               }

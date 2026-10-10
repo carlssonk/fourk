@@ -24,15 +24,31 @@
  * caller's (ordered ABI argument lists — the builder checks count and type).
  */
 
+import { classifyFailure } from "./errors";
 import { fourk, kaspa } from "./sdk";
 import { NETWORK_ID, NETWORK_TYPE, fromHex, toHex, type Match, type PlayerProfile } from "./match";
 import { decodeProfileBytes, encodeProfileBytes } from "./sharecode";
 import type { State } from "./game";
 import type { SimulCore } from "../modes/fourk/core";
 
-const DUST = 20_000n;
+/** Smallest output worth creating: KIP-9 storage mass is C/value per
+ * output (C = 10^12) and a transaction over the 500k block limit can never
+ * be mined, so anything near 0.02 KAS is unspendable in practice; change
+ * below this goes to the fee instead. */
+const DUST = 3_000_000n;
+/** The mempool's floor since Toccata: 100 sompi per gram of fee mass
+ * (rusty-kaspa mining/src/mempool/config.rs, 100_000 sompi/kg). */
 const MIN_RELAY_FEERATE = 100n;
-export const FEE_HEADROOM = 2_000_000n;
+/** The covenant's fee ceiling for the self-funded split and winner doors
+ * (MAX_FEE in contracts/fourk.ag). A V2 split weighs ~15.4k grams, so the
+ * floor fee is ~77% of it: above ~130 sompi/g a fee sized off the priority
+ * estimate would make the covenant refuse the spend, so those doors pay the
+ * ceiling instead. */
+export const MAX_FEE = 2_000_000n;
+/** Funding headroom for one wallet-funded spend: a V2 commit or reveal
+ * carries the ~7.4 KB script, ~16k grams of fee mass, so this covers
+ * feerates up to ~300 sompi/g. */
+export const FEE_HEADROOM = 5_000_000n;
 
 export type Rpc = InstanceType<typeof kaspa.RpcClient>;
 export type PrivateKey = InstanceType<typeof kaspa.PrivateKey>;
@@ -125,10 +141,8 @@ export async function connect(url?: string): Promise<Rpc> {
 // they retry transparently; transaction submission gets special handling in
 // submitSpec() because a lost *response* doesn't mean a lost *transaction*.
 
-const TRANSIENT = /websocket|disconnect|not connected|connection|timed? ?out/i;
-
 export function isTransient(e: unknown): boolean {
-  return TRANSIENT.test(String((e as any)?.message ?? e));
+  return classifyFailure(e) === "transient";
 }
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -236,7 +250,16 @@ export async function fetchGameUtxo(
   match: Match,
 ): Promise<UtxoEntryLike | null> {
   const entries = await utxosAt(rpc, matchAddress(mode, match));
-  return entries.find((e) => entryTxId(e) === match.txid) ?? null;
+  // The covenant id too: anyone can pay a plain output to a game address,
+  // and a forged link naming that txid must not read as the live game.
+  return (
+    entries.find((e) => entryTxId(e) === match.txid && entryCovenantId(e) === match.covenantId) ??
+    null
+  );
+}
+
+export function entryCovenantId(entry: UtxoEntryLike): string {
+  return String(entry.entry?.covenantId ?? entry.covenantId ?? "");
 }
 
 /** Wait until the node's UTXO index reflects a freshly submitted game UTXO.
@@ -258,14 +281,189 @@ export async function untilIndexed(
   mode: ModeEngine,
   match: Match,
   spent?: Match,
+  lowHash?: string,
 ): Promise<Match> {
   for (let i = 0; i < 40; i++) {
     const entry = await fetchGameUtxo(rpc, mode, match);
     if (entry) return withEntry(match, entry);
-    if (spent && !(await fetchGameUtxo(rpc, mode, spent))) break;
+    if (spent && !(await fetchGameUtxo(rpc, mode, spent))) {
+      // The predecessor is gone: either our transaction was accepted (and its
+      // output may already be spent onward), or a conflicting one won — the
+      // opponent's, submitted through another node. Only the chain can tell
+      // them apart; returning our successor unasked would leave the player on
+      // a state that never existed, owing a move they think they made.
+      const late = await fetchGameUtxo(rpc, mode, match);
+      if (late) return withEntry(match, late);
+      if (!lowHash) throw new Error(LOST_RACE);
+      for (let look = 0; look < 6; look++) {
+        const winner = await acceptedSpendOf(rpc, spent.txid, lowHash);
+        if (winner === match.txid) return match; // ours, spent onward
+        if (winner) throw new Error(LOST_RACE);
+        await sleep(500); // the index moved before the acceptance data did
+      }
+      throw new Error(LOST_RACE);
+    }
     await sleep(500);
   }
   return match;
+}
+
+/** A continuation lost the race for the game UTXO. Classified "stale"
+ * (errors.ts), so callers resync and replay against the winner's state. */
+const LOST_RACE = "game UTXO not found: another transaction spent it first";
+
+// --- Chain tracing --------------------------------------------------------------
+//
+// What happened to a game UTXO is read off the chain itself: the blocks since
+// a checkpoint say which transactions spent it (a DAG can carry both sides of
+// a double spend), and the virtual chain says which one was accepted.
+
+/** A transaction found in a block spending output 0 of `prev`. */
+export interface RawSpend {
+  prev: string;
+  txid: string;
+  sigScript: string;
+  payload: string;
+  /** Output 0 as the node described it (verbose data), when it did. */
+  out0Address: string | null;
+  out0Value: bigint | null;
+}
+
+/** Each pass is one getBlocks page (~a mergeset-limited batch, about 25 s
+ * of a 10 BPS chain); 400 reach back roughly three hours. */
+const MAX_BLOCK_PAGES = 400;
+
+/**
+ * Every transaction in blocks after `lowHash` that spends output 0 of
+ * `startTxid`, or of a transaction found doing so: the covenant lineage,
+ * accepted or not. Block order is topological, so a spend is always seen
+ * after its parent. `complete` = the scan reached the tip. Throws if the
+ * node does not know `lowHash` (pruned).
+ */
+export async function lineageSpends(
+  rpc: Rpc,
+  startTxid: string,
+  lowHash: string,
+  maxPages = MAX_BLOCK_PAGES,
+): Promise<{ spends: RawSpend[]; complete: boolean }> {
+  const tracked = new Set([startTxid]);
+  const seen = new Set<string>();
+  const spends: RawSpend[] = [];
+  let low = lowHash;
+  for (let page = 0; page < maxPages; page++) {
+    const res: any = await withRetry(() =>
+      rpc.getBlocks({ lowHash: low, includeBlocks: true, includeTransactions: true }),
+    );
+    for (const block of res.blocks ?? []) {
+      for (const tx of block.transactions ?? []) {
+        const txid = String(tx.verboseData?.transactionId ?? tx.verbose_data?.transaction_id ?? "");
+        if (!txid || seen.has(txid)) continue;
+        for (const inp of tx.inputs ?? []) {
+          const outpoint = inp?.previousOutpoint ?? inp?.previous_outpoint;
+          const prev = outpoint ? String(outpoint.transactionId) : "";
+          if (!tracked.has(prev) || Number(outpoint.index ?? 0) !== 0) continue;
+          const out0 = tx.outputs?.[0];
+          const address = out0?.verboseData?.scriptPublicKeyAddress;
+          seen.add(txid);
+          tracked.add(txid);
+          spends.push({
+            prev,
+            txid,
+            sigScript: String(inp.signatureScript ?? inp.signature_script ?? ""),
+            payload: String(tx.payload ?? ""),
+            out0Address: address ? String(address) : null,
+            out0Value: out0?.value !== undefined ? BigInt(out0.value) : null,
+          });
+          break;
+        }
+      }
+    }
+    const hashes: unknown[] = res.blockHashes ?? res.block_hashes ?? [];
+    const next = hashes.length ? String(hashes[hashes.length - 1]) : "";
+    // The page ends where it started: we've reached the tip.
+    if (!next || next === low) return { spends, complete: true };
+    low = next;
+  }
+  return { spends, complete: false };
+}
+
+/** Which of `txids` the virtual chain accepted after `lowHash`, each with
+ * its accepting chain block. Paged to the tip; keeps only the ids asked
+ * about (a busy chain accepts thousands of others). */
+export async function acceptedAmong(
+  rpc: Rpc,
+  lowHash: string,
+  txids: Set<string>,
+  maxPages = 200,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!txids.size) return out;
+  let start = lowHash;
+  for (let page = 0; page < maxPages && out.size < txids.size; page++) {
+    const res: any = await withRetry(() =>
+      rpc.getVirtualChainFromBlock({ startHash: start, includeAcceptedTransactionIds: true }),
+    );
+    for (const group of res.acceptedTransactionIds ?? res.accepted_transaction_ids ?? []) {
+      const hash = String(group.acceptingBlockHash ?? group.accepting_block_hash ?? "");
+      for (const id of group.acceptedTransactionIds ?? group.accepted_transaction_ids ?? [])
+        if (txids.has(String(id))) out.set(String(id), hash);
+    }
+    const added: unknown[] = res.addedChainBlockHashes ?? res.added_chain_block_hashes ?? [];
+    const last = added.length ? String(added[added.length - 1]) : "";
+    if (!last || last === start) break;
+    start = last;
+  }
+  return out;
+}
+
+/** Which of `candidates` are accepted: by a chain block after `lowHash`
+ * (mapped to its hash), or by the virtual alone (mapped to null). A
+ * transaction in the newest block is accepted by the virtual: its outputs
+ * are already in the UTXO index, but the virtual chain lists it only once
+ * the next block lands, and waiting for that would leave the client a block
+ * behind what the node already serves. */
+export async function acceptedOrLive(
+  rpc: Rpc,
+  lowHash: string,
+  candidates: RawSpend[],
+): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>(
+    await acceptedAmong(rpc, lowHash, new Set(candidates.map((c) => c.txid))),
+  );
+  for (const c of candidates) {
+    if (out.has(c.txid) || c.out0Address === null) continue;
+    const entries = await utxosAt(rpc, c.out0Address);
+    if (entries.some((e) => entryTxId(e) === c.txid)) out.set(c.txid, null);
+  }
+  return out;
+}
+
+const chainBlockScores = new Map<string, number>();
+
+/** A chain block's DAA score: the acceptance score of every transaction it
+ * accepted — what OpTxInputDaaScore reads for their outputs. */
+export async function chainBlockDaa(rpc: Rpc, hash: string): Promise<number | null> {
+  const known = chainBlockScores.get(hash);
+  if (known !== undefined) return known;
+  const block: any = await withRetry(() => rpc.getBlock({ hash, includeTransactions: false }));
+  const daa = block?.block?.header?.daaScore ?? block?.block?.header?.daa_score;
+  if (daa === undefined) return null;
+  const score = Number(BigInt(daa));
+  chainBlockScores.set(hash, score);
+  return score;
+}
+
+/** The accepted transaction spending output 0 of `prev` after `lowHash`,
+ * or null when none is accepted (yet). */
+export async function acceptedSpendOf(
+  rpc: Rpc,
+  prev: string,
+  lowHash: string,
+): Promise<string | null> {
+  const { spends } = await lineageSpends(rpc, prev, lowHash);
+  const direct = spends.filter((s) => s.prev === prev);
+  const accepted = await acceptedOrLive(rpc, lowHash, direct);
+  return direct.find((s) => accepted.has(s.txid))?.txid ?? null;
 }
 
 /**
@@ -280,20 +478,8 @@ export async function acceptedDaaOf(
   txid: string,
   lowHash: string,
 ): Promise<number | null> {
-  const res: any = await withRetry(() =>
-    rpc.getVirtualChainFromBlock({ startHash: lowHash, includeAcceptedTransactionIds: true }),
-  );
-  const groups: any[] = res.acceptedTransactionIds ?? res.accepted_transaction_ids ?? [];
-  for (const group of groups) {
-    const ids: unknown[] = group.acceptedTransactionIds ?? group.accepted_transaction_ids ?? [];
-    if (!ids.some((id) => String(id) === txid)) continue;
-    const hash = String(group.acceptingBlockHash ?? group.accepting_block_hash ?? "");
-    if (!hash) return null;
-    const block: any = await withRetry(() => rpc.getBlock({ hash, includeTransactions: false }));
-    const daa = block?.block?.header?.daaScore ?? block?.block?.header?.daa_score;
-    return daa === undefined ? null : Number(BigInt(daa));
-  }
-  return null;
+  const hash = (await acceptedAmong(rpc, lowHash, new Set([txid]))).get(txid);
+  return hash ? chainBlockDaa(rpc, hash) : null;
 }
 
 /** Select wallet UTXOs, largest first, until their sum covers `need`.
@@ -575,28 +761,61 @@ export async function submitSpec(
   rpc: Rpc,
   keys: PrivateKey[],
   specOf: (fee: bigint) => TxSpec,
+  opts: { maxFee?: bigint; beforeSubmit?: (built: BuiltTx) => void } = {},
 ): Promise<{ txid: string; built: BuiltTx }> {
   const draft = buildTx(specOf(0n), keys);
   const feerate = await currentFeerate(rpc);
-  const fee = BigInt(draft.mass.fee) * feerate;
+  const sized = BigInt(draft.mass.fee) * feerate;
+  const fee = opts.maxFee !== undefined && sized > opts.maxFee ? opts.maxFee : sized;
   const built = buildTx(specOf(fee), keys);
   const final = toSdkTransaction(built);
+  // Callers record what is about to exist (a new game) before it can: a
+  // reload mid-submit must not leave a stake on chain with no record of it.
+  opts.beforeSubmit?.(built);
+  const low = await chainCheckpoint(rpc);
   try {
     const res = await rpc.submitTransaction({ transaction: final as any, allowOrphan: false });
     return { txid: String(res.transactionId), built };
   } catch (e) {
     // A dropped websocket may have eaten the RESPONSE, not the transaction.
-    // Resubmit the identical tx once; "already known" then means success.
+    // Resubmit the identical tx once: the node already holding it means it
+    // went through. (Not any "already": "already spent by transaction" means
+    // another spend won the input.)
     if (!isTransient(e)) throw e;
     await sleep(2500);
     try {
       const res = await rpc.submitTransaction({ transaction: final as any, allowOrphan: false });
       return { txid: String(res.transactionId), built };
-    } catch (e2: any) {
-      if (/already/i.test(String(e2?.message ?? e2))) return { txid: built.id, built };
+    } catch (e2) {
+      if (classifyFailure(e2) === "known") return { txid: built.id, built };
+      // "Input already spent" after a lost response may mean the first copy
+      // went through and spent it: a cash-out that reported failure here
+      // would invite a second, real payment.
+      if (classifyFailure(e2) === "stale" && (await landed(rpc, built.id, low)))
+        return { txid: built.id, built };
       throw e2;
     }
   }
+}
+
+/** Is `txid` in the mempool, or accepted after `lowHash`? */
+async function landed(rpc: Rpc, txid: string, lowHash: string): Promise<boolean> {
+  try {
+    await rpc.getMempoolEntry({
+      transactionId: txid,
+      includeOrphanPool: false,
+      filterTransactionPool: false,
+    } as any);
+    return true;
+  } catch {
+    /* not pending: maybe accepted already */
+  }
+  for (let i = 0; i < 3; i++) {
+    if ((await acceptedAmong(rpc, lowHash, new Set([txid])).catch(() => new Map())).has(txid))
+      return true;
+    await sleep(1000);
+  }
+  return false;
 }
 
 function bigMax(a: bigint, b: bigint): bigint {
@@ -615,9 +834,18 @@ export async function sendTo(
   amount: bigint | "all",
 ): Promise<{ txid: string; amount: bigint }> {
   const myPrefix = walletAddress(key).split(":")[0]!;
-  if (!kaspa.Address.validate(dest) || new kaspa.Address(dest).prefix !== myPrefix)
+  // The SDK's address parser can trap the wasm on crafted input (an empty or
+  // wrong-length payload under a valid checksum) instead of returning false:
+  // anything it can't parse cleanly is just a bad address.
+  let destSpk: ReturnType<typeof kaspa.payToAddressScript>;
+  try {
+    if (!kaspa.Address.validate(dest)) throw new Error("invalid");
+    const address = new kaspa.Address(dest);
+    if (address.prefix !== myPrefix) throw new Error("wrong network");
+    destSpk = kaspa.payToAddressScript(address);
+  } catch {
     throw new Error("BAD_ADDRESS");
-  const destSpk = kaspa.payToAddressScript(new kaspa.Address(dest));
+  }
 
   const sweep = amount === "all";
   if (!sweep && amount < DUST) throw new Error("LOW_BALANCE");
@@ -665,29 +893,40 @@ export async function openCovenant(
   key: PrivateKey,
   mode: ModeEngine,
   genesis: Match,
+  opts: { beforeSubmit?: (covenantId: string, txid: string) => void } = {},
 ): Promise<{ covenantId: string; txid: string }> {
   const stake = genesis.value;
   const funding = await pickFunding(rpc, key, stake + FEE_HEADROOM);
   const changeSpk = kaspa.payToAddressScript(new kaspa.Address(walletAddress(key)));
   const pk = walletPubkey(key);
 
-  const { txid, built } = await submitSpec(rpc, [key], (fee) => ({
-    network: NETWORK_ID,
-    inputs: funding.map((f) => fundingInput(f, 0, pk)),
-    outputs: withChange(
-      [
-        {
-          kind: "genesis",
-          actor: mode.actorOf(genesis),
-          state: mode.stateOf(genesis),
-          authorizingInput: 0,
-          value: stake.toString(),
-        },
-      ],
-      changeSpk,
-      fundingTotal(funding) - stake - fee,
-    ),
-  }));
+  const { txid, built } = await submitSpec(
+    rpc,
+    [key],
+    (fee) => ({
+      network: NETWORK_ID,
+      inputs: funding.map((f) => fundingInput(f, 0, pk)),
+      outputs: withChange(
+        [
+          {
+            kind: "genesis",
+            actor: mode.actorOf(genesis),
+            state: mode.stateOf(genesis),
+            authorizingInput: 0,
+            value: stake.toString(),
+          },
+        ],
+        changeSpk,
+        fundingTotal(funding) - stake - fee,
+      ),
+    }),
+    {
+      beforeSubmit: (b) => {
+        const id = b.outputs[0]?.covenant?.covenantId;
+        if (id) opts.beforeSubmit?.(id, b.id);
+      },
+    },
+  );
   const covenantId = built.outputs[0]?.covenant?.covenantId;
   if (!covenantId) throw new Error("genesis output carries no covenant id");
   return { covenantId, txid };
@@ -707,7 +946,7 @@ export async function continuation(
   next: { state: State; simul?: SimulCore },
   potDelta: bigint,
   payload = "",
-  opts: { gameUtxo?: UtxoEntryLike } = {},
+  opts: { gameUtxo?: UtxoEntryLike; beforeSubmit?: (next: Match) => void } = {},
 ): Promise<Match> {
   // A caller that derived `next` from the input's acceptance score (fourk2)
   // hands over the entry it read, so the successor and the spend agree.
@@ -724,20 +963,28 @@ export async function continuation(
     value: nextValue,
   });
 
-  const { txid } = await submitSpec(rpc, [key], (fee) => ({
-    network: NETWORK_ID,
-    payload,
-    inputs: [
-      gameInput(mode, match, gameUtxo, entry, args),
-      ...funding.map((f) => fundingInput(f, 0, pk)),
-    ],
-    outputs: withChange(
-      [successorOutput(mode, nextMatch, 0, nextValue)],
-      changeSpk,
-      fundingTotal(funding) - potDelta - fee,
-    ),
-  }));
-  return untilIndexed(rpc, mode, { ...nextMatch, txid }, match);
+  // From before the submit: if a conflicting transaction wins the game UTXO,
+  // untilIndexed reads which one the chain accepted from here.
+  const lowHash = await chainCheckpoint(rpc);
+  const { txid } = await submitSpec(
+    rpc,
+    [key],
+    (fee) => ({
+      network: NETWORK_ID,
+      payload,
+      inputs: [
+        gameInput(mode, match, gameUtxo, entry, args),
+        ...funding.map((f) => fundingInput(f, 0, pk)),
+      ],
+      outputs: withChange(
+        [successorOutput(mode, nextMatch, 0, nextValue)],
+        changeSpk,
+        fundingTotal(funding) - potDelta - fee,
+      ),
+    }),
+    { beforeSubmit: (b) => opts.beforeSubmit?.({ ...nextMatch, txid: b.id }) },
+  );
+  return untilIndexed(rpc, mode, { ...nextMatch, txid }, match, lowHash);
 }
 
 /** Signed terminal door (cancel / winning_move / claim_forfeit / claim_timeout
@@ -784,12 +1031,17 @@ export async function pinnedWinner(
   const gameUtxo = opts.gameUtxo ?? (await fetchGameUtxo(rpc, mode, match));
   if (!gameUtxo) throw new Error("game UTXO not found on chain. Sync first");
 
-  const { txid } = await submitSpec(rpc, [], (fee) => ({
-    network: NETWORK_ID,
-    lockTime: lockTime.toString(),
-    inputs: [gameInput(mode, match, gameUtxo, entry, [], sequence)],
-    outputs: [p2pkOutput(winnerPkHex, match.value - fee)],
-  }));
+  const { txid } = await submitSpec(
+    rpc,
+    [],
+    (fee) => ({
+      network: NETWORK_ID,
+      lockTime: lockTime.toString(),
+      inputs: [gameInput(mode, match, gameUtxo, entry, [], sequence)],
+      outputs: [p2pkOutput(winnerPkHex, match.value - fee)],
+    }),
+    { maxFee: MAX_FEE },
+  );
   return txid;
 }
 
@@ -819,15 +1071,20 @@ export async function pinnedSplit(
   const gameUtxo = opts.gameUtxo ?? (await fetchGameUtxo(rpc, mode, match));
   if (!gameUtxo) throw new Error("game UTXO not found on chain. Sync first");
 
-  const { txid } = await submitSpec(rpc, signed ? [key] : [], (fee) => {
-    const each = (match.value - fee) / 2n;
-    return {
-      network: NETWORK_ID,
-      lockTime: lockTime.toString(),
-      inputs: [gameInput(mode, match, gameUtxo, entry, args, sequence)],
-      outputs: [p2pkOutput(match.state.p1, each), p2pkOutput(match.state.p2, each)],
-    };
-  });
+  const { txid } = await submitSpec(
+    rpc,
+    signed ? [key] : [],
+    (fee) => {
+      const each = (match.value - fee) / 2n;
+      return {
+        network: NETWORK_ID,
+        lockTime: lockTime.toString(),
+        inputs: [gameInput(mode, match, gameUtxo, entry, args, sequence)],
+        outputs: [p2pkOutput(match.state.p1, each), p2pkOutput(match.state.p2, each)],
+      };
+    },
+    { maxFee: MAX_FEE },
+  );
 
   if (awaitRefund) {
     // Wait until the index reflects this spend (our refund appearing means
@@ -877,14 +1134,31 @@ export function entryTags(actor: string): Record<string, string> {
   return table;
 }
 
+/** Classify a found spend by its entry dispatch tag: an entry call's
+ * signature script ends with the 4-byte tag push, then the pushed redeem
+ * script; `tags` is the spent actor's tag table. Null = not an entry call
+ * this actor knows. */
+export function spendInfo(raw: RawSpend, tags: Record<string, string>): SpendInfo | null {
+  const tokens = scriptTokens(raw.sigScript);
+  const tag = tokens.length >= 2 ? tokens[tokens.length - 2]!.data : null;
+  const kind = tag && tag.length === 4 ? tags[toHex(tag)] : undefined;
+  if (!kind) return null;
+  const call = tokens.slice(0, Math.max(0, tokens.length - 2));
+  return {
+    kind,
+    txid: raw.txid,
+    pushes: call.filter((t) => t.data !== null).map((t) => t.data!),
+    args: call.map(tokenToSmallInt).filter((v): v is number => v !== null),
+    payload: raw.payload,
+  };
+}
+
 /**
- * Find the transaction that spent the current game UTXO in blocks since
- * `lowHash` and classify which covenant entrypoint it called: an entry call's
- * signature script ends with the 4-byte dispatch tag push, then the pushed
- * redeem script, and `tags` is the actor's tag table. Pages through
- * getBlocks up to the tip — a backgrounded tab can wake hours past its
- * checkpoint. Returns null if the spend is outside the scanned window;
- * throws if `lowHash` is unknown to the node (e.g. pruned).
+ * The spend of the current game UTXO the chain ACCEPTED in blocks since
+ * `lowHash`, classified by entrypoint. A DAG can hold both sides of a double
+ * spend in blocks; only the accepted one says what happened. Null if no
+ * accepted spend is visible yet; throws if `lowHash` is unknown to the node
+ * (e.g. pruned).
  */
 export async function discoverSpend(
   rpc: Rpc,
@@ -892,43 +1166,11 @@ export async function discoverSpend(
   lowHash: string,
   tags: Record<string, string>,
 ): Promise<SpendInfo | null> {
-  let low = lowHash;
-  for (let page = 0; page < 50; page++) {
-    const res: any = await withRetry(() =>
-      rpc.getBlocks({ lowHash: low, includeBlocks: true, includeTransactions: true }),
-    );
-    for (const block of res.blocks ?? []) {
-      for (const tx of block.transactions ?? []) {
-        for (const inp of tx.inputs ?? []) {
-          const outpoint = inp?.previousOutpoint ?? inp?.previous_outpoint;
-          if (
-            !outpoint ||
-            String(outpoint.transactionId) !== match.txid ||
-            Number(outpoint.index ?? 0) !== 0
-          )
-            continue;
-          const tokens = scriptTokens(String(inp.signatureScript ?? inp.signature_script ?? ""));
-          const tag = tokens.length >= 2 ? tokens[tokens.length - 2]!.data : null;
-          const kind = tag && tag.length === 4 ? tags[toHex(tag)] : undefined;
-          if (!kind) return null;
-          const call = tokens.slice(0, Math.max(0, tokens.length - 2));
-          return {
-            kind,
-            txid: String(tx.verboseData?.transactionId ?? tx.verbose_data?.transaction_id ?? ""),
-            pushes: call.filter((t) => t.data !== null).map((t) => t.data!),
-            args: call.map(tokenToSmallInt).filter((v): v is number => v !== null),
-            payload: String(tx.payload ?? ""),
-          };
-        }
-      }
-    }
-    const hashes: unknown[] = res.blockHashes ?? res.block_hashes ?? [];
-    const next = hashes.length ? String(hashes[hashes.length - 1]) : "";
-    // The page ends where it started: we've reached the tip.
-    if (!next || next === low) return null;
-    low = next;
-  }
-  return null;
+  const { spends } = await lineageSpends(rpc, match.txid, lowHash);
+  const direct = spends.filter((sp) => sp.prev === match.txid);
+  const accepted = await acceptedOrLive(rpc, lowHash, direct);
+  const raw = direct.find((sp) => accepted.has(sp.txid));
+  return raw ? spendInfo(raw, tags) : null;
 }
 
 interface ScriptToken {

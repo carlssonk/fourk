@@ -14,7 +14,6 @@ import {
   type State,
 } from "./game";
 import type { SimulCore } from "../modes/fourk/core";
-import { simulFromFlatJson, simulToFlatJson } from "../modes/fourk/wire";
 import { core2Of, validateCore2 } from "../modes/fourk2/core";
 import { simul2FromFlatJson, simul2ToFlatJson } from "../modes/fourk2/wire";
 import {
@@ -51,11 +50,11 @@ export interface Match {
   txid: string;
   /** Current pot in sompi. */
   value: bigint;
-  /** Game mode; absent = classic alternating play. "fourk" is the legacy
-   * simultaneous commit-reveal protocol, "fourk2" the shared-deadline one —
-   * consensus state (the game address derives from it), so it always travels
-   * in share codes and stored records. */
-  mode?: "fourk" | "fourk2";
+  /** Game mode; absent = classic alternating play, "fourk2" the
+   * simultaneous shared-deadline protocol — consensus state (the game address
+   * derives from it), so it always travels in share codes and stored records.
+   * (The first simultaneous protocol, "fourk", is retired.) */
+  mode?: "fourk2";
   /** The round machine for the fourk modes (round, commitments, reveals; V2
    * adds readiness and the picking cutoff — see SimulCore2); consensus state
    * like `mode`. Absent on classic matches. */
@@ -197,7 +196,6 @@ export function matchToJson(m: Match): string {
       value: Number(m.value),
       moveTimeout: m.state.moveTimeout,
       deadline: m.state.deadline,
-      ...(m.mode === "fourk" && { mode: m.mode, ...simulToFlatJson(m.simul) }),
       ...(m.mode === "fourk2" && { mode: m.mode, ...simul2ToFlatJson(core2Of(m)) }),
       ...(m.acceptedDaa !== undefined && { acceptedDaa: m.acceptedDaa }),
       ...(m.profiles && { profiles: m.profiles }),
@@ -236,7 +234,7 @@ const matchJsonSchema = z.object({
   p1Color: z.enum(["red", "blue"]).optional(),
   result: z.string().optional(),
   // Fourk mode (simultaneous): the round machine rides along.
-  mode: z.enum(["fourk", "fourk2"]).optional(),
+  mode: z.enum(["fourk2"]).optional(),
   round: z.number().int().min(0).max(255).optional(),
   commit1: hex64.optional(),
   commit2: hex64.optional(),
@@ -274,7 +272,6 @@ export function matchFromJson(json: string): Match {
     state,
     txid: raw.txid,
     value: BigInt(raw.value),
-    ...(raw.mode === "fourk" && { mode: raw.mode, simul: simulFromFlatJson(raw) }),
     ...(simul2 && { mode: "fourk2" as const, simul: simul2 }),
     ...(raw.acceptedDaa !== undefined && { acceptedDaa: raw.acceptedDaa }),
     ...(raw.profiles && {

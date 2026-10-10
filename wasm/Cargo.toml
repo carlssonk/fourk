@@ -3,6 +3,9 @@ name = "fourk-wasm"
 version = "0.1.0"
 edition = "2021"
 publish = false
+description = "Browser transaction builder for the fourk covenants"
+license = "ISC"
+repository = "https://github.com/carlssonk/fourk"
 
 # Browser bindings for the Fourk covenants: embeds the Argent artifact
 # (argentc build of contracts/fourk.ag) and exposes two things to the app —

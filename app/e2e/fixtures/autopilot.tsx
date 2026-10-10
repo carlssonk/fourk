@@ -50,6 +50,13 @@ export function mountPayoutRetry(failure: "sequence" | "connection" | "schedule"
       finish: (message) => {
         output.textContent = message;
       },
+      // The duty spends nothing, so the chain has nothing to confirm: report
+      // the settlement a real payout would produce.
+      settle: async (_rpc, m) => ({
+        status: "ended",
+        match: m,
+        spend: { kind: "fixture", txid: "", pushes: [], args: [], payload: "" },
+      }),
     });
     return null;
   }

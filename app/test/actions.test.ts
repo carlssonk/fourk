@@ -123,18 +123,15 @@ describe("createGame", () => {
     const signingWallet = vi.fn(() => walletOf("guest", GUEST_PK));
     await createGame(deps(chain, fakeAccount({ hasOwnedAccount: () => false, signingWallet })));
     expect(signingWallet).toHaveBeenCalledWith({ staked: false });
-    expect(chain.ensureFunds).toHaveBeenCalledWith(
-      expect.anything(),
-      FREE_STAKE + SOMPI_PER_KAS / 2n,
-      {
-        staked: false,
-      },
-    );
+    expect(chain.ensureFunds).toHaveBeenCalledWith(expect.anything(), FREE_STAKE + SOMPI_PER_KAS, {
+      staked: false,
+    });
     expect(chain.openMatch).toHaveBeenCalledWith(
       expect.anything(),
       FREE_STAKE,
       expect.anything(),
       expect.anything(),
+      expect.any(Function),
     );
     expect(store.get(currentMatchAtom)).not.toBeNull();
   });
@@ -147,7 +144,7 @@ describe("createGame", () => {
     expect(signingWallet).toHaveBeenCalledWith({ staked: true });
     expect(chain.ensureFunds).toHaveBeenCalledWith(
       expect.anything(),
-      5n * SOMPI_PER_KAS + SOMPI_PER_KAS / 2n,
+      5n * SOMPI_PER_KAS + SOMPI_PER_KAS,
       {
         staked: true,
       },
@@ -157,6 +154,7 @@ describe("createGame", () => {
       5n * SOMPI_PER_KAS,
       expect.anything(),
       expect.anything(),
+      expect.any(Function),
     );
   });
 
@@ -251,5 +249,58 @@ describe("takeSeat", () => {
     expect(chain.assertJoinableDeadline).toHaveBeenCalled();
     expect(chain.joinMatch).toHaveBeenCalled();
     expect(store.get(currentMatchAtom)?.state.p2).toBe(GUEST_PK);
+  });
+});
+
+describe("a game is on record before its stake leaves", () => {
+  const ID = "ab".repeat(32);
+
+  test("an open records the lobby the moment it is submitted", async () => {
+    let seenDuringSubmit: Match[] = [];
+    const chain = fakeChain({
+      openMatch: vi.fn(async (_key, stake, _timing, _mode, onSubmit) => {
+        onSubmit?.(matchAt({ stake }));
+        seenDuringSubmit = store.get(matchesAtom);
+        return matchAt({ stake });
+      }),
+    });
+    await createGame(deps(chain, fakeAccount({ hasOwnedAccount: () => false })));
+    expect(seenDuringSubmit.map((m) => m.covenantId)).toEqual([ID]);
+  });
+
+  test("a refused open drops the record; a dropped connection keeps it", async () => {
+    for (const [message, kept] of [
+      ["RPC Server (remote error) -> Rejected transaction x: some rule", false],
+      ["WebSocket disconnected", true],
+    ] as const) {
+      store.set(matchesAtom, []);
+      const chain = fakeChain({
+        openMatch: vi.fn(async (_key, stake, _timing, _mode, onSubmit) => {
+          onSubmit?.(matchAt({ stake }));
+          throw new Error(message);
+        }),
+      });
+      await expect(
+        createGame(deps(chain, fakeAccount({ hasOwnedAccount: () => false }))),
+      ).rejects.toThrow();
+      expect(store.get(matchesAtom).length).toBe(kept ? 1 : 0);
+    }
+  });
+
+  test("the fee reserve grows with the games the key already sits in", async () => {
+    store.set(stakeAtom, 5n * SOMPI_PER_KAS);
+    store.set(matchesAtom, [
+      { ...matchAt({ p1: OWNED_PK, p2: HOST_PK }), covenantId: "01".repeat(32) },
+      { ...matchAt({ p1: HOST_PK, p2: OWNED_PK }), covenantId: "02".repeat(32) },
+      { ...matchAt({ p1: OWNED_PK, p2: HOST_PK }), covenantId: "03".repeat(32), result: "done" },
+    ]);
+    const chain = fakeChain();
+    await createGame(deps(chain, fakeAccount()));
+    // Two unfinished games on this key plus the new one.
+    expect(chain.ensureFunds).toHaveBeenCalledWith(
+      expect.anything(),
+      5n * SOMPI_PER_KAS + 3n * SOMPI_PER_KAS,
+      { staked: true },
+    );
   });
 });

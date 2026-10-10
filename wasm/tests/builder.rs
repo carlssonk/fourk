@@ -188,7 +188,7 @@ fn permissionless_pinned_split_is_self_funded() {
 /// app/src/shared/lib/dispenser.ts (harness/tests/drip_tests.rs prints them).
 #[test]
 fn dispenser_claim_as_a_static_script_input() {
-    const DRIP_REDEEM: &str = "7604441891a2876375b3519c6902b0047600050000000001a569b1b9be760400ca9a3ba063b9bf00c378876900c252790400ca9a3b94a26975687551676a68";
+    const DRIP_REDEEM: &str = "7604441891a2876375b3519c6902b0047600050000000001a569b1b9be760400ca9a3ba063b9bf00c378876900c252790400ca9a3b949c6975687551676a68";
     let claim_sig_script = format!("04441891a23f{DRIP_REDEEM}");
     let redeem = (0..DRIP_REDEEM.len())
         .step_by(2)
@@ -235,7 +235,7 @@ fn entry_tags_name_every_door() {
         lobby.keys().all(|tag| tag.len() == 8),
         "tags are 4 bytes of hex"
     );
-    let simul = entry_tags("FourkSimul").unwrap();
+    let simul = entry_tags("FourkSimulV2").unwrap();
     assert_eq!(simul.len(), 11);
     assert!(entry_tags("Nope").is_err());
 }

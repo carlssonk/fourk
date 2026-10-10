@@ -3,7 +3,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { STAKE_PRESETS, fmtDaaDuration, fmtKas } from "@shared/lib/match";
 import { MODES, MODE_LIST } from "@shared/modes/registry";
 import {
-  FEE_MARGIN,
+  ownedFeeReserve,
   accountPanelAtom,
   balanceAtom,
   gameModeAtom,
@@ -190,7 +190,7 @@ export const MatchSettings = () => {
               // Only once the balance is actually known — a null balance is
               // still loading, and greying the row out then reads as
               // "you're broke" to someone who isn't.
-              const short = s > 0n && balance !== null && balance < s + FEE_MARGIN;
+              const short = s > 0n && balance !== null && balance < s + ownedFeeReserve(1);
               return (
                 <Chip
                   key={String(s)}

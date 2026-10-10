@@ -558,12 +558,13 @@ fn run_sudden_death(
     active: BTreeMap<String, ArtifactValue>,
     payouts: Vec<(ScriptPublicKey, u64)>,
     lock_time: u64,
+    sequence: u64,
 ) -> RunResult {
     run_match_entry(
         EntryCall::new("sudden_death"),
         active,
         POT,
-        0,
+        sequence,
         lock_time,
         payouts,
         None,
@@ -1427,39 +1428,79 @@ fn claim_forfeit_must_end_the_lineage() {
 
 // -- sudden_death ----------------------------------------------------------
 
+// The cap waits out the mover's clock (sequence) as well as the deadline
+// (lock time); then a begun, unfinished game pays the waiting player — the
+// one a forfeit would pay — and only an unmoved or full board splits. A
+// player to move who stalls into the cap cannot turn an owed forfeit into a
+// split.
+
+const CLOCK: u64 = MOVE_TIMEOUT as u64;
+
+fn whole_pot_to(winner: &[u8; 32]) -> Vec<(ScriptPublicKey, u64)> {
+    vec![(p2pk_spk(winner), POT)]
+}
+
 #[test]
-fn sudden_death_splits_past_the_deadline() {
+fn sudden_death_pays_the_waiting_player_once_the_clock_runs_out() {
+    // play([3, 3]): two moves, p1 to move, so p2 is the waiting player.
+    let begun = || match_state(&play(&[3, 3]));
     assert_pass(
-        run_sudden_death(match_state(&play(&[3, 3])), half_split(), DEADLINE as u64),
-        "at the cap",
+        run_sudden_death(begun(), whole_pot_to(&pk(&p2())), DEADLINE as u64, CLOCK),
+        "at the cap, clock out",
     );
+    assert_pass(
+        run_sudden_death(begun(), whole_pot_to(&pk(&p2())), DEADLINE as u64 + 1, CLOCK + 1),
+        "past both",
+    );
+    assert_fail(
+        run_sudden_death(begun(), whole_pot_to(&pk(&p2())), DEADLINE as u64, CLOCK - 1),
+        "the mover's clock still running",
+    );
+    assert_fail(
+        run_sudden_death(begun(), half_split(), DEADLINE as u64, CLOCK),
+        "a stalling mover cannot force the split",
+    );
+    assert_fail(
+        run_sudden_death(begun(), whole_pot_to(&pk(&p1())), DEADLINE as u64, CLOCK),
+        "the pot to the player who owes the move",
+    );
+    // After a third move the roles swap.
     assert_pass(
         run_sudden_death(
-            match_state(&play(&[3, 3])),
-            half_split(),
-            DEADLINE as u64 + 1,
+            match_state(&play(&[3, 3, 4])),
+            whole_pot_to(&pk(&p1())),
+            DEADLINE as u64,
+            CLOCK,
         ),
-        "past the cap",
+        "p2 to move pays p1",
+    );
+}
+
+#[test]
+fn sudden_death_splits_an_unmoved_or_full_board() {
+    assert_pass(
+        run_sudden_death(match_state(&new_game()), half_split(), DEADLINE as u64, CLOCK),
+        "unmoved game",
+    );
+    assert_fail(
+        run_sudden_death(match_state(&new_game()), half_split(), DEADLINE as u64, CLOCK - 1),
+        "unmoved game, clock still running",
     );
     assert_pass(
-        run_sudden_death(match_state(&new_game()), half_split(), DEADLINE as u64),
-        "unmoved game",
+        run_sudden_death(match_state(&full_board()), half_split(), DEADLINE as u64, CLOCK),
+        "full board",
     );
 }
 
 #[test]
 fn sudden_death_rejects_early_or_uncapped() {
     assert_fail(
-        run_sudden_death(
-            match_state(&play(&[3, 3])),
-            half_split(),
-            DEADLINE as u64 - 1,
-        ),
+        run_sudden_death(match_state(&new_game()), half_split(), DEADLINE as u64 - 1, CLOCK),
         "one block early",
     );
     let uncapped = match_state_full(&play(&[3, 3]), pk(&p1()), pk(&p2()), MOVE_TIMEOUT, 0);
     assert_fail(
-        run_sudden_death(uncapped, half_split(), u32::MAX as u64),
+        run_sudden_death(uncapped, whole_pot_to(&pk(&p2())), u32::MAX as u64, CLOCK),
         "uncapped game",
     );
 }
@@ -1468,18 +1509,28 @@ fn sudden_death_rejects_early_or_uncapped() {
 fn sudden_death_rejects_bad_payouts() {
     let p1_spk = p2pk_spk(&pk(&p1()));
     let p2_spk = p2pk_spk(&pk(&p2()));
-    let active = match_state(&play(&[3, 3]));
+    let unmoved = match_state(&new_game());
     assert_fail(
-        run_sudden_death(active.clone(), vec![(p1_spk.clone(), POT)], DEADLINE as u64),
-        "whole pot to p1",
+        run_sudden_death(unmoved.clone(), vec![(p1_spk.clone(), POT)], DEADLINE as u64, CLOCK),
+        "whole pot to p1 on an unmoved board",
     );
     assert_fail(
         run_sudden_death(
-            active,
+            unmoved,
             vec![(p2_spk, POT / 2), (p1_spk, POT / 2)],
             DEADLINE as u64,
+            CLOCK,
         ),
         "swapped split",
+    );
+    assert_fail(
+        run_sudden_death(
+            match_state(&play(&[3, 3])),
+            vec![(p2pk_spk(&pk(&stranger())), POT)],
+            DEADLINE as u64,
+            CLOCK,
+        ),
+        "the pot to a stranger",
     );
 }
 
@@ -1488,9 +1539,9 @@ fn sudden_death_must_end_the_lineage() {
     assert_fail(
         run_match_entry(
             EntryCall::new("sudden_death"),
-            match_state(&play(&[3, 3])),
+            match_state(&new_game()),
             POT,
-            0,
+            CLOCK,
             DEADLINE as u64,
             half_split(),
             Some((match_state(&play(&[3, 3])), 1_000)),
@@ -1645,13 +1696,23 @@ fn claim_draw_is_single_input_self_funded() {
 
 #[test]
 fn sudden_death_is_single_input_self_funded() {
+    let unmoved = || match_state(&new_game());
     assert_pass(
-        run_sudden_death(match_state(&play(&[3, 3])), self_funded_split(40_000), DEADLINE as u64),
-        "self-funded sudden death with a real fee",
+        run_sudden_death(unmoved(), self_funded_split(40_000), DEADLINE as u64, CLOCK),
+        "self-funded split with a real fee",
     );
     assert_fail(
-        run_sudden_death(match_state(&play(&[3, 3])), self_funded_split(3 * MAX_FEE), DEADLINE as u64),
+        run_sudden_death(unmoved(), self_funded_split(3 * MAX_FEE), DEADLINE as u64, CLOCK),
         "fee above the ceiling starves the split",
+    );
+    let winner = |fee: u64| vec![(p2pk_spk(&pk(&p2())), POT - fee)];
+    assert_pass(
+        run_sudden_death(match_state(&play(&[3, 3])), winner(40_000), DEADLINE as u64, CLOCK),
+        "self-funded winner payout with a real fee",
+    );
+    assert_fail(
+        run_sudden_death(match_state(&play(&[3, 3])), winner(3 * MAX_FEE), DEADLINE as u64, CLOCK),
+        "fee above the ceiling shorts the winner",
     );
 }
 

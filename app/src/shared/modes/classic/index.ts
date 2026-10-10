@@ -15,5 +15,5 @@ export const classicMode: GameMode = {
   ...classicEngine,
   ...classicView,
   actions: classicActions,
-  autoActions: (m) => sharedAutoActions(classicMode, m),
+  autoActions: (m, ctx) => sharedAutoActions(classicMode, m, ctx.myPk),
 };

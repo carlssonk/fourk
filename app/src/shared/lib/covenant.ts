@@ -73,6 +73,7 @@ export async function openMatch(
   stake: bigint,
   timing: engine.MatchTiming,
   modeKey: GameModeKey = "classic",
+  onSubmit?: (m: Match) => void,
 ): Promise<Match> {
   const mode = MODES[modeKey];
   // A deadline is mandatory — the covenant refuses to seat a joiner without
@@ -98,7 +99,9 @@ export async function openMatch(
     value: stake,
     ...mode.genesisFields(timing),
   };
-  const { covenantId, txid } = await engine.openCovenant(rpc, key, mode, draft);
+  const { covenantId, txid } = await engine.openCovenant(rpc, key, mode, draft, {
+    beforeSubmit: (id, tx) => onSubmit?.({ ...draft, covenantId: id, txid: tx }),
+  });
   return engine.untilIndexed(rpc, mode, { ...draft, covenantId, txid });
 }
 
@@ -123,9 +126,12 @@ export async function joinMatch(
   key: PrivateKey,
   match: Match,
   profile?: PlayerProfile,
+  onSubmit?: (m: Match) => void,
 ): Promise<Match> {
   const mode = modeOf(match);
   const pkHex = engine.walletPubkey(key);
+  const withProfile = (m: Match): Match =>
+    profile?.name ? { ...m, profiles: { ...m.profiles, p2: profile } } : m;
   const nextState: State = { ...match.state, board: match.state.board.slice(), p2: pkHex };
   const joined = await engine.continuation(
     rpc,
@@ -137,8 +143,9 @@ export async function joinMatch(
     { state: nextState, ...mode.joinFields(match) },
     match.value,
     engine.profilePayloadHex(profile),
+    { beforeSubmit: (m) => onSubmit?.(withProfile(m)) },
   );
-  return profile?.name ? { ...joined, profiles: { ...joined.profiles, p2: profile } } : joined;
+  return withProfile(joined);
 }
 
 // --- Mode-generic doors ------------------------------------------------------
@@ -260,7 +267,11 @@ export async function adoptSpend(
   const derived = mode.rederiveSpend(match, spend);
   if (!derived) return null;
   const entries = await engine.utxosAt(rpc, matchAddress(derived));
-  const hit = entries.find((e) => !spend.txid || engine.entryTxId(e) === spend.txid);
+  const hit = entries.find(
+    (e) =>
+      (!spend.txid || engine.entryTxId(e) === spend.txid) &&
+      engine.entryCovenantId(e) === match.covenantId,
+  );
   if (!hit) return null;
   const p2Profile = spend.kind === "join" ? engine.profileFromPayload(spend.payload) : null;
   return {
@@ -269,20 +280,130 @@ export async function adoptSpend(
   };
 }
 
+/** Where a match stands after replaying the chain from a checkpoint:
+ *  - current   nothing spent the game UTXO
+ *  - advanced  continuations moved it; `match` is the newest state reached
+ *  - ended     a terminal door spent it; `match` is the state it spent
+ *  - unknown   the game UTXO is gone and nothing traceable explains it yet */
+export type Followed =
+  | { status: "current" | "advanced" | "unknown"; match: Match }
+  | { status: "ended"; match: Match; spend: engine.SpendInfo };
+
 /**
- * The blind-phase catch-up: trace the spend of the current game UTXO and
- * adopt whatever continuation it produced (a join's unknown pubkey, a
- * fourk commit's unknown hash, or any round spend a sleeping watcher
- * missed). Null for terminal spends and untraceable ones.
+ * Replay what the chain did to a match since `lowHash`, through any number
+ * of transitions: every ACCEPTED spend of the lineage, in order. Each
+ * continuation is re-derived by the mode and checked against the address the
+ * spending transaction actually paid, so a successor that was spent onward
+ * before this client looked (an opponent's commit and their reveal a second
+ * later) is followed rather than lost. The head is confirmed live on the
+ * UTXO index before it counts as current.
+ */
+export async function followChain(rpc: Rpc, match: Match, lowHash: string): Promise<Followed> {
+  const mode = modeOf(match);
+  const { spends } = await engine.lineageSpends(rpc, match.txid, lowHash);
+  const accepted = await engine.acceptedOrLive(rpc, lowHash, spends);
+  let cur = match;
+  let hops = 0;
+  const stuck = (): Followed => ({ status: hops ? "advanced" : "unknown", match: cur });
+  for (;;) {
+    const raw = spends.find((s) => s.prev === cur.txid && accepted.has(s.txid));
+    if (!raw) break;
+    const spend = engine.spendInfo(raw, engine.entryTags(mode.actorOf(cur)));
+    if (!spend) return stuck();
+    let base = cur;
+    if (base.acceptedDaa === undefined && mode.needsAcceptedDaa?.(base, spend)) {
+      const at = accepted.get(base.txid);
+      const daa = at
+        ? await engine.chainBlockDaa(rpc, at)
+        : at === null
+          ? null // accepted by the virtual only: its entry would carry the stamp
+          : await engine.acceptedDaaOf(rpc, base.txid, loadCheckpoint(base.covenantId) ?? lowHash);
+      if (daa === null) return stuck();
+      base = { ...base, acceptedDaa: daa };
+    }
+    const next = mode.rederiveSpend(base, spend);
+    if (!next) {
+      // A join is a continuation whatever the mode's classifier says (it
+      // only sorts round doors); one that won't re-derive is unexplained.
+      if (spend.kind !== "join" && mode.classifySpend(spend) === "terminal")
+        return { status: "ended", match: cur, spend };
+      return stuck();
+    }
+    // The transaction paid output 0 to the successor's address: our
+    // re-derivation is the state the covenant authorized.
+    if (raw.out0Address !== null && raw.out0Address !== matchAddress(next)) return stuck();
+    // A chain block's score, or none yet for a virtual-only acceptance (the
+    // head's UTXO entry supplies it below; an inner hop is always older).
+    const at = accepted.get(raw.txid);
+    const daa = at ? await engine.chainBlockDaa(rpc, at) : null;
+    const p2Profile = spend.kind === "join" ? engine.profileFromPayload(spend.payload) : null;
+    cur = {
+      ...engine.withoutEntry(next),
+      txid: raw.txid,
+      value: raw.out0Value ?? next.value,
+      ...(daa !== null && { acceptedDaa: daa }),
+      ...(p2Profile && { profiles: { ...match.profiles, p2: p2Profile } }),
+    };
+    hops++;
+  }
+  const entry = await engine.fetchGameUtxo(rpc, mode, cur);
+  if (entry) return { status: hops ? "advanced" : "current", match: engine.withEntry(cur, entry) };
+  return stuck();
+}
+
+/**
+ * The blind-phase catch-up: replay the chain from `lowHash` and return the
+ * newest state it reaches, or null when nothing moved or the match ended.
  */
 export async function discoverAdvance(
   rpc: Rpc,
   match: Match,
   lowHash: string,
 ): Promise<Match | null> {
-  const spend = await discoverSpend(rpc, match, lowHash);
-  if (!spend) return null;
-  return adoptSpend(rpc, match, spend, lowHash);
+  const followed = await followChain(rpc, match, lowHash);
+  return followed.status === "advanced" ? followed.match : null;
+}
+
+/**
+ * After submitting a terminal spend: wait until the chain says how the game
+ * UTXO was actually spent. A mempool accepting our transaction proves
+ * nothing — a late continuation (the opponent's resolve after the reveal
+ * grace) can still win the input through another node. Resolves "ended"
+ * with the accepted terminal spend (ours or not), "advanced" when a
+ * continuation won, and null when nothing settled within the wait (the
+ * watcher keeps following).
+ */
+export async function awaitSettlement(
+  rpc: Rpc,
+  match: Match,
+  lowHash: string,
+  waitMs = 60_000,
+): Promise<Followed | null> {
+  const until = Date.now() + waitMs;
+  while (Date.now() < until) {
+    const followed = await followChain(rpc, match, lowHash).catch(() => null);
+    if (followed && (followed.status === "ended" || followed.status === "advanced"))
+      return followed;
+    await engine.sleep(1000);
+  }
+  return null;
+}
+
+/**
+ * A pasted catch-up link, believed only as far as the chain backs it: its
+ * state must be the live covenant UTXO of this very match, and fresher than
+ * what we track. The link comes from the opponent — the one party who gains
+ * from blinding us with a decoy.
+ */
+export async function verifyImport(rpc: Rpc, current: Match, imported: Match): Promise<Match> {
+  if (imported.covenantId !== current.covenantId)
+    throw new Error("That link is for a different game.");
+  const entry = await engine.fetchGameUtxo(rpc, modeOf(imported), imported);
+  if (!entry) throw new Error("That link doesn't show the game's current state.");
+  const verified = engine.withEntry(imported, entry);
+  if (modeOf(current).progress(verified) < modeOf(current).progress(current))
+    throw new Error("That link is older than the game you have.");
+  return verified;
 }
 
 /** Re-exported for the watcher's ending classification. */

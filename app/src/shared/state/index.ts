@@ -1,6 +1,8 @@
 export {
   FEE_MARGIN,
   advanceConnecting,
+  feeReserve,
+  ownedFeeReserve,
   busyAtom,
   clearError,
   connectingAtom,

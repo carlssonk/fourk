@@ -12,7 +12,7 @@ import type { MatchTiming, ModeEngine, PrivateKey, Rpc, SpendInfo } from "../lib
 import type { State } from "../lib/game";
 import type { Match } from "../lib/match";
 
-export type GameModeKey = "classic" | "fourk" | "fourk2";
+export type GameModeKey = "classic" | "fourk2";
 
 export interface ModeMeta {
   key: GameModeKey;
@@ -125,10 +125,6 @@ export interface AutoAction {
    * distance to the deadline). Skipped when it exceeds the timer cap. */
   scheduleMs?(rpc: Rpc): Promise<number>;
   run(rpc: Rpc, key: PrivateKey, m: Match): Promise<AutoOutcome>;
-  /** finish() message when the post-failure sync says "terminated" — the
-   * opponent's client cranked the same permissionless door first. Omitted =
-   * stay silent and let the watcher classify the ending. */
-  onTerminated?: string;
 }
 
 export interface ModeActions {

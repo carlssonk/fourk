@@ -237,7 +237,7 @@ test("staked hosting, cancellation, cash-out validation and Max reset", async ({
   await page.goto("/");
   await page.getByRole("button", { name: "Your account", exact: true }).click();
   await page.getByRole("button", { name: "Cash out", exact: true }).click();
-  await expect(page.getByRole("dialog")).toContainText("keeping 0.5 KAS aside");
+  await expect(page.getByRole("dialog")).toContainText("keeping 1 KAS aside");
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await page.getByRole("button").filter({ hasText: "Waiting for an opponent" }).click();
   await expect(page.getByRole("button", { name: "Your account", exact: true })).toHaveCount(0);

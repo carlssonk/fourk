@@ -1,9 +1,8 @@
-//! The genesis-gate constants (move-timeout floor/ceiling, deadline limit)
-//! exist in four places that cannot import each other: the TypeScript
-//! reference (src/state.ts), the Argent contract (contracts/fourk.ag), and
-//! the two Rust suites' local fixtures (argent_tests.rs, simul_tests.rs).
-//! Comments used to be the only thing holding them together — this test
-//! parses each source and fails the moment any copy drifts.
+//! Constants that exist in several sources that cannot import each other —
+//! the TypeScript reference and app, the Argent and Silverscript contracts,
+//! the faucet script, the Rust fixtures. Comments used to be the only thing
+//! holding them together; these tests parse each source and fail the moment
+//! any copy drifts.
 
 use std::fs;
 use std::path::Path;
@@ -47,7 +46,6 @@ fn genesis_gate_constants_match_across_all_sources() {
         ("../src/state.ts", ["MIN_MOVE_TIMEOUT_DAA", "MAX_MOVE_TIMEOUT_DAA", "DEADLINE_LIMIT"]),
         ("../contracts/fourk.ag", ["MIN_MOVE_TIMEOUT", "MAX_MOVE_TIMEOUT", "DEADLINE_LIMIT"]),
         ("tests/argent_tests.rs", ["MIN_MOVE_TIMEOUT", "MAX_MOVE_TIMEOUT", "DEADLINE_LIMIT"]),
-        ("tests/simul_tests.rs", ["MIN_MOVE_TIMEOUT", "MAX_MOVE_TIMEOUT", "DEADLINE_LIMIT"]),
     ];
     for (file, names) in sources {
         let text = read(file);
@@ -56,4 +54,66 @@ fn genesis_gate_constants_match_across_all_sources() {
             assert_eq!(got, *want, "{name} in {file} diverged from the reference gates");
         }
     }
+}
+
+/// One value, every (file, name) copy of it.
+fn assert_same(label: &str, want: i64, copies: &[(&str, &str)]) {
+    for (file, name) in copies {
+        let got = extract(&read(file), file, name);
+        assert_eq!(got, want, "{label}: {name} in {file} diverged");
+    }
+}
+
+#[test]
+fn timing_and_fee_constants_match_across_all_sources() {
+    // The second commit's rebase grace: reference rules and covenant.
+    assert_same(
+        "rebase grace",
+        100,
+        &[
+            ("../src/simul-v2/rules.ts", "REBASE_GRACE_DAA"),
+            ("../contracts/fourk.ag", "REBASE_GRACE"),
+        ],
+    );
+    // The fee ceiling of the self-funded doors: the app clamps to it.
+    assert_same(
+        "fee ceiling",
+        2_000_000,
+        &[
+            ("../contracts/fourk.ag", "MAX_FEE"),
+            ("../app/src/shared/lib/engine.ts", "MAX_FEE"),
+            ("tests/argent_tests.rs", "MAX_FEE"),
+        ],
+    );
+}
+
+#[test]
+fn dispenser_constants_match_across_all_sources() {
+    assert_same(
+        "drip cooldown",
+        1200,
+        &[
+            ("../contracts/drip.sil", "COOLDOWN"),
+            ("../app/src/shared/lib/dispenser.ts", "COOLDOWN_DAA"),
+            ("../faucet/fund-dispenser.mjs", "COOLDOWN_DAA"),
+        ],
+    );
+    assert_same(
+        "drip size",
+        1_000_000_000,
+        &[
+            ("../contracts/drip.sil", "DRIP"),
+            ("../app/src/shared/lib/dispenser.ts", "DRIP_SOMPI"),
+            ("../faucet/fund-dispenser.mjs", "DRIP_SOMPI"),
+        ],
+    );
+    assert_same(
+        "dust floor",
+        3_000_000,
+        &[
+            ("../app/src/shared/lib/dispenser.ts", "DUST"),
+            ("../app/src/shared/lib/engine.ts", "DUST"),
+            ("../faucet/fund-dispenser.mjs", "DUST"),
+        ],
+    );
 }

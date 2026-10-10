@@ -27,26 +27,6 @@ contract FourkMatch(
         int move_timeout;
         int deadline;
     }
-    struct SimulLobbyState {
-        // :: user declared fields
-        pubkey p1;
-        int move_timeout;
-        int deadline;
-    }
-    struct SimulMatchState {
-        // :: user declared fields
-        pubkey p1;
-        pubkey p2;
-        byte[42] board;
-        int round;
-        byte[32] commit1;
-        byte[32] commit2;
-        int reveal1;
-        int reveal2;
-        int pending_win;
-        int move_timeout;
-        int deadline;
-    }
     struct SimulV2MatchState {
         // :: user declared fields
         pubkey p1;
@@ -276,15 +256,28 @@ contract FourkMatch(
 
         require(deadline > 0);
         require(tx.daa >= deadline);
+        require(this.ageDaa >= move_timeout);
         require(tx.inputs.length == 1);
-        require(tx.outputs.length == 2);
-        int half_floor = (tx.inputs[this.activeInputIndex].value - MAX_FEE) / 2;
-        byte[36] p1_lock = new ScriptPubKeyP2PK(p1);
-        byte[36] p2_lock = new ScriptPubKeyP2PK(p2);
-        require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
-        require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
-        require(tx.outputs[0].value == tx.outputs[1].value);
-        require(tx.outputs[0].value >= half_floor);
+        if (move_count > 0 && move_count < CELLS) {
+            require(tx.outputs.length == 1);
+            int waiting = 1 - (move_count % 2);
+            pubkey winner_pk = p1;
+            if (waiting == 1) {
+                winner_pk = p2;
+            }
+            byte[36] w_lock = new ScriptPubKeyP2PK(winner_pk);
+            require(tx.outputs[0].scriptPubKey == byte[](w_lock));
+            require(tx.outputs[0].value >= tx.inputs[this.activeInputIndex].value - MAX_FEE);
+        } else {
+            require(tx.outputs.length == 2);
+            int half_floor = (tx.inputs[this.activeInputIndex].value - MAX_FEE) / 2;
+            byte[36] p1_lock = new ScriptPubKeyP2PK(p1);
+            byte[36] p2_lock = new ScriptPubKeyP2PK(p2);
+            require(tx.outputs[0].scriptPubKey == byte[](p1_lock));
+            require(tx.outputs[1].scriptPubKey == byte[](p2_lock));
+            require(tx.outputs[0].value == tx.outputs[1].value);
+            require(tx.outputs[0].value >= half_floor);
+        }
     }
 
 }

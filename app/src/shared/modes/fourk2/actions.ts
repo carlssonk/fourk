@@ -37,8 +37,10 @@ async function assertLockReached(rpc: engine.Rpc, lockTime: bigint): Promise<voi
   if (lockTime === 0n) return;
   const info: any = await engine.withRetry(() => rpc.getBlockDagInfo());
   const now = BigInt(info.virtualDaaScore);
-  if (now < lockTime) {
-    const mins = Math.ceil(Number(lockTime - now) / 600);
+  // Consensus finalizes a lock time only once the score is PAST it
+  // (lock_time < DAA score, tx_validation_in_header_context.rs).
+  if (now <= lockTime) {
+    const mins = Math.max(1, Math.ceil(Number(lockTime + 1n - now) / 600));
     throw new Error(`pick deadline not reached (about ${mins} minute${mins === 1 ? "" : "s"})`);
   }
 }
@@ -305,7 +307,7 @@ async function capWaitMs(rpc: engine.Rpc, m: Match): Promise<number> {
   const { lockTime, sequence } = capGates(m, accepted);
   const info: any = await engine.withRetry(() => rpc.getBlockDagInfo());
   const now = Number(info.virtualDaaScore);
-  const lockWait = Number(lockTime) - now;
+  const lockWait = Number(lockTime) + 1 - now; // final once the score is past it
   const ageWait = Number(sequence) - (now - accepted);
   // Past-deadline claims fire now; the pad lets the node's clock catch up.
   return Math.max(0, Math.max(lockWait, ageWait) * 100 + 2000);
@@ -351,7 +353,6 @@ export function fourk2AutoActions(m: Match, ctx: AutoCtx): AutoAction[] {
           await claimSplitMatch(rpc, key, mm, p1Line, p2Line);
           return { kind: "finished", message: SPLIT_MESSAGE };
         },
-        onTerminated: SPLIT_MESSAGE,
       });
     } else if (core.pendingWin === myDisc) {
       out.push({
@@ -427,7 +428,6 @@ export function fourk2AutoActions(m: Match, ctx: AutoCtx): AutoAction[] {
         await splitTimeoutMatch(rpc, key, mm);
         return { kind: "finished", message: NO_PICKS_MESSAGE };
       },
-      onTerminated: NO_PICKS_MESSAGE,
     });
   } else if (!full && lateFirstCommit(m)) {
     out.push({
@@ -437,7 +437,6 @@ export function fourk2AutoActions(m: Match, ctx: AutoCtx): AutoAction[] {
         await splitTimeoutMatch(rpc, key, mm);
         return { kind: "finished", message: NO_PICKS_MESSAGE };
       },
-      onTerminated: NO_PICKS_MESSAGE,
     });
   } else if (!full && core.round === 0 && phase === "commit" && commitCount(core) === 1) {
     // The first round's lone pick: the refund waits out the picking window
@@ -454,7 +453,6 @@ export function fourk2AutoActions(m: Match, ctx: AutoCtx): AutoAction[] {
         await splitTimeoutMatch(rpc, key, mm);
         return { kind: "finished", message: FIRST_ROUND_STALL_MESSAGE };
       },
-      onTerminated: FIRST_ROUND_STALL_MESSAGE,
     });
   } else if (!full && core.round === 0 && lateSecondCommit(m)) {
     out.push({
@@ -464,7 +462,6 @@ export function fourk2AutoActions(m: Match, ctx: AutoCtx): AutoAction[] {
         await splitTimeoutMatch(rpc, key, mm);
         return { kind: "finished", message: FIRST_ROUND_LATE_MESSAGE };
       },
-      onTerminated: FIRST_ROUND_LATE_MESSAGE,
     });
   } else if (!full && phase === "reveal" && !salt && !lateSecondCommit(m)) {
     out.push({
@@ -479,20 +476,23 @@ export function fourk2AutoActions(m: Match, ctx: AutoCtx): AutoAction[] {
         await splitTimeoutMatch(rpc, key, mm);
         return { kind: "finished", message: STALL_MESSAGE };
       },
-      onTerminated: STALL_MESSAGE,
     });
   }
   return out;
 }
 
 /** The cap crank, scheduled on the exact gate the settlement carries. */
-export function fourk2CapAction(m: Match): AutoAction[] {
+export function fourk2CapAction(m: Match, myPk: string): AutoAction[] {
   if (isOpen(m.state) || m.state.deadline <= 0) return [];
+  // Personal, like describeEnd's: the result classifier reads "you took"
+  // and "your opponent took" as the win and the loss.
   const message = (mm: Match) => {
     const owner = capOwner(mm);
-    return owner === 0
-      ? "Time's up. The game hit its total time limit and the pot split evenly."
-      : "Time's up. The game hit its total time limit and the timeout winner took the pot.";
+    if (owner === 0)
+      return "Time's up. The game hit its total time limit and the pot split evenly.";
+    return (owner === 1 ? mm.state.p1 : mm.state.p2) === myPk
+      ? "Time's up. The game hit its total time limit and you took the pot."
+      : "Time's up. The game hit its total time limit and your opponent took the pot.";
   };
   return [
     {
@@ -503,7 +503,6 @@ export function fourk2CapAction(m: Match): AutoAction[] {
         await suddenDeathMatch(rpc, key, mm);
         return { kind: "finished", message: message(mm) };
       },
-      onTerminated: message(m),
     },
   ];
 }

@@ -13,7 +13,7 @@
 
 import { type State } from "../../lib/game";
 import { isOpen as stateIsOpen } from "../../lib/game";
-import type { Match } from "../../lib/match";
+import { isStaked, type Match } from "../../lib/match";
 import type { SpendInfo } from "../../lib/engine";
 import type { ClockSpec, ModeView, ModeViewSurface, StatusDescriptor, ViewCtx } from "../types";
 import {
@@ -142,7 +142,9 @@ function roundView(m: Match, ctx: ViewCtx, f: ViewFlags): RoundView {
   };
 }
 
-const CALLED_OFF = ". The game is called off and the pot split evenly.";
+/** The first round's refund, said without money in a free game. */
+const calledOff = (m: Match) =>
+  isStaked(m) ? ". The game is called off and both stakes return." : ". The game is called off.";
 
 function status(m: Match, ctx: ViewCtx, r: RoundView): StatusDescriptor {
   const iAmPlayer = ctx.role !== "spectator";
@@ -178,7 +180,7 @@ function status(m: Match, ctx: ViewCtx, r: RoundView): StatusDescriptor {
               : "Your opponent's pick arrived too late",
             bold: true,
           },
-          { text: CALLED_OFF },
+          { text: calledOff(m) },
         ],
         tone: "dim",
       };
@@ -201,7 +203,7 @@ function status(m: Match, ctx: ViewCtx, r: RoundView): StatusDescriptor {
     return {
       segments: [
         { text: "The first pick arrived after the deadline", bold: true },
-        { text: ". The round is settled as a draw." },
+        { text: ". The game ends in a draw." },
       ],
       tone: "dim",
     };
@@ -222,13 +224,13 @@ function status(m: Match, ctx: ViewCtx, r: RoundView): StatusDescriptor {
       return {
         segments: [
           { text: "Time is up", bold: true },
-          { text: ". Neither player picked, so the round is settled as a draw." },
+          { text: ". Neither player picked, so the game ends in a draw." },
         ],
         tone: "danger",
       };
     return firstRound
       ? {
-          segments: [{ text: "Your time is up", bold: true }, { text: CALLED_OFF }],
+          segments: [{ text: "Your time is up", bold: true }, { text: calledOff(m) }],
           tone: "danger",
         }
       : {
@@ -261,7 +263,7 @@ function status(m: Match, ctx: ViewCtx, r: RoundView): StatusDescriptor {
     return { segments: [{ text: "Revealing your pick…" }], tone: "dim", spinner: true };
   if (iAmPlayer && r.phase === "commit" && firstRound && ctx.clockExpired)
     return {
-      segments: [{ text: "Your opponent didn't pick in time", bold: true }, { text: CALLED_OFF }],
+      segments: [{ text: "Your opponent didn't pick in time", bold: true }, { text: calledOff(m) }],
       tone: "dim",
     };
   if (iAmPlayer && r.phase === "commit")
@@ -338,8 +340,11 @@ export const fourk2View = {
       ],
       board: {
         shownState,
+        // Past your own cutoff a pick can no longer count (a late second pick
+        // just hands the round over); the status says so instead.
         interactive:
           r.obligation === "commit" &&
+          !(ctx.clockExpired && started) &&
           !ctx.busy &&
           ctx.pendingCol === null &&
           !ctx.result &&

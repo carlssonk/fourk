@@ -4,7 +4,7 @@
 // becomes an independent drip lane on its own cooldown.
 //
 //     node fund-dispenser.mjs status
-//     node fund-dispenser.mjs <keyfile> [lanes=3] [tkas-per-lane=100] [--dry-run]
+//     node fund-dispenser.mjs <keyfile> [lanes=3] [tkas-per-lane=100] [--dry-run] [--force]
 //
 // `status` exits 0 when the dispenser looks healthy and 1 when a refill is
 // recommended, so a cron job can alert on the exit code (see RUNBOOK.md).
@@ -17,13 +17,20 @@ await init(fs.readFileSync(new URL("../vendor/kaspa-wasm/kaspa_bg.wasm", import.
 
 // Keep in sync with contracts/drip.sil and app/src/shared/lib/dispenser.ts —
 // harness/tests/drip_tests.rs prints it (`script_is_tiny`, --nocapture).
-const DRIP_REDEEM_HEX = "7604441891a2876375b3519c6902b0047600050000000001a569b1b9be760400ca9a3ba063b9bf00c378876900c252790400ca9a3b94a26975687551676a68";
+const DRIP_REDEEM_HEX = "7604441891a2876375b3519c6902b0047600050000000001a569b1b9be760400ca9a3ba063b9bf00c378876900c252790400ca9a3b949c6975687551676a68";
 
 // Keep in sync with COOLDOWN_DAA / DRIP_SOMPI / DUST in
 // app/src/shared/lib/dispenser.ts (which match contracts/drip.sil).
 const COOLDOWN_DAA = 1200n; // ~2 min: 1 DAA block ≈ 100 ms
 const DRIP_SOMPI = 1_000_000_000n; // 10 TKAS per claim
-const DUST = 20_000n; // a lane at or below this can't even pay its own fee
+// Storage mass (KIP-9) makes outputs below ~0.02 KAS unminable; claims
+// re-lock exactly balance - DRIP, so a lane whose remainder would fall
+// below this can never be claimed.
+const DUST = 3_000_000n;
+
+function claimable(value) {
+  return value <= DRIP_SOMPI ? value > DUST : value - DRIP_SOMPI >= DUST;
+}
 
 // Health thresholds for `status`: each free game consumes ~2 claims, so the
 // float should cover a comfortable buffer of games even if some lanes are
@@ -35,10 +42,20 @@ const MIN_TOTAL_DRIPS = 10n; // total balance below 10 drips => refill
 // KASPA_NETWORK_ID overrides for a private chain (see localnet/README.md).
 const NETWORK_ID = process.env.KASPA_NETWORK_ID ?? "testnet-10";
 const NETWORK_TYPE = NETWORK_ID.split("-")[0];
+// The dispenser gives coins to anyone who asks: on mainnet that is just
+// giving money away.
+if (NETWORK_ID === "mainnet") {
+  console.error("the dispenser is test-network infrastructure; refusing mainnet");
+  process.exit(1);
+}
+// A refill above this needs --force: a typo in tkas-per-lane should not
+// empty the funding key.
+const MAX_REFILL_TKAS = 10_000n;
 
 const argv = process.argv.slice(2);
 const dryRun = argv.includes("--dry-run");
-const [command, ...rest] = argv.filter((a) => a !== "--dry-run");
+const force = argv.includes("--force");
+const [command, ...rest] = argv.filter((a) => a !== "--dry-run" && a !== "--force");
 if (!command) {
   console.error(
     [
@@ -61,6 +78,13 @@ const rpc = process.env.KASPA_RPC_URL
   : new kaspa.RpcClient({ resolver: new kaspa.Resolver(), networkId: NETWORK_ID });
 await rpc.connect();
 console.log(`network: ${NETWORK_ID}, node: ${rpc.url ?? process.env.KASPA_RPC_URL ?? "(resolver)"}`);
+{
+  const info = await rpc.getServerInfo();
+  if (String(info.networkId) !== NETWORK_ID) {
+    console.error(`the node is on ${info.networkId}, not ${NETWORK_ID}; refusing`);
+    process.exit(1);
+  }
+}
 
 if (command === "status") {
   await status();
@@ -93,7 +117,7 @@ async function status() {
     .map((e) => {
       const value = amountOf(e);
       const age = virtualDaa - bornOf(e);
-      return { value, age, eligible: age >= COOLDOWN_DAA && value > DUST };
+      return { value, age, eligible: age >= COOLDOWN_DAA && claimable(value) };
     })
     .sort((a, b) => (b.value > a.value ? 1 : -1));
 
@@ -104,8 +128,8 @@ async function status() {
   lanes.forEach((l, i) => {
     const state = l.eligible
       ? "eligible now"
-      : l.value <= DUST
-        ? "dust — unusable"
+      : !claimable(l.value)
+        ? "unclaimable remainder — unusable"
         : `cooling (${COOLDOWN_DAA - l.age} DAA left)`;
     console.log(`  lane ${i + 1}: ${tkas(l.value)}, age ${l.age} DAA — ${state}`);
   });
@@ -128,6 +152,16 @@ async function status() {
 async function refill(keyFile, lanesArg, tkasArg) {
   const lanes = Number(lanesArg ?? 3);
   const perLane = BigInt(Math.round(Number(tkasArg ?? 100) * 1e8));
+  // Whole drips per lane: every claim takes exactly one, so a lane that is
+  // not a multiple ends in a remainder, and a tiny one is unclaimable.
+  if (!Number.isInteger(lanes) || lanes < 1 || perLane <= 0n || perLane % DRIP_SOMPI !== 0n) {
+    console.error(`lanes must be >= 1 and tkas-per-lane a multiple of ${tkas(DRIP_SOMPI)}`);
+    process.exit(1);
+  }
+  if (perLane * BigInt(lanes) > MAX_REFILL_TKAS * 100_000_000n && !force) {
+    console.error(`refill above ${MAX_REFILL_TKAS} TKAS: pass --force if that is intended`);
+    process.exit(1);
+  }
 
   const key = new kaspa.PrivateKey(fs.readFileSync(keyFile, "utf8").trim());
   const from = key.toAddress(NETWORK_TYPE);

@@ -5,7 +5,7 @@ import { isOpen } from "@shared/lib/game";
 import { fmtDaaDuration, fmtKas, isStaked } from "@shared/lib/match";
 import { modeOf } from "@shared/modes/registry";
 import {
-  FEE_MARGIN,
+  ownedFeeReserve,
   accountPanelAtom,
   balanceAtom,
   busyAtom,
@@ -47,7 +47,7 @@ export const Home = () => {
     // spectates and costs nothing.
     const seatOpen = isOpen(pendingInvite.state);
     const staked = isStaked(pendingInvite);
-    const need = staked && seatOpen ? joinStake + FEE_MARGIN : 0n;
+    const need = staked && seatOpen ? joinStake + ownedFeeReserve(1) : 0n;
     // Two different blockers, two different fixes: a guest needs an account
     // before they can stake anything; an account holder just needs funds.
     const needsAccount = need > 0n && !owned;
