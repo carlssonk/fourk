@@ -11,6 +11,12 @@ for (const width of [320, 390, 640, 1440]) {
     const short = page.getByTestId("players-Al").locator(".card").first();
     const long = page.getByTestId("players-FriendlyPlayer").locator(".card").first();
     await expect(short).toBeVisible();
+    // Measure the real font, not the fallback the page shows while the web
+    // font loads (Linux's fallback is wide enough to wrap a name).
+    await page.evaluate(async () => {
+      await document.fonts.load('600 14px "Baloo 2 Variable"');
+      await document.fonts.ready;
+    });
     const shortBox = await short.boundingBox();
     const longBox = await long.boundingBox();
     expect(shortBox!.width).toBe(longBox!.width);
