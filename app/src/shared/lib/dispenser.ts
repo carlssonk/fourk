@@ -9,12 +9,17 @@
  * independent drip lane on its own cooldown).
  *
  * The redeem script and claim sigscript are compile-time constants (the
- * contract has no state and no args), emitted by harness/tests/drip_tests.rs.
+ * contract has no state and no args), emitted by harness/tests/drip_tests.rs
+ * (`cargo test --test drip_tests script_is_tiny -- --nocapture`). They — and
+ * so the dispenser address — change whenever contracts/drip.sil or the
+ * Silverscript compiler changes: refill the new address afterwards.
  */
 
 import { kaspa } from "./sdk";
 import {
-  feeMassFloor,
+  scriptInput,
+  scriptOutput,
+  submitSpec,
   walletAddress,
   walletBalance,
   type PrivateKey,
@@ -24,23 +29,34 @@ import {
 import { NETWORK_ID, NETWORK_TYPE, fromHex } from "./match";
 
 const DRIP_REDEEM_HEX =
-  "b3519c6902b004b1b9be760400ca9a3ba06300c3b9bf876900c2780400ca9a3b94a26968007a7551";
-const CLAIM_SIGSCRIPT_HEX = "28" + DRIP_REDEEM_HEX;
+  "7604441891a2876375b3519c6902b0047600050000000001a569b1b9be760400ca9a3ba063b9bf00c378876900c252790400ca9a3b949c6975687551676a68";
+// push4(entry dispatch tag) then push63(redeem script) — the P2SH reveal.
+const CLAIM_SIGSCRIPT_HEX = "04441891a23f" + DRIP_REDEEM_HEX;
 
 /** Must match COOLDOWN / DRIP in contracts/drip.sil. */
 const COOLDOWN_DAA = 1200n;
 const DRIP_SOMPI = 1_000_000_000n;
 
-const MIN_RELAY_FEERATE = 100n;
-const SUBNETWORK_ID = "00".repeat(20);
-/** Below this, an output is storage-mass-poisoned — never create one. */
-const DUST = 20_000n;
+/** Below this, an output is storage-mass-poisoned — never create one.
+ * KIP-9 storage mass is C/value per output (C = 10^12), and a transaction
+ * over the 500k block limit can never be mined: ~0.02 KAS is the hard
+ * floor; this keeps margin. Same value as the engine's DUST. */
+const DUST = 3_000_000n;
+
+/** Can a claim on this lane succeed at all? The covenant re-locks exactly
+ * balance - DRIP, so a remainder below DUST makes the lane unclaimable
+ * (an outsider can plant such lanes; the app must not burn its attempts on
+ * them). At or below DRIP the whole lane is swept. */
+function claimable(balance: bigint): boolean {
+  return balance <= DRIP_SOMPI ? balance > DUST : balance - DRIP_SOMPI >= DUST;
+}
 
 function dispenserSpk() {
   return kaspa.payToScriptHashScript(fromHex(DRIP_REDEEM_HEX));
 }
 
-function dispenserAddress(): string {
+/** The dispenser's address on NETWORK_ID — the refill target. */
+export function dispenserAddress(): string {
   const addr = kaspa.addressFromScriptPublicKey(dispenserSpk(), NETWORK_TYPE);
   if (!addr) throw new Error("cannot derive dispenser address");
   return addr.toString();
@@ -52,22 +68,20 @@ function dispenserAddress(): string {
  * next. Resolves to the claim txid.
  */
 export async function claimDrip(rpc: Rpc, toAddress: string): Promise<string> {
-  const [utxoRes, dagInfo, feeRes] = await Promise.all([
+  // The dispenser is test-network infrastructure: on mainnet anything sent
+  // to its address would be free money for whoever claims first.
+  if (NETWORK_ID === "mainnet") throw new Error("FREE_PLAY_UNAVAILABLE");
+  const [utxoRes, dagInfo] = await Promise.all([
     rpc.getUtxosByAddresses([dispenserAddress()]),
     rpc.getBlockDagInfo(),
-    rpc.getFeeEstimate({}),
   ]);
   const entries = (utxoRes.entries ?? []) as unknown as UtxoEntryLike[];
   const virtualDaa = BigInt(dagInfo.virtualDaaScore);
-  const feerate = bigMax(
-    BigInt(Math.ceil(Number(feeRes.estimate.priorityBucket.feerate))),
-    MIN_RELAY_FEERATE,
-  );
 
   const lanes = entries
     .filter((e) => {
       const born = BigInt(e.blockDaaScore ?? e.utxoEntry?.blockDaaScore ?? 0n);
-      return virtualDaa - born >= COOLDOWN_DAA;
+      return virtualDaa - born >= COOLDOWN_DAA && claimable(amountOf(e));
     })
     .sort((a, b) => (amountOf(b) > amountOf(a) ? 1 : -1));
 
@@ -78,7 +92,7 @@ export async function claimDrip(rpc: Rpc, toAddress: string): Promise<string> {
   let lastError: unknown = null;
   for (const lane of lanes.slice(0, 3)) {
     try {
-      return await claimFromLane(rpc, lane, toAddress, feerate);
+      return await claimFromLane(rpc, lane, toAddress);
     } catch (e) {
       lastError = e; // lost a race or lane-specific rejection — try the next
     }
@@ -86,58 +100,30 @@ export async function claimDrip(rpc: Rpc, toAddress: string): Promise<string> {
   throw lastError ?? new Error("DISPENSER_COOLING");
 }
 
-async function claimFromLane(
-  rpc: Rpc,
-  lane: UtxoEntryLike,
-  toAddress: string,
-  feerate: bigint,
-): Promise<string> {
+async function claimFromLane(rpc: Rpc, lane: UtxoEntryLike, toAddress: string): Promise<string> {
   const balance = amountOf(lane);
-  const outpoint = (lane.outpoint ?? lane.entry?.outpoint)!;
-  const input = new kaspa.TransactionInput({
-    previousOutpoint: {
-      transactionId: String(outpoint.transactionId),
-      index: Number(outpoint.index),
-    },
-    signatureScript: CLAIM_SIGSCRIPT_HEX,
-    sequence: COOLDOWN_DAA,
-    sigOpCount: 0,
-    computeBudget: 1,
-    utxo: lane,
-  } as any);
   const payoutSpk = kaspa.payToAddressScript(new kaspa.Address(toAddress));
+  const dispenser = dispenserSpk();
 
-  const build = (fee: bigint) => {
-    // The contract pins the re-lock at >= balance - DRIP, so a lane whose
-    // remainder would be dust can re-lock a little extra (shrinking this
-    // claim) instead of creating a poisoned tail UTXO nobody can sweep.
-    const relock = balance > DRIP_SOMPI ? bigMax(balance - DRIP_SOMPI, DUST) : 0n;
+  // The claim is an unsigned pure-script spend, so it rides the covenant
+  // builder as a ready-made signature script: the engine runs the dispenser
+  // contract here, with the same sequence (age) proof the node will check.
+  const { txid } = await submitSpec(rpc, [], (fee) => {
+    // The contract pins the re-lock at exactly balance - DRIP (claimable()
+    // already filtered lanes whose remainder would be dust).
+    const relock = balance > DRIP_SOMPI ? balance - DRIP_SOMPI : 0n;
     const take = balance - relock;
     if (take - fee < DUST) throw new Error("DISPENSER_COOLING"); // lane too small to pay its fee
-    const outputs =
-      relock > 0n
-        ? [
-            new kaspa.TransactionOutput(relock, dispenserSpk()),
-            new kaspa.TransactionOutput(take - fee, payoutSpk),
-          ]
-        : [new kaspa.TransactionOutput(take - fee, payoutSpk)];
-    return new kaspa.Transaction({
-      version: 1,
-      inputs: [input],
-      outputs,
-      lockTime: 0n,
-      gas: 0n,
-      payload: "",
-      subnetworkId: SUBNETWORK_ID,
-    } as any);
-  };
-
-  const draft = build(0n);
-  const mass = BigInt(kaspa.calculateTransactionMass(NETWORK_ID, draft as any));
-  const fee = feeMassFloor(draft, mass) * feerate;
-
-  const res = await rpc.submitTransaction({ transaction: build(fee) as any, allowOrphan: false });
-  return String(res.transactionId);
+    return {
+      network: NETWORK_ID,
+      inputs: [scriptInput(lane, CLAIM_SIGSCRIPT_HEX, String(dispenser.script), COOLDOWN_DAA)],
+      outputs:
+        relock > 0n
+          ? [scriptOutput(dispenser, relock), scriptOutput(payoutSpk, take - fee)]
+          : [scriptOutput(payoutSpk, take - fee)],
+    };
+  });
+  return txid;
 }
 
 /**
@@ -179,8 +165,4 @@ export async function ensureFunds(
 
 function amountOf(entry: UtxoEntryLike): bigint {
   return BigInt((entry.amount ?? entry.utxoEntry?.amount)!);
-}
-
-function bigMax(a: bigint, b: bigint): bigint {
-  return a > b ? a : b;
 }

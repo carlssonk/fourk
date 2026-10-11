@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use kaspa_consensus_core::hashing::sighash::SigHashReusedValuesUnsync;
 use kaspa_consensus_core::mass::units::ComputeBudget;
@@ -18,23 +18,31 @@ use kaspa_txscript::{
     EngineCtx, EngineFlags, TxScriptEngine, pay_to_script_hash_script, pay_to_script_hash_signature_script_with_flags,
 };
 use kaspa_txscript_errors::TxScriptError;
-use silverscript_lang::compiler::{CompileOptions, CompiledContract, compile_contract};
+use silverscript_abi::{SilAbiArtifact, encode_contract_entry_sig_script};
+use silverscript_lang::compiler::{CompileOptions, compile_to_sil_abi_artifact_with_options};
 
 const COOLDOWN: u64 = 1200;
 const DRIP: u64 = 1_000_000_000;
 const TKAS: u64 = 100_000_000;
 
-fn drip_contract() -> &'static Arc<CompiledContract<'static>> {
-    static C: OnceLock<Arc<CompiledContract<'static>>> = OnceLock::new();
-    C.get_or_init(|| {
+/// The compiled dispenser as a Silverscript ABI artifact: one contract
+/// (`Drip`) with one entry (`drip`), no constructor state.
+fn drip_artifact() -> &'static SilAbiArtifact {
+    static A: OnceLock<SilAbiArtifact> = OnceLock::new();
+    A.get_or_init(|| {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../contracts/drip.sil");
-        let source: &'static str = Box::leak(fs::read_to_string(path).expect("read drip.sil").into_boxed_str());
-        Arc::new(compile_contract(source, &[], CompileOptions::default()).expect("drip.sil compiles"))
+        let source = fs::read_to_string(path).expect("read drip.sil");
+        compile_to_sil_abi_artifact_with_options(&source, &[], CompileOptions::default()).expect("drip.sil compiles")
     })
 }
 
+/// The dispenser's redeem script (P2SH preimage).
+fn drip_script() -> &'static [u8] {
+    &drip_artifact().contracts.get("Drip").expect("Drip contract in artifact").compiled.bytecode
+}
+
 fn dispenser_spk() -> ScriptPublicKey {
-    pay_to_script_hash_script(&drip_contract().script)
+    pay_to_script_hash_script(drip_script())
 }
 
 fn claimant_spk() -> ScriptPublicKey {
@@ -42,10 +50,9 @@ fn claimant_spk() -> ScriptPublicKey {
 }
 
 fn claim_sigscript() -> Vec<u8> {
-    let contract = drip_contract();
-    let call = contract.build_sig_script("drip", vec![]).expect("sigscript builds");
+    let call = encode_contract_entry_sig_script(drip_artifact(), "Drip", "drip", &[]).expect("sigscript builds");
     pay_to_script_hash_signature_script_with_flags(
-        contract.script.clone(),
+        drip_script().to_vec(),
         call,
         EngineFlags { covenants_enabled: true, ..Default::default() },
     )
@@ -92,11 +99,23 @@ fn payout(value: u64) -> TransactionOutput {
 
 #[test]
 fn script_is_tiny() {
-    let c = drip_contract();
+    let c = drip_script();
     let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
-    println!("drip redeem script ({} bytes): {}", c.script.len(), hex(&c.script));
+    println!("drip redeem script ({} bytes): {}", c.len(), hex(c));
     println!("claim sigscript ({} bytes): {}", claim_sigscript().len(), hex(&claim_sigscript()));
-    assert!(c.script.len() < 100);
+    assert!(c.len() < 100);
+    // The app, the faucet script and the wasm builder test carry this script
+    // as a hex constant (it IS the dispenser address): pin every copy.
+    let want = hex(c);
+    for file in [
+        "../app/src/shared/lib/dispenser.ts",
+        "../faucet/fund-dispenser.mjs",
+        "../wasm/tests/builder.rs",
+    ] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(file);
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains(&want), "{file} does not carry the compiled drip script {want}");
+    }
 }
 
 #[test]
@@ -107,10 +126,15 @@ fn claim_succeeds_without_any_signature() {
 }
 
 #[test]
-fn claim_may_take_less_than_the_full_drip() {
+fn a_claim_takes_exactly_one_drip() {
+    // A partial take, and the zero take that would restart the lane's
+    // cooldown for nothing (the fee paid out of the lane), are refused: one
+    // bot could otherwise keep every lane cooling forever at no cost.
     let balance = 100 * TKAS;
-    let outputs = vec![successor(balance - DRIP / 2), payout(DRIP / 2 - 200_000)];
-    assert!(run_claim(&[balance], COOLDOWN, outputs).is_ok());
+    let partial = vec![successor(balance - DRIP / 2), payout(DRIP / 2 - 200_000)];
+    assert!(run_claim(&[balance], COOLDOWN, partial).is_err(), "half a drip");
+    let zero = vec![successor(balance - 200_000)];
+    assert!(run_claim(&[balance], COOLDOWN, zero).is_err(), "zero-take cooldown reset");
 }
 
 #[test]

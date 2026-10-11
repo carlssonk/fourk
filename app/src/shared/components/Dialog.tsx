@@ -142,7 +142,7 @@ export const Dialog = ({
         <div ref={inner}>
           <div
             className={`dlg-head ${
-              headline ? "px-5 py-5 text-center" : "flex items-center gap-2 px-5 py-3.5"
+              headline ? "px-5 py-5 text-center" : "flex items-center gap-2 px-4 py-2.5"
             }`}
           >
             {!headline && onBack && (
@@ -150,7 +150,7 @@ export const Dialog = ({
                 type="button"
                 aria-label="Back"
                 onClick={onBack}
-                className="-ml-1.5 cursor-pointer rounded-md px-1 py-0.5 text-dim transition-colors hover:bg-white/8 hover:text-ink"
+                className="-ml-1.5 cursor-pointer rounded-md h-7 w-7 justify-center items-center flex text-dim transition-colors hover:bg-white/8 hover:text-ink"
               >
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
                   <path d="M15.41 7.41 14 6l-6 6 6 6 1.41-1.41L10.83 12z" />
@@ -159,9 +159,7 @@ export const Dialog = ({
             )}
             <h2
               className={
-                headline
-                  ? `text-3xl font-bold ${TONE_TEXT[tone]}`
-                  : "flex-1 font-semibold text-ink"
+                headline ? `text-3xl font-bold ${TONE_TEXT[tone]}` : "flex-1 font-semibold text-ink"
               }
             >
               {title}
@@ -170,7 +168,7 @@ export const Dialog = ({
               <button
                 type="button"
                 aria-label="Close"
-                className={`cursor-pointer rounded-md px-1.5 text-lg leading-none text-dim transition-colors hover:bg-white/8 hover:text-ink ${
+                className={`cursor-pointer rounded-md h-7 w-7 text-lg leading-none text-dim transition-colors hover:bg-white/8 hover:text-ink ${
                   headline ? "absolute top-3 right-3" : "-mr-1.5"
                 }`}
                 onClick={onDismiss}

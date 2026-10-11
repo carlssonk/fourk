@@ -9,11 +9,11 @@ export const classicMode: GameMode = {
     key: "classic",
     label: "Classic",
     blurb: "Traditional turns, players alternate dropping discs.",
-    inviteBlurb: "Connect four discs in a row to win — you play ",
+    inviteBlurb: "Connect four discs in a row to win. You play ",
     moveNoun: "move",
   },
   ...classicEngine,
   ...classicView,
   actions: classicActions,
-  autoActions: (m) => sharedAutoActions(classicMode, m),
+  autoActions: (m, ctx) => sharedAutoActions(classicMode, m, ctx.myPk),
 };

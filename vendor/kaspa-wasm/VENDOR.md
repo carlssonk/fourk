@@ -11,5 +11,6 @@ harness replay-fixture generator all load it from here.
 
 To upgrade: rebuild the wasm SDK in rusty-kaspa, replace this directory's
 `kaspa.js` / `kaspa.d.ts` / `kaspa_bg.wasm*` / `package.json`, and update the
-commit hash above. The version must stay in lockstep with the `kaspa-txscript`
-tag pinned in `wasm/Cargo.toml` and the harness workspace.
+commit hash above. The version must stay in lockstep with the rusty-kaspa
+revision pinned in `harness/Cargo.toml` (the same one `argent-runtime`, and so
+`wasm/`, builds against).

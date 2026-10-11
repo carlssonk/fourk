@@ -6,7 +6,12 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "vectors": "UPDATE_VECTORS=1 vitest run test/differential.test.ts",
+    "check": "tsc --noEmit && vitest run && pnpm --dir app typecheck && pnpm --dir app lint",
+    "test:covenant": "cargo test --manifest-path harness/Cargo.toml && cargo test --manifest-path wasm/Cargo.toml",
+    "test:live": "./localnet/live.sh",
+    "build:wasm": "cd wasm && wasm-pack build --target web --release"
   },
   "dependencies": {
     "@noble/hashes": "^2.2.0"

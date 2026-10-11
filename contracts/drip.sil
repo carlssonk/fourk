@@ -10,11 +10,17 @@ pragma silverscript ^0.1.0;
 // remains (drip minus fee) goes wherever the claimant directs it.
 //
 // Abuse containment is consensus-side and deliberately simple:
-//   - require(this.age >= COOLDOWN): each lane drips at most once per
+//   - require(this.ageDaa >= COOLDOWN): each lane drips at most once per
 //     cooldown window (sequence-lock enforced).
 //   - require(tx.inputs.length == 1): without this, spending N lanes in one
 //     transaction would satisfy every input's floor check with a single
 //     shared successor output, draining (N-1) full lanes at once.
+//   - the successor holds EXACTLY balance - DRIP: every claim takes a full
+//     drip. With a floor (>=), a claim taking nothing would restart the
+//     lane's cooldown for free (the fee comes out of the lane), and one bot
+//     could keep every lane cooling forever. Now resetting a lane costs a
+//     drip the claimant merely receives — the attack degrades to draining,
+//     which the cooldown rate-limits and refills answer.
 //
 // Endgame: once a lane's balance is no longer above DRIP, the successor
 // requirement lifts and the final claimant sweeps the remainder — otherwise
@@ -26,15 +32,15 @@ contract Drip() {
     // 10 TKAS per claim.
     int constant DRIP = 1000000000;
 
-    entrypoint function drip() {
+    entry drip() {
         require(tx.inputs.length == 1);
-        require(this.age >= COOLDOWN);
+        require(this.ageDaa >= COOLDOWN);
 
         int balance = tx.inputs[this.activeInputIndex].value;
         if (balance > DRIP) {
             byte[] self = tx.inputs[this.activeInputIndex].scriptPubKey;
             require(tx.outputs[0].scriptPubKey == self);
-            require(tx.outputs[0].value >= balance - DRIP);
+            require(tx.outputs[0].value == balance - DRIP);
         }
     }
 }

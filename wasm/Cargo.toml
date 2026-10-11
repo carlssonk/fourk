@@ -3,22 +3,50 @@ name = "fourk-wasm"
 version = "0.1.0"
 edition = "2021"
 publish = false
+description = "Browser transaction builder for the fourk covenants"
+license = "ISC"
+repository = "https://github.com/carlssonk/fourk"
 
-# Browser bindings for the Fourk covenant: embeds the Argent artifact
-# (argentc build of contracts/fourk.ag) and exposes state -> redeem script
-# and entrypoint -> signature script, so the React app can derive addresses
-# and build spends entirely client-side without running a compiler.
+# Browser bindings for the Fourk covenants: embeds the Argent artifact
+# (argentc build of contracts/fourk.ag) and exposes two things to the app —
+# the script public key of an actor state (addresses) and a transaction
+# builder that takes a JSON spec, signs it, runs every input through the real
+# script engine via argent-runtime's TxBuilder, and hands back the finished
+# transaction with measured compute budgets and masses. The app never
+# assembles a covenant spend itself, so the browser path is the harness path.
+#
+# src/builder.rs is plain Rust (tests/ drives it natively against the engine);
+# src/lib.rs is the wasm-bindgen wrapper.
+#
+# Pins: argent-runtime and the kaspa crates must be the exact revisions
+# argent's own workspace pins (types cross the boundary; two git sources would
+# be two crates). Keep them equal to harness/Cargo.toml.
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 wasm-bindgen = "0.2"
-argent-runtime = { path = "../../argent-lang/argent/crates/argent-runtime" }
+argent-runtime = { git = "https://github.com/argent-lang/argent", rev = "867b080b973f93d75c4b7ca8ce06950a963accbb", package = "argent-runtime" }
+silverscript-abi = { git = "https://github.com/kaspanet/silverscript", rev = "3ed973335b59269293564805cc2c58a14595ec03", package = "silverscript-abi" }
+kaspa-consensus-core = { git = "https://github.com/kaspanet/rusty-kaspa", rev = "a41a333b08848f41bf737b72592e463a6011b8ac" }
+secp256k1 = "0.29.0"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # argent-runtime's kaspa/secp deps need the js randomness backend on wasm32 —
 # both getrandom major versions appear in the tree.
 getrandom = { version = "0.2", features = ["js"] }
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
+
+[dev-dependencies]
+blake2b_simd = "1"
+
+# The browser binary carries the whole script engine; size over speed. Tests
+# build under the dev profile and are unaffected.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
 
 [workspace]

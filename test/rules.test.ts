@@ -329,16 +329,30 @@ describe("sudden death", () => {
   const DEADLINE = 1_000_000;
   const capped = () => ({ ...game(), deadline: DEADLINE });
 
-  test("past the deadline the pot splits, and anyone may crank it", () => {
+  test("past the deadline and a full move clock, the waiting player is paid", () => {
+    // After three moves P2 is to move: P2 stalling at the cap must not turn
+    // P1's owed forfeit into a split. Anyone may crank it.
     const s = play(capped(), [0, 1, 2]);
-    expect(suddenDeath(s, ctx(STRANGER, 0, DEADLINE))).toEqual([
-      { to: P1, amount: STAKE },
-      { to: P2, amount: STAKE },
+    const T = s.moveTimeout;
+    expect(suddenDeath(s, ctx(STRANGER, T, DEADLINE))).toEqual([{ to: P1, amount: 2n * STAKE }]);
+    expect(suddenDeath(play(s, [3]), ctx(STRANGER, T, DEADLINE))).toEqual([
+      { to: P2, amount: 2n * STAKE },
     ]);
   });
 
-  test("legal even on an unmoved board — cleanup for abandoned lobbies", () => {
-    expect(suddenDeath(capped(), ctx(STRANGER, 0, DEADLINE + 5))).toHaveLength(2);
+  test("the cap never shortens the move clock of the player to move", () => {
+    const s = play(capped(), [0, 1, 2]);
+    expect(() => suddenDeath(s, ctx(STRANGER, s.moveTimeout - 1, DEADLINE + 10_000))).toThrow(
+      "move clock",
+    );
+  });
+
+  test("an unmoved board splits — cleanup for abandoned lobbies", () => {
+    const s = capped();
+    expect(suddenDeath(s, ctx(STRANGER, s.moveTimeout, DEADLINE + 5))).toEqual([
+      { to: P1, amount: STAKE },
+      { to: P2, amount: STAKE },
+    ]);
   });
 
   test("cannot claim before the deadline", () => {

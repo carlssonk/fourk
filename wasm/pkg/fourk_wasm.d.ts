@@ -1,52 +1,29 @@
 /* tslint:disable */
 /* eslint-disable */
 /**
- * Full signature script for spending a lobby UTXO via `function`
- * (join or cancel).
+ * The script public key (version 0 script bytes) locking `actor` carrying
+ * the JSON `state` — hash-free input for the app's address derivation.
  */
-export function lobbySigScript(p1: Uint8Array, move_timeout: bigint, deadline: bigint, _function: string, sig?: Uint8Array | null, pk?: Uint8Array | null): Uint8Array;
+export function actorScriptPublicKey(actor: string, state_json: string): Uint8Array;
 /**
- * The redeem script for an open fourk-mode seat awaiting a joiner.
+ * Build, sign, and engine-verify a transaction from a JSON spec (see
+ * builder.rs). `secrets` is the concatenation of the 32-byte secret keys the
+ * spec's signer indices refer to. Returns the finished transaction as JSON.
  */
-export function simulLobbyLockScript(p1: Uint8Array, move_timeout: bigint, deadline: bigint): Uint8Array;
+export function buildTransaction(spec_json: string, secrets: Uint8Array): string;
 /**
- * Full signature script for spending a fourk-mode match UTXO via `function`
- * (dissolve, commit, reveal, resolve, claim_win, claim_split, claim_draw,
- * claim_timeout, split_timeout, sudden_death, sweep_win).
+ * JSON object mapping `actor`'s entry dispatch tags (hex) to entry names.
  */
-export function simulMatchSigScript(p1: Uint8Array, p2: Uint8Array, board: Uint8Array, round: bigint, commit1: Uint8Array, commit2: Uint8Array, reveal1: bigint, reveal2: bigint, pending_win: bigint, move_timeout: bigint, deadline: bigint, _function: string, sig?: Uint8Array | null, pk?: Uint8Array | null, blob?: Uint8Array | null, ints?: BigInt64Array | null): Uint8Array;
+export function entryTags(actor: string): string;
 /**
- * Artifact sanity info for the UI's about box / debugging.
+ * r" Deferred promise - an object that has `resolve()` and `reject()`
+ * r" functions that can be called outside of the promise body.
+ * r" WARNING: This function uses `eval` and can not be used in environments
+ * r" where dynamically-created code can not be executed such as web browser
+ * r" extensions.
+ * r" @category General
  */
-export function contractInfo(): string;
-/**
- * The redeem script for an open seat awaiting a joiner.
- */
-export function lobbyLockScript(p1: Uint8Array, move_timeout: bigint, deadline: bigint): Uint8Array;
-/**
- * Full signature script for spending a match UTXO via `function`
- * (dissolve, move, winning_move, claim_draw, claim_forfeit, sudden_death).
- */
-export function matchSigScript(p1: Uint8Array, p2: Uint8Array, board: Uint8Array, move_count: bigint, move_timeout: bigint, deadline: bigint, _function: string, sig?: Uint8Array | null, pk?: Uint8Array | null, ints?: BigInt64Array | null): Uint8Array;
-/**
- * Full signature script for spending a fourk-mode lobby UTXO via `function`
- * (join or cancel).
- */
-export function simulLobbySigScript(p1: Uint8Array, move_timeout: bigint, deadline: bigint, _function: string, sig?: Uint8Array | null, pk?: Uint8Array | null): Uint8Array;
-/**
- * The redeem script for a live fourk-mode game state.
- */
-export function simulMatchLockScript(p1: Uint8Array, p2: Uint8Array, board: Uint8Array, round: bigint, commit1: Uint8Array, commit2: Uint8Array, reveal1: bigint, reveal2: bigint, pending_win: bigint, move_timeout: bigint, deadline: bigint): Uint8Array;
-/**
- * The redeem script for a live game state.
- */
-export function matchLockScript(p1: Uint8Array, p2: Uint8Array, board: Uint8Array, move_count: bigint, move_timeout: bigint, deadline: bigint): Uint8Array;
-/**
- * Configuration for the WASM32 bindings runtime interface.
- * @see {@link IWASM32BindingsConfig}
- * @category General
- */
-export function initWASM32Bindings(config: IWASM32BindingsConfig): void;
+export function defer(): Promise<any>;
 /**
  * Present panic logs to the user in the browser.
  *
@@ -57,6 +34,14 @@ export function initWASM32Bindings(config: IWASM32BindingsConfig): void;
  * @category General
  */
 export function presentPanicHookLogs(): void;
+/**
+ * Initialize Rust panic handler in console mode.
+ *
+ * This will output additional debug information during a panic to the console.
+ * This function should be called right after loading WASM libraries.
+ * @category General
+ */
+export function initConsolePanicHook(): void;
 /**
  * Initialize Rust panic handler in browser mode.
  *
@@ -70,22 +55,11 @@ export function presentPanicHookLogs(): void;
  */
 export function initBrowserPanicHook(): void;
 /**
- * Initialize Rust panic handler in console mode.
- *
- * This will output additional debug information during a panic to the console.
- * This function should be called right after loading WASM libraries.
+ * Configuration for the WASM32 bindings runtime interface.
+ * @see {@link IWASM32BindingsConfig}
  * @category General
  */
-export function initConsolePanicHook(): void;
-/**
- * r" Deferred promise - an object that has `resolve()` and `reject()`
- * r" functions that can be called outside of the promise body.
- * r" WARNING: This function uses `eval` and can not be used in environments
- * r" where dynamically-created code can not be executed such as web browser
- * r" extensions.
- * r" @category General
- */
-export function defer(): Promise<any>;
+export function initWASM32Bindings(config: IWASM32BindingsConfig): void;
 /**
  * Set the logger log level using a string representation.
  * Available variants are: 'off', 'error', 'warn', 'info', 'debug', 'trace'
@@ -311,45 +285,39 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
   readonly memory: WebAssembly.Memory;
-  readonly contractInfo: () => [number, number, number, number];
-  readonly lobbyLockScript: (a: number, b: number, c: bigint, d: bigint) => [number, number, number, number];
-  readonly lobbySigScript: (a: number, b: number, c: bigint, d: bigint, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
-  readonly matchLockScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: bigint, i: bigint) => [number, number, number, number];
-  readonly matchSigScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: bigint, i: bigint, j: number, k: number, l: number, m: number, n: number, o: number, p: number, q: number) => [number, number, number, number];
-  readonly simulLobbyLockScript: (a: number, b: number, c: bigint, d: bigint) => [number, number, number, number];
-  readonly simulLobbySigScript: (a: number, b: number, c: bigint, d: bigint, e: number, f: number, g: number, h: number, i: number, j: number) => [number, number, number, number];
-  readonly simulMatchLockScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: number, i: number, j: number, k: number, l: bigint, m: bigint, n: bigint, o: bigint, p: bigint) => [number, number, number, number];
-  readonly simulMatchSigScript: (a: number, b: number, c: number, d: number, e: number, f: number, g: bigint, h: number, i: number, j: number, k: number, l: bigint, m: bigint, n: bigint, o: bigint, p: bigint, q: number, r: number, s: number, t: number, u: number, v: number, w: number, x: number, y: number, z: number) => [number, number, number, number];
+  readonly actorScriptPublicKey: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+  readonly buildTransaction: (a: number, b: number, c: number, d: number) => [number, number, number, number];
+  readonly entryTags: (a: number, b: number) => [number, number, number, number];
   readonly __wbg_get_networkid_suffix: (a: number) => number;
   readonly __wbg_get_networkid_type: (a: number) => number;
-  readonly __wbg_networkid_free: (a: number, b: number) => void;
-  readonly __wbg_set_networkid_suffix: (a: number, b: number) => void;
-  readonly __wbg_set_networkid_type: (a: number, b: number) => void;
-  readonly networkid_addressPrefix: (a: number) => [number, number];
-  readonly networkid_ctor: (a: any) => [number, number, number];
-  readonly networkid_id: (a: number) => [number, number];
-  readonly networkid_toString: (a: number) => [number, number];
   readonly __wbg_get_scriptpublickey_version: (a: number) => number;
   readonly __wbg_get_transactionutxoentry_amount: (a: number) => bigint;
   readonly __wbg_get_transactionutxoentry_blockDaaScore: (a: number) => bigint;
   readonly __wbg_get_transactionutxoentry_covenantId: (a: number) => number;
   readonly __wbg_get_transactionutxoentry_isCoinbase: (a: number) => number;
   readonly __wbg_get_transactionutxoentry_scriptPublicKey: (a: number) => number;
+  readonly __wbg_networkid_free: (a: number, b: number) => void;
   readonly __wbg_scriptpublickey_free: (a: number, b: number) => void;
+  readonly __wbg_set_networkid_suffix: (a: number, b: number) => void;
+  readonly __wbg_set_networkid_type: (a: number, b: number) => void;
   readonly __wbg_set_scriptpublickey_version: (a: number, b: number) => void;
   readonly __wbg_set_transactionutxoentry_amount: (a: number, b: bigint) => void;
   readonly __wbg_set_transactionutxoentry_blockDaaScore: (a: number, b: bigint) => void;
   readonly __wbg_set_transactionutxoentry_covenantId: (a: number, b: number) => void;
   readonly __wbg_set_transactionutxoentry_isCoinbase: (a: number, b: number) => void;
   readonly __wbg_set_transactionutxoentry_scriptPublicKey: (a: number, b: number) => void;
+  readonly __wbg_sighashtype_free: (a: number, b: number) => void;
   readonly __wbg_transactionutxoentry_free: (a: number, b: number) => void;
+  readonly networkid_addressPrefix: (a: number) => [number, number];
+  readonly networkid_ctor: (a: any) => [number, number, number];
+  readonly networkid_id: (a: number) => [number, number];
   readonly scriptpublickey_constructor: (a: number, b: any) => [number, number, number];
   readonly scriptpublickey_script_as_hex: (a: number) => [number, number];
-  readonly __wbg_sighashtype_free: (a: number, b: number) => void;
+  readonly networkid_toString: (a: number) => [number, number];
+  readonly rustsecp256k1_v0_10_0_context_create: (a: number) => number;
+  readonly rustsecp256k1_v0_10_0_context_destroy: (a: number) => void;
   readonly rustsecp256k1_v0_10_0_default_error_callback_fn: (a: number, b: number) => void;
   readonly rustsecp256k1_v0_10_0_default_illegal_callback_fn: (a: number, b: number) => void;
-  readonly rustsecp256k1_v0_10_0_context_destroy: (a: number) => void;
-  readonly rustsecp256k1_v0_10_0_context_create: (a: number) => number;
   readonly __wbg_address_free: (a: number, b: number) => void;
   readonly address_constructor: (a: number, b: number) => number;
   readonly address_payload: (a: number) => [number, number];
@@ -358,11 +326,11 @@ export interface InitOutput {
   readonly address_toString: (a: number) => [number, number];
   readonly address_validate: (a: number, b: number) => number;
   readonly address_version: (a: number) => [number, number];
-  readonly initWASM32Bindings: (a: any) => [number, number];
+  readonly defer: () => any;
   readonly initBrowserPanicHook: () => void;
   readonly initConsolePanicHook: () => void;
+  readonly initWASM32Bindings: (a: any) => [number, number];
   readonly presentPanicHookLogs: () => void;
-  readonly defer: () => any;
   readonly __wbg_abortable_free: (a: number, b: number) => void;
   readonly __wbg_aborted_free: (a: number, b: number) => void;
   readonly abortable_abort: (a: number) => void;

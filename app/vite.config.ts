@@ -14,11 +14,28 @@ const getCommitHash = () => {
   const override = process.env.VITE_COMMIT_SHA;
   if (override) return override.slice(0, 8);
   try {
-    return execSync("git rev-parse --short=8 HEAD").toString().trim();
+    // --dirty: a build from a tree with uncommitted changes (a rebuilt
+    // wasm/pkg, say) must not pass itself off as the commit it sits on.
+    return execSync("git describe --always --dirty --abbrev=8", { stdio: "pipe" })
+      .toString()
+      .trim();
   } catch {
     return "unknown";
   }
 };
+
+/** Settings a public deploy must never carry, unless the build says so
+ * explicitly (VITE_ALLOW_LOCAL_BUILD=1, e.g. a simnet preview). They arrive
+ * silently from a gitignored .env.local on a developer machine. */
+function localOnlySettings(env: Record<string, string | undefined>, networkId: string): string[] {
+  const out: string[] = [];
+  if (networkId === "simnet" || networkId === "devnet") out.push(`VITE_NETWORK_ID=${networkId}`);
+  const node = env.VITE_NODE_URL;
+  if (node && (/^ws:/i.test(node) || /\/\/(localhost|127\.|\[::1\]|0\.0\.0\.0)/i.test(node)))
+    out.push(`VITE_NODE_URL=${node}`);
+  if (env.VITE_RESET_MARGIN) out.push(`VITE_RESET_MARGIN=${env.VITE_RESET_MARGIN}`);
+  return out;
+}
 
 // Every network the app (and the kaspa SDK) understands. A build with any
 // other id — a typo like "mainet" — could never connect to anything, so it
@@ -44,6 +61,16 @@ export default defineConfig(({ mode, command }) => {
   // so a non-mainnet `vite build` warns loudly rather than failing: the
   // point is that a public deploy on a test network is a choice, not an
   // accident of the testnet-10 default.
+  if (command === "build" && mode === "production") {
+    const local = localOnlySettings(env, networkId);
+    if (local.length && env.VITE_ALLOW_LOCAL_BUILD !== "1")
+      throw new Error(
+        `Production build with local-only settings: ${local.join(", ")}. ` +
+          `These usually come from app/.env.local. Build releases from a clean ` +
+          `checkout, or set VITE_ALLOW_LOCAL_BUILD=1 for a local preview build.`,
+      );
+  }
+
   if (command === "build" && mode === "production" && networkId !== "mainnet") {
     const bar = "!".repeat(72);
     console.warn(
@@ -68,6 +95,10 @@ export default defineConfig(({ mode, command }) => {
       __COMMIT_HASH__: JSON.stringify(command === "serve" ? "local" : getCommitHash()),
     },
     esbuild: {
+      // The kaspa SDK recognises its own classes by constructor name (a
+      // Resolver handed to RpcClient, for one): minified names break it and
+      // a production bundle never connects. scripts/check-dist.mjs guards it.
+      keepNames: true,
       // Strip debug-level console output from production bundles
       pure: mode === "production" ? ["console.log", "console.info", "console.debug"] : [],
     },

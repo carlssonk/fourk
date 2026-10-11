@@ -1,16 +1,6 @@
 import { DIRS, cellIndex, findWin, type LineWitness } from "@shared/lib/game";
 
-export type ResultTone = "win" | "loss" | "neutral";
-
-/** Classify an ending message for the verdict card. The strings come from
- * the modes' describeEnd and the finish() calls: a personal victory always
- * says "you win", a defeat mentions a win that isn't ours, and everything
- * else (draws, splits, dissolves, cancels) is nobody's victory. */
-export function resultTone(result: string): ResultTone {
-  if (result.includes("you win")) return "win";
-  if (result.includes("win")) return "loss";
-  return "neutral";
-}
+export { resultTone, type ResultTone } from "@shared/lib/result";
 
 function lineCells(w: LineWitness): number[] {
   const [dc, dr] = DIRS[w.dir]!;

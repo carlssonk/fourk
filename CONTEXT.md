@@ -8,7 +8,7 @@ conversation reveals it was fuzzy.
 
 - **ChainOps** — the app-side interface to the chain: balances, transfers,
   opening and joining matches, funding seats. The seam behind the match
-  actions (`createGame`, `takeSeat`, `switchAccount`). Two adapters: the
+  actions (`createGame`, `takeSeat`). Two adapters: the
   covenant facade bound to the live RPC (prod) and an in-memory ledger
   (tests). The adapter owns the connection — `connect()` is an explicit
   step (it is what the "Connecting to the Kaspa network" UI step ticks on);
@@ -20,10 +20,16 @@ conversation reveals it was fuzzy.
   reload and is called straight from the account UI — no match action ever
   adopts, so the seam doesn't carry it.
 
-- **ModeChainSurface** — a game mode's script/successor surface
-  (`modes/types.ts`): state → lock script, successor enumeration, spend
-  re-derivation. Per-mode; not the same thing as ChainOps, which is
-  mode-agnostic wallet/match plumbing.
+- **ModeChainSurface** — a game mode's chain surface (`modes/types.ts`):
+  which actor holds a snapshot and its state fields (`actorOf`/`stateOf`),
+  successor enumeration, spend re-derivation. Per-mode; not the same thing
+  as ChainOps, which is mode-agnostic wallet/match plumbing.
+
+- **Transaction spec** — the JSON description of one covenant spend
+  (`TxSpec` in `lib/engine.ts`: inputs, outputs, ABI-ordered entry
+  arguments, signer indices) that `fourk-wasm`'s builder turns into a
+  signed, engine-verified transaction. The app never assembles scripts; a
+  door is a spec (`docs/adr/0002`).
 
 ## Rules core
 

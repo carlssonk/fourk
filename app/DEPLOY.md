@@ -15,6 +15,20 @@ pnpm install
 pnpm build        # tsc + vite build → dist/
 ```
 
+- **Build releases from a clean checkout** (CI, or a fresh clone): `vite
+  build` reads `app/.env.local`, and a developer machine's file pins a local
+  simnet node. A production build refuses local-only settings (simnet or
+  devnet, a `ws://`/loopback node URL, `VITE_RESET_MARGIN`) unless
+  `VITE_ALLOW_LOCAL_BUILD=1` says it is a local preview. The version stamp
+  carries `-dirty` when the tree had uncommitted changes.
+- **Smoke-test the bundle before deploying it:** `node scripts/check-dist.mjs`
+  serves `dist/` and waits until the page opens a websocket to a node
+  through the public resolver (CI runs it). The kaspa SDK recognises its own
+  classes by name, so the build keeps class names (`esbuild.keepNames`); a
+  bundle minified without them never connects.
+- **Use a dedicated origin.** Recovery phrases and keys live in this origin's
+  localStorage: a shared origin (a GitHub Pages project site, a subpath on a
+  domain with other apps) hands them to every other page there.
 - **Root path assumed.** `vite.config.ts` sets no `base`, so the app must be
   served from the domain root (`https://example.com/`). To host under a
   sub-path (`/fourk/`), set `base: "/fourk/"` in `vite.config.ts` first.

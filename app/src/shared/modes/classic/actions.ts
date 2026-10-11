@@ -23,7 +23,7 @@ export async function moveMatch(
     classicEngine,
     match,
     "move",
-    () => ({ ints: [col] }),
+    [{ sig: 0 }, { int: col }],
     { state: applyMove(match.state, col) },
     0n,
   );
@@ -39,10 +39,11 @@ export async function winMatch(
   w: LineWitness,
 ): Promise<string> {
   return engine.signedTerminal(rpc, key, classicEngine, match, "winning_move", [
-    col,
-    w.col,
-    w.row,
-    w.dir,
+    { sig: 0 },
+    { int: col },
+    { int: w.col },
+    { int: w.row },
+    { int: w.dir },
   ]);
 }
 
@@ -58,7 +59,7 @@ export async function forfeitMatch(
     classicEngine,
     match,
     "claim_forfeit",
-    [],
+    [{ sig: 0 }],
     BigInt(match.state.moveTimeout),
   );
 }
@@ -75,7 +76,7 @@ export const classicActions: ModeActions = {
       return {
         kind: "ended",
         match: { ...match, state: next, txid },
-        message: "You connected four — you win! 🎉",
+        message: "You connected four. You win!",
       };
     }
     // A move's fee comes off a wallet UTXO; refill from the dispenser if the

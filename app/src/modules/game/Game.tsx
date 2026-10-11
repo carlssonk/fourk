@@ -5,11 +5,13 @@ import { ensureFunds } from "@shared/lib/dispenser";
 import { CELLS, ROWS, heightOf, isOpen } from "@shared/lib/game";
 import { isStaleMatchError } from "@shared/lib/errors";
 import { inviteLink } from "@shared/lib/invite";
-import { fmtKas, isStaked, type Match } from "@shared/lib/match";
+import { fmtDaaDuration, fmtKas, isStaked, loadCheckpoint, type Match } from "@shared/lib/match";
+import { gameEnd } from "@shared/lib/result";
 import { modeOf } from "@shared/modes/registry";
 import type { StatusDescriptor } from "@shared/modes/types";
 import { playClaimReady, playClockExpired, playClockWarning } from "@shared/lib/sound";
 import { DiscLoader } from "@shared/components/DiscLoader";
+import { useCopy } from "@shared/components/useCopy";
 import {
   RESET_RESULT,
   advanceConnecting,
@@ -27,11 +29,12 @@ import {
   updateMatch,
 } from "@shared/state";
 import { Board, PlayerPanel, ResultOverlay } from "./components";
+import { GameHeader } from "./components/GameHeader";
 import { useAutopilot } from "./hooks/useAutopilot";
 import { useCapClock } from "./hooks/useCapClock";
 import { useMatchWatcher } from "./hooks/useMatchWatcher";
 import { useMoveClock } from "./hooks/useMoveClock";
-import { resultTone, winningCells } from "./lib";
+import { winningCells } from "./lib";
 
 interface Props {
   match: Match;
@@ -39,24 +42,31 @@ interface Props {
 
 /** Render a mode's status descriptor: bold segments, tone, spinner. */
 const Status = ({ status }: { status: StatusDescriptor }) => {
-  const body = status.segments.map((seg, i) =>
-    seg.bold ? <b key={i}>{seg.text}</b> : <span key={i}>{seg.text}</span>,
+  const [headline, ...details] = status.segments;
+  return (
+    <div className={status.tone === "danger" ? "text-red" : undefined}>
+      <div className="flex items-center justify-center gap-2 text-base font-semibold sm:text-lg">
+        {status.spinner && <DiscLoader />}
+        <span>{headline?.text}</span>
+      </div>
+      {details.length > 0 && (
+        <p className={`mt-0.5 text-sm ${status.tone === "danger" ? "" : "text-dim"}`}>
+          {details
+            .map((seg) => seg.text)
+            .join("")
+            .replace(/^[.\s]+/, "")}
+        </p>
+      )}
+    </div>
   );
-  if (status.spinner)
-    return (
-      <span className="inline-flex items-center gap-2 text-dim">
-        <DiscLoader /> {body}
-      </span>
-    );
-  return <span className={status.tone === "danger" ? "text-red" : undefined}>{body}</span>;
 };
 
 export const Game = ({ match }: Props) => {
   const busy = useAtomValue(busyAtom);
   const rpcReady = useAtomValue(rpcClientAtom) !== null;
   const [importVal, setImportVal] = useState("");
-  const [copied, setCopied] = useState(false);
-  // "View board": the verdict card steps aside to show the final position;
+  const { copied, copyError, copy } = useCopy();
+  // Dismissing the verdict card reveals the final position;
   // the banner and end-game buttons below take over.
   const [overlayDismissed, setOverlayDismissed] = useState(false);
 
@@ -74,16 +84,24 @@ export const Game = ({ match }: Props) => {
   const full = s.moveCount >= CELLS;
   const staked = isStaked(match);
   const { result, finish, myTurn, needManualImport, importMatch } = useMatchWatcher(match);
+  const ending = gameEnd(match, myPk, result);
+  // Do not pass the visual ending to the watcher/autopilot: they must still
+  // settle the match. Leaving early retains the record so collection can resume.
+  const leaveEndedGame = () => exitMatch(!!result);
+  const playAgain = () => {
+    leaveEndedGame();
+    newGame();
+  };
 
   // The obligation clock only runs once something is staked on it — an
   // untouched game has no forfeit deadline by contract (it's dissolvable
   // instead); the mode says when that is (classic: first disc; fourk: the
   // round's first commitment).
-  const clock = useMoveClock(match, !open && !full && !result && mode.roundStarted(match));
+  const clock = useMoveClock(match, !open && !full && !ending && mode.roundStarted(match));
   // The whole-game limit only bites once joined (sudden_death requires a
   // live match) — surface it so a silent 50/50 split never blindsides
   // someone nursing a winning position.
-  const capLeft = useCapClock(match, !open && !result);
+  const capLeft = useCapClock(match, !open && !ending, "clock");
   const myProfile = useAtomValue(profileAtom);
   // Own seat falls back to the local profile for games created before
   // profiles existed; opponents without one get pubkey-derived identities.
@@ -92,17 +110,18 @@ export const Game = ({ match }: Props) => {
   const p1Color = match.p1Color ?? "red";
   const p2Color = p1Color === "red" ? "blue" : "red";
 
-  // Joined but nothing staked yet: the pre-game lobby, where either player
-  // may still unwind the match on-chain and both stakes come back.
+  // Before the first move or sealed pick, either player can unwind the match.
+  // P1 can kick immediately; P2 must wait one move clock to prevent instant
+  // join-and-cancel abuse. In staked games both stakes come back. The UI used
+  // to hide the kick for one clock so it would not read as an accusation, but
+  // that left a host with no exit from a guest who joined and idled, so it
+  // now mirrors the covenant.
   const inLobby = mode.inLobby(match) && !result;
-  // One move clock from the join gates both lobby exits: the joiner's
-  // withdrawal is covenant-gated (anti-grief; the same age math as the
-  // forfeit clock), and the host's kick waits out the same clock in the UI —
-  // a red "Kick opponent" the second someone sits down reads as an accusation
-  // nobody has earned yet.
-  const lobbyClock = useMoveClock(match, inLobby && iAmPlayer);
+  const lobbyClock = useMoveClock(match, inLobby && role === "p2", {
+    kind: "age",
+    daa: s.moveTimeout,
+  });
   const withdrawGated = role === "p2" && !lobbyClock.expired;
-  const kickHidden = role === "p1" && !lobbyClock.expired;
 
   // ONE optimistic record for both modes: the column just clicked, keyed to
   // the game UTXO it was played on — any fresh match state (our confirmation
@@ -118,7 +137,7 @@ export const Game = ({ match }: Props) => {
     clockExpired: clock.expired,
     busy,
     pendingCol,
-    result,
+    result: ending?.message ?? result,
   });
 
   useAutopilot(match, mode, { result, busy, finish });
@@ -162,48 +181,75 @@ export const Game = ({ match }: Props) => {
   const submitDrop = async (m: Match, col: number) => {
     const key = seatKey();
     const rpc = await getRpc();
+    const low = await cov.chainCheckpoint(rpc);
     const outcome = await mode.actions.drop(rpc, key, m, col);
-    if (outcome.kind === "ended") {
-      // End on the finished position (lighting up the winning line) —
-      // the covenant is terminal, so the watcher will never deliver it.
-      finish(outcome.message, outcome.match);
-    } else {
+    if (outcome.kind === "continued") {
       updateMatch(outcome.match);
+      return;
     }
+    // A winning drop ends the game only once the chain took it: a timeout
+    // claim by the opponent can still win the input through another node.
+    const settled = await cov.awaitSettlement(rpc, m, low, 30_000);
+    if (settled?.status === "ended") {
+      // End on the finished position (lighting up the winning line) — the
+      // covenant is terminal, so the watcher will never deliver it.
+      const ours = settled.spend.kind === "winning_move";
+      finish(
+        ours ? outcome.message : mode.describeEnd(settled.spend, m, myPk),
+        ours ? outcome.match : mode.finalSnapshot(settled.spend, m),
+      );
+    } else if (settled?.status === "advanced") updateMatch(settled.match);
+  };
+
+  /** After a lost race for the game UTXO: wait for the winning transition
+   * to land and follow the chain to it. Null if the game ended instead or
+   * nothing showed up in time. */
+  const catchUp = async (from: Match): Promise<Match | null> => {
+    const rpc = await getRpc();
+    const checkpoint = loadCheckpoint(from.covenantId);
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const synced = await cov.syncMatch(rpc, from);
+      if (synced.status === "advanced") return synced.match;
+      if (synced.status === "terminated" && checkpoint) {
+        const followed = await cov.followChain(rpc, from, checkpoint).catch(() => null);
+        if (followed?.status === "advanced") return followed.match;
+        if (followed?.status === "ended") return null;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    return null;
   };
 
   const drop = (col: number) => {
     setPending({ onTxid: match.txid, col });
     runAction(async () => {
-      try {
-        await submitDrop(match, col);
-      } catch (e) {
-        // A stale-UTXO rejection means the pick raced another transition
-        // (usually the opponent's, landing mid-click). The pick itself is
-        // still what the player wants: resync and replay it against the
-        // fresh state, and only hand the click back if it no longer fits
-        // there (column full, game over, not our move anymore).
-        if (!isStaleMatchError(String((e as Error)?.message ?? e))) {
-          setPending(null);
-          throw e;
-        }
-        const { status, match: next } = await cov.syncMatch(await getRpc(), match);
-        if (status === "advanced") updateMatch(next);
-        const replayable =
-          status === "advanced" &&
-          cov.isActionable(next, myPk) &&
-          heightOf(next.state.board, col) < ROWS;
-        if (!replayable) {
-          setPending(null);
-          throw e;
-        }
-        setPending({ onTxid: next.txid, col });
+      // A stale-UTXO rejection (or a lost race the chain reports) means the
+      // pick raced another transition — usually the opponent's commit landing
+      // first, which a Fourk second pick must be rebuilt on. The pick itself
+      // is still what the player wants: follow the chain and replay it,
+      // repeatedly if the race recurs, while it still fits (column open, our
+      // move). Speed matters: near the cutoff the rebuilt pick has the rebase
+      // grace (~10 s after the opponent's pick) to be accepted.
+      let target = match;
+      for (let attempt = 0; ; attempt++) {
         try {
-          await submitDrop(next, col);
-        } catch (e2) {
-          // The chain said no twice — take the pick back and surface it.
-          setPending(null);
-          throw e2;
+          await submitDrop(target, col);
+          return;
+        } catch (e) {
+          if (!isStaleMatchError(String((e as Error)?.message ?? e)) || attempt >= 4) {
+            setPending(null);
+            throw e;
+          }
+          const next = await catchUp(target);
+          if (next) updateMatch(next);
+          const replayable =
+            next !== null && cov.isActionable(next, myPk) && heightOf(next.state.board, col) < ROWS;
+          if (!replayable) {
+            setPending(null);
+            throw e;
+          }
+          setPending({ onTxid: next.txid, col });
+          target = next;
         }
       }
     });
@@ -217,33 +263,43 @@ export const Game = ({ match }: Props) => {
     runAction(async () => {
       const key = seatKey();
       const rpc = await getRpc();
-      const mins = await cov.moveClockRemaining(rpc, match);
+      const mins = await cov.moveClockRemaining(rpc, match, mode.clock(match));
       if (mins) {
         throw new Error(
           `Your opponent still has about ${mins} minute${mins === 1 ? "" : "s"} to move.`,
         );
       }
+      const low = await cov.chainCheckpoint(rpc);
       try {
         await mode.actions.claimTimeout(rpc, key, match);
-        finish("Your opponent ran out of time — you win by timeout. 🎉");
       } catch (e) {
         // The opponent may have moved (or another claim landed) at the last
         // second — resync instead of surfacing a spent-UTXO error.
         const { status, match: next } = await cov.syncMatch(rpc, match);
         if (status === "advanced") updateMatch(next);
         else if (status !== "terminated") throw e;
+        return;
       }
+      // The claim is in a mempool, which proves nothing yet: a late move can
+      // still win the input. Record the ending the chain actually accepted.
+      const settled = await cov.awaitSettlement(rpc, match, low, 30_000);
+      if (settled?.status === "ended")
+        finish(
+          mode.describeEnd(settled.spend, match, myPk),
+          mode.finalSnapshot(settled.spend, match),
+        );
+      else if (settled?.status === "advanced") updateMatch(settled.match);
     });
 
-  // One exit for every phase: an open game we created is cancelled on-chain
-  // (the stake comes back) and forgotten; anything else goes back to the hub
-  // but stays under "Open matches".
-  const leaveMatch = async () => {
+  // Cancellation is separate from Home, which always preserves live games.
+  const cancelOpenGame = async () => {
     if (open && role === "p1") {
       const ok = await askConfirm({
-        title: "Call off the game?",
-        body: "Nobody has joined yet, so the game is called off and your stake comes back to your balance.",
-        confirm: "Call it off",
+        title: "Cancel game?",
+        body: staked
+          ? "Your stake returns to your balance. The invite link will no longer work."
+          : "This cancels the game. The invite link will no longer work.",
+        confirm: "Cancel game",
         danger: true,
       });
       if (!ok) return;
@@ -252,8 +308,6 @@ export const Game = ({ match }: Props) => {
         await cov.cancelMatch(rpc, seatKey(), match);
         exitMatch(true);
       });
-    } else {
-      exitMatch(false);
     }
   };
 
@@ -262,22 +316,26 @@ export const Game = ({ match }: Props) => {
       role === "p1"
         ? {
             title: "Kick your opponent?",
-            body: "Their stake returns and their link stops working. You get a fresh game with a new invite link to share.",
+            body: staked
+              ? "Their stake returns and their link stops working. You get a fresh game with a new invite link to share."
+              : "Their link stops working. You'll get a fresh game and a new invite link to share.",
             confirm: "Kick them",
             danger: true,
           }
         : {
-            title: "Leave the match?",
-            body: "It hasn't started, so it's called off and both stakes return.",
-            confirm: "Leave",
+            title: "Cancel game?",
+            body: staked
+              ? "It hasn't started, so it's called off and both stakes return."
+              : "The game hasn't started. Cancelling ends it for both players.",
+            confirm: "Cancel game",
             danger: true,
           },
     );
     if (!ok) return;
     runAction(async () => {
-      startConnecting(role === "p1" ? "Kicking your opponent" : "Leaving the match", [
-        "Connecting to the Kaspa network",
-        "Returning both stakes",
+      startConnecting(role === "p1" ? "Kicking your opponent" : "Cancelling the game", [
+        staked ? "Connecting to the Kaspa network" : "Connecting to the game",
+        staked ? "Returning both stakes" : "Closing the game",
       ]);
       const key = seatKey();
       const rpc = await getRpc();
@@ -286,11 +344,12 @@ export const Game = ({ match }: Props) => {
       // the age on-chain so a slightly-early click gets minutes, not a
       // sequence-lock rejection.
       if (role === "p2") {
-        const mins = await cov.moveClockRemaining(rpc, match);
+        const mins = await cov.moveClockRemaining(rpc, match, {
+          kind: "age",
+          daa: s.moveTimeout,
+        });
         if (mins) {
-          throw new Error(
-            `You can withdraw in about ${mins} minute${mins === 1 ? "" : "s"} — the short wait stops join-and-run griefing.`,
-          );
+          throw new Error(`You can cancel in about ${mins} minute${mins === 1 ? "" : "s"}.`);
         }
       }
       await ensureFunds(rpc, key, cov.FEE_HEADROOM, { staked: isStaked(match) });
@@ -312,133 +371,122 @@ export const Game = ({ match }: Props) => {
   // into the ending sentences (resultTone classifies those by substring).
   // A testnet reset returns nothing, so it gets no money line.
   let potLine: string | undefined;
-  if (staked && result && iAmPlayer && result !== RESET_RESULT) {
-    const tone = resultTone(result);
+  const tone = ending?.tone ?? "neutral";
+  if (staked && ending?.settling && iAmPlayer) {
     potLine =
       tone === "win"
-        ? `The ${fmtKas(match.value)} KAS pot is in your balance.`
+        ? `Winnings available about ${fmtDaaDuration(s.moveTimeout)} after the win. Keep this game open to collect, or reopen it from Your matches.`
+        : tone === "loss"
+          ? "Your opponent's winnings are being processed."
+          : "Your share is being returned. You can reopen this game from Your matches.";
+  }
+  if (staked && result && iAmPlayer && result !== RESET_RESULT) {
+    potLine =
+      tone === "win"
+        ? `The ${fmtKas(match.value)} KAS pot, minus fees, is in your balance.`
         : tone === "loss"
           ? `The ${fmtKas(match.value)} KAS pot went to your opponent.`
-          : `Your ${fmtKas(open ? match.value : match.value / 2n)} KAS came back to your balance.`;
+          : /draw|split|returned|back|called off|dissolved/i.test(result)
+            ? `Your share of the pot came back to your balance (minus fees).`
+            : undefined;
   }
 
   return (
-    // A full-viewport column (minus the shell's 1rem padding top and bottom
-    // and its 2.5rem account header): the seats and status up top, the
-    // buttons pinned at the bottom, and the board stretched between.
-    <div className="flex min-h-[calc(100dvh-4.5rem)] flex-col">
+    // The shell has no empty account header during a game. The board gets
+    // the space left by the match header, players, and optional invite panel.
+    <div className="flex min-h-[calc(100dvh-2rem)] flex-col">
+      <GameHeader
+        mode={mode.meta}
+        moveTimeout={s.moveTimeout}
+        busy={busy}
+        ended={!!ending}
+        capTime={capLeft}
+        staked={staked}
+        onHome={() => (ending ? leaveEndedGame() : exitMatch(false))}
+      />
       {/* The seats flank the status; on narrow screens the status drops to
        * its own line below them. */}
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
+      <div className="grid grid-cols-2 items-center gap-x-3 gap-y-2 sm:grid-cols-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)]">
         <PlayerPanel
           pk={s.p1}
           profile={p1Profile}
           color={p1Color}
           isMe={role === "p1"}
-          active={view.seats[0].active}
-          clock={view.seats[0].showClock ? clock.text : null}
+          clock={
+            rpcReady && !ending && view.seats[0].active && view.seats[0].showClock ? clock : null
+          }
           collisionPriority={view.seats[0].collisionPriority}
         />
-        <div className="order-3 w-full text-center sm:order-0 sm:w-auto sm:min-w-0 sm:flex-1">
-          {!rpcReady && !result ? (
-            <span className="inline-flex items-center gap-2 text-dim">
-              <DiscLoader /> Connecting to the game…
-            </span>
-          ) : open ? (
-            <span>Waiting for your opponent to join…</span>
-          ) : result ? (
-            <span>Game over</span>
-          ) : full ? (
-            <span>Board full…</span>
-          ) : (
-            <Status status={view.status} />
-          )}
-          {staked && !result && (
+        <div className="order-3 col-span-2 min-w-0 text-center sm:order-0 sm:col-span-1">
+          <div className="flex flex-wrap items-center justify-center gap-x-3 gap-y-1">
+            <div role="status" aria-live="polite" className="min-w-0">
+              {ending ? (
+                <span className="text-lg font-semibold">{ending.title}</span>
+              ) : !rpcReady ? (
+                <span className="inline-flex items-center gap-2 text-dim">
+                  <DiscLoader /> Connecting to the game…
+                </span>
+              ) : open ? (
+                <>
+                  <h2 className="text-lg font-semibold">Connect four to win</h2>
+                  <p className="mt-0.5 text-sm text-dim">Horizontal, vertical, or diagonal.</p>
+                </>
+              ) : result ? (
+                <span>Game over</span>
+              ) : full ? (
+                <span>Board full…</span>
+              ) : (
+                <Status status={view.status} />
+              )}
+            </div>
+          </div>
+          {staked && !ending && (
             <div
               className="text-sm text-accent"
               title="Both stakes sit in the pot until the game decides who takes it."
             >
               {open
                 ? `${fmtKas(match.value * 2n)} KAS pot once your opponent joins`
-                : `Pot: ${fmtKas(match.value)} KAS — winner takes it`}
-            </div>
-          )}
-          {/* "Pot" is stake vocabulary — a free game's cap just ends the
-           * game, and the invite page already says it that way. */}
-          {capLeft && (
-            <div
-              className="text-sm text-dim"
-              title={
-                staked
-                  ? "This game has a total time limit. If it's still unfinished when the limit hits, the pot splits evenly and both stakes return."
-                  : "This game has a total time limit. If it's still unfinished when the limit hits, it ends as a draw."
-              }
-            >
-              {capLeft === "any moment"
-                ? `⌛ ${staked ? "the pot splits" : "the game ends"} any moment now`
-                : `⌛ ${staked ? "pot splits" : "game ends"} in ${capLeft} if unfinished`}
+                : `Pot: ${fmtKas(match.value)} KAS. Winner takes it`}
             </div>
           )}
         </div>
         <PlayerPanel
           pk={s.p2}
+          align="end"
           profile={p2Profile}
           color={p2Color}
           isMe={role === "p2"}
-          active={view.seats[1].active}
-          clock={view.seats[1].showClock ? clock.text : null}
+          clock={
+            rpcReady && !ending && view.seats[1].active && view.seats[1].showClock ? clock : null
+          }
           collisionPriority={view.seats[1].collisionPriority}
         />
       </div>
 
-      {result && !overlayDismissed && (
+      {ending && !overlayDismissed && (
         <ResultOverlay
-          result={result}
+          title={ending.title}
+          result={ending.message}
           pot={potLine}
-          tone={resultTone(result)}
+          tone={tone}
           busy={busy}
-          onPlayAgain={() => {
-            exitMatch(true);
-            newGame();
-          }}
-          onExit={() => exitMatch(true)}
+          onPlayAgain={playAgain}
+          onExit={leaveEndedGame}
           onDismiss={() => setOverlayDismissed(true)}
         />
       )}
 
-      {open && role === "p1" && !needManualImport && (
-        <div className="card mx-auto mt-3 w-full max-w-175 px-4 py-3">
-          <p className="mb-1.5 text-sm text-dim">
-            Send this link to your opponent — the game starts the moment they take their seat:
-          </p>
-          <div className="flex items-center gap-2">
-            <input className="input" readOnly value={link} onFocus={(e) => e.target.select()} />
-            <button
-              className="btn"
-              onClick={() => {
-                navigator.clipboard.writeText(link);
-                setCopied(true);
-                setTimeout(() => setCopied(false), 1500);
-              }}
-            >
-              {copied ? "Copied!" : "Copy link"}
-            </button>
-          </div>
-        </div>
-      )}
-
       {needManualImport && (
         <div className="card mx-auto mt-3 w-full max-w-175 px-4 py-3.5">
-          <h2 className="mb-2 text-base font-semibold text-accent">
-            Hmm — the game moved without us
-          </h2>
+          <h2 className="mb-2 text-base font-semibold text-accent">Game out of sync</h2>
           <p className="text-sm text-dim">
-            Something updated this game while this page wasn't watching. Paste the invite link from
-            your opponent to catch up.
+            We couldn't load the latest moves. Paste your opponent's current game link to continue.
           </p>
           <div className="mt-1.5 flex items-center gap-2">
             <input
               className="input"
+              aria-label="Invite link to catch up"
               value={importVal}
               onChange={(e) => setImportVal(e.target.value)}
               placeholder="invite link…"
@@ -448,7 +496,7 @@ export const Game = ({ match }: Props) => {
               disabled={!importVal.trim()}
               onClick={() =>
                 runAction(async () => {
-                  importMatch(importVal);
+                  await importMatch(importVal);
                   setImportVal("");
                 })
               }
@@ -469,24 +517,24 @@ export const Game = ({ match }: Props) => {
        * invite card, error banner and all) instead of guessing reserves off
        * the viewport. items-start keeps a width-bound (phone) board snug
        * under the status bar rather than adrift in the middle of the slack.
-       * h-80 + grow (NOT flex-1): a basis-0 item in a min-height column
+       * h-76 + grow (NOT flex-1): a basis-0 item in a min-height column
        * grows on screen but resolves cqh to 0, so the board would collapse
        * to its floor size — an explicit base height keeps cq resolution
        * live, doubles as the floor (size containment means the board can't
        * push the column taller; from the floor up the page just scrolls),
        * and shrink-0 stops tight viewports from squeezing it below that. */}
-      <div className="relative flex h-80 shrink-0 grow items-start justify-center py-3 [container-type:size]">
+      <div className="relative flex h-76 shrink-0 grow items-start justify-center py-3 sm:h-80 [container-type:size]">
         {/* Floating over the board's slack space instead of in the column
-         * flow, so appearing (after "View board") never shifts the layout. */}
-        {result && overlayDismissed && (
+         * flow, so dismissing the result dialog never shifts the layout. */}
+        {ending && overlayDismissed && (
           <div className="absolute top-1 left-1/2 z-10 w-max max-w-[calc(100%-1rem)] -translate-x-1/2 rounded-lg border border-ok bg-panel/80 px-3.5 py-2 text-center backdrop-blur-xs">
-            {result}
+            {ending.message}
             {potLine && <span className="block text-sm text-accent">{potLine}</span>}
           </div>
         )}
         <Board
           state={shown}
-          interactive={view.board.interactive}
+          interactive={!ending && view.board.interactive}
           winningCells={winningCells(shown.board)}
           onDrop={drop}
           p1Color={p1Color}
@@ -497,37 +545,65 @@ export const Game = ({ match }: Props) => {
         />
       </div>
 
-      <div className="flex flex-wrap items-center justify-center gap-2.5">
-        {result && overlayDismissed && (
-          <button
-            className="btn"
-            onClick={() => {
-              exitMatch(true);
-              newGame();
-            }}
-          >
+      {open && role === "p1" && !needManualImport && (
+        <section
+          aria-label="Invite an opponent"
+          className="card mx-auto w-full max-w-175 px-4 py-3"
+        >
+          <div className="mb-2">
+            <div className="flex items-center justify-between gap-2">
+              <h2 className="text-sm font-semibold">Waiting for an opponent</h2>
+              <button
+                type="button"
+                className="min-h-8 shrink-0 cursor-pointer text-xs text-dim underline hover:text-ink disabled:cursor-default disabled:opacity-50"
+                disabled={busy}
+                onClick={() => void cancelOpenGame()}
+              >
+                Cancel game
+              </button>
+            </div>
+            <p className="text-xs text-dim">Share this link to start playing.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <input
+              aria-label="Invite link"
+              className="input"
+              readOnly
+              value={link}
+              onFocus={(e) => e.target.select()}
+            />
+            <button className="btn" onClick={() => void copy(link)}>
+              {copied ? "Copied!" : "Copy link"}
+            </button>
+          </div>
+          {copyError && (
+            <p role="status" className="mt-2 text-sm text-red">
+              {copyError}
+            </p>
+          )}
+        </section>
+      )}
+
+      <div className="flex flex-wrap items-center justify-center gap-2.5 empty:hidden">
+        {ending && overlayDismissed && (
+          <button className="btn" disabled={busy} onClick={playAgain}>
             Play again
-          </button>
-        )}
-        {result && overlayDismissed && (
-          <button className="btn btn-muted" onClick={() => exitMatch(true)}>
-            Back to start
           </button>
         )}
         {view.canClaimTimeout && (
           <button className="btn" disabled={busy} onClick={claimTimeoutWin}>
-            Time's up — claim the win
+            Claim timeout win
           </button>
         )}
-        {inLobby && iAmPlayer && !kickHidden && (
+        {inLobby && iAmPlayer && (
           <button
             className="btn btn-danger"
             disabled={busy || withdrawGated}
             title={
               role === "p1"
-                ? "Your opponent joined but hasn't moved for a whole move clock. Kicking clears their seat and gets you a fresh invite link."
+                ? "Before play starts, you can remove your opponent and get a fresh game with a new invite link."
                 : withdrawGated
-                  ? "The covenant lets the joiner withdraw after one move clock — the wait stops join-and-run lobby griefing."
+                  ? "You can cancel once the lobby timer ends."
                   : undefined
             }
             onClick={() => void dissolveGame()}
@@ -535,13 +611,8 @@ export const Game = ({ match }: Props) => {
             {role === "p1"
               ? "Kick opponent"
               : withdrawGated && lobbyClock.text
-                ? `Withdraw & refund in ${lobbyClock.text}`
-                : "Withdraw & refund"}
-          </button>
-        )}
-        {!result && (
-          <button className="btn btn-muted" disabled={busy} onClick={() => void leaveMatch()}>
-            Leave match
+                ? `Cancel game in ${lobbyClock.text}`
+                : "Cancel game"}
           </button>
         )}
       </div>

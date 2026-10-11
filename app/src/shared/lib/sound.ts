@@ -5,11 +5,50 @@
  */
 
 let ctx: AudioContext | null = null;
+const SOUND_KEY = "fourk.sound";
+let enabled: boolean | undefined;
+const listeners = new Set<() => void>();
+
+export function isSoundEnabled(): boolean {
+  if (enabled === undefined) {
+    try {
+      enabled = localStorage.getItem(SOUND_KEY) !== "off";
+    } catch {
+      enabled = true;
+    }
+  }
+  return enabled;
+}
+
+export function setSoundEnabled(value: boolean): void {
+  enabled = value;
+  try {
+    localStorage.setItem(SOUND_KEY, value ? "on" : "off");
+  } catch {
+    // Still mute this tab when browser storage is unavailable.
+  }
+  for (const listener of listeners) listener();
+}
+
+export function subscribeToSound(listener: () => void): () => void {
+  listeners.add(listener);
+  const changed = (event: StorageEvent) => {
+    if (event.key !== SOUND_KEY && event.key !== null) return;
+    enabled = undefined;
+    listener();
+  };
+  window.addEventListener("storage", changed);
+  return () => {
+    listeners.delete(listener);
+    window.removeEventListener("storage", changed);
+  };
+}
 
 function audioCtx(): AudioContext | null {
+  if (!isSoundEnabled()) return null;
   try {
     ctx ??= new AudioContext();
-    if (ctx.state === "suspended") void ctx.resume();
+    if (ctx.state === "suspended") void ctx.resume().catch(() => {});
     return ctx;
   } catch {
     return null;

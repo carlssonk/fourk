@@ -14,7 +14,8 @@ import {
   type State,
 } from "./game";
 import type { SimulCore } from "../modes/fourk/core";
-import { simulFromFlatJson, simulToFlatJson } from "../modes/fourk/wire";
+import { core2Of, validateCore2 } from "../modes/fourk2/core";
+import { simul2FromFlatJson, simul2ToFlatJson } from "../modes/fourk2/wire";
 import {
   base64UrlToBytes,
   bytesToBase64Url,
@@ -49,13 +50,20 @@ export interface Match {
   txid: string;
   /** Current pot in sompi. */
   value: bigint;
-  /** Game mode; absent = classic alternating play. "fourk" is simultaneous
-   * commit-reveal play — consensus state (the game address derives from it),
-   * so it always travels in share codes and stored records. */
-  mode?: "fourk";
-  /** The round machine for fourk mode (round, commitments, reveals);
-   * consensus state like `mode`. Absent on classic matches. */
+  /** Game mode; absent = classic alternating play, "fourk2" the
+   * simultaneous shared-deadline protocol — consensus state (the game address
+   * derives from it), so it always travels in share codes and stored records.
+   * (The first simultaneous protocol, "fourk", is retired.) */
+  mode?: "fourk2";
+  /** The round machine for the fourk modes (round, commitments, reveals; V2
+   * adds readiness and the picking cutoff — see SimulCore2); consensus state
+   * like `mode`. Absent on classic matches. */
   simul?: SimulCore;
+  /** The DAA score at which the chain accepted `txid`, when it was observed
+   * alive in the UTXO set. Observational, never wire state: fourk2 derives
+   * its commit successors from it, and it is dropped whenever `txid` changes
+   * without an observation. */
+  acceptedDaa?: number;
   /** Whatever identities we've learned; merged as they arrive. */
   profiles?: { p1?: PlayerProfile; p2?: PlayerProfile };
   /** How the game ended, recorded the moment it was seen to finish — so a
@@ -111,6 +119,14 @@ export function isStaked(m: Match): boolean {
  * that it never contains FREE_STAKE — a test holds the line. */
 export const STAKE_PRESETS = [0n, 1n, 5n, 25n].map((k) => k * SOMPI_PER_KAS);
 
+/** Nonnegative estimated countdown, including seconds and hours beyond one day. */
+export function fmtCountdown(seconds: number): string {
+  const remaining = Number.isFinite(seconds) ? Math.max(0, Math.ceil(seconds)) : 0;
+  const hours = Math.floor(remaining / 3600);
+  const minutes = Math.floor((remaining % 3600) / 60);
+  return [hours, minutes, remaining % 60].map((value) => String(value).padStart(2, "0")).join(":");
+}
+
 /** Human duration for a DAA block count (~10 blocks/s). */
 export function fmtDaaDuration(daa: number): string {
   const mins = Math.round(daa / 600);
@@ -131,6 +147,15 @@ export function parseKas(input: string): bigint | null {
   const frac = m[2] ? BigInt(m[2].padEnd(8, "0")) : 0n;
   const sompi = whole + frac;
   return sompi > 0n ? sompi : null;
+}
+
+/** Exact decimal for editable amounts: display rounding must never change a transfer. */
+export function fmtKasExact(sompi: bigint): string {
+  const whole = sompi / SOMPI_PER_KAS;
+  const fraction = String(sompi % SOMPI_PER_KAS)
+    .padStart(8, "0")
+    .replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : String(whole);
 }
 
 export function fmtKas(sompi: bigint): string {
@@ -171,7 +196,8 @@ export function matchToJson(m: Match): string {
       value: Number(m.value),
       moveTimeout: m.state.moveTimeout,
       deadline: m.state.deadline,
-      ...(m.mode === "fourk" && { mode: m.mode, ...simulToFlatJson(m.simul) }),
+      ...(m.mode === "fourk2" && { mode: m.mode, ...simul2ToFlatJson(core2Of(m)) }),
+      ...(m.acceptedDaa !== undefined && { acceptedDaa: m.acceptedDaa }),
       ...(m.profiles && { profiles: m.profiles }),
       ...(m.p1Color && { p1Color: m.p1Color }),
       ...(m.result && { result: m.result }),
@@ -208,13 +234,18 @@ const matchJsonSchema = z.object({
   p1Color: z.enum(["red", "blue"]).optional(),
   result: z.string().optional(),
   // Fourk mode (simultaneous): the round machine rides along.
-  mode: z.literal("fourk").optional(),
+  mode: z.enum(["fourk2"]).optional(),
   round: z.number().int().min(0).max(255).optional(),
   commit1: hex64.optional(),
   commit2: hex64.optional(),
   reveal1: z.number().int().min(0).max(7).optional(),
   reveal2: z.number().int().min(0).max(7).optional(),
   pendingWin: z.number().int().min(0).max(2).optional(),
+  // Fourk V2: readiness and the shared picking cutoff.
+  pickDeadline: z.number().int().nonnegative().optional(),
+  firstCommitter: z.number().int().min(0).max(2).optional(),
+  revealTimeout: z.number().int().positive().optional(),
+  acceptedDaa: z.number().int().nonnegative().optional(),
 });
 
 export function matchFromJson(json: string): Match {
@@ -233,13 +264,16 @@ export function matchFromJson(json: string): Match {
   // Stored records are untrusted (localStorage, legacy share codes) — the
   // rulebook's reachability invariants apply here too, from their one home.
   validateReachableState(state);
+  const simul2 = raw.mode === "fourk2" ? simul2FromFlatJson(raw) : undefined;
+  if (simul2) validateCore2(state, simul2);
   return {
     network: raw.network,
     covenantId: raw.covenantId,
     state,
     txid: raw.txid,
     value: BigInt(raw.value),
-    ...(raw.mode === "fourk" && { mode: raw.mode, simul: simulFromFlatJson(raw) }),
+    ...(simul2 && { mode: "fourk2" as const, simul: simul2 }),
+    ...(raw.acceptedDaa !== undefined && { acceptedDaa: raw.acceptedDaa }),
     ...(raw.profiles && {
       profiles: {
         ...(raw.profiles.p1 && { p1: raw.profiles.p1 }),
@@ -276,7 +310,15 @@ export function loadMatches(): Match[] {
   const out: Match[] = [];
   try {
     const raw = localStorage.getItem(LIST_KEY);
-    if (raw) for (const item of JSON.parse(raw) as string[]) out.push(matchFromJson(item));
+    const items: unknown = raw ? JSON.parse(raw) : [];
+    if (!Array.isArray(items)) return out;
+    for (const item of items) {
+      try {
+        if (typeof item === "string") out.push(matchFromJson(item));
+      } catch {
+        // Salvage the other games even when one record is damaged.
+      }
+    }
   } catch {
     /* corrupt list — start over rather than brick the app */
   }
@@ -305,7 +347,14 @@ const CHECKPOINT_KEY = "fourk.checkpoints"; // covenantId -> block hash
 
 function loadCheckpoints(): Record<string, string> {
   try {
-    return JSON.parse(localStorage.getItem(CHECKPOINT_KEY) ?? "{}");
+    const raw = JSON.parse(localStorage.getItem(CHECKPOINT_KEY) ?? "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    return Object.fromEntries(
+      Object.entries(raw).filter(
+        (entry): entry is [string, string] =>
+          typeof entry[1] === "string" && /^[0-9a-f]{64}$/.test(entry[1]),
+      ),
+    );
   } catch {
     return {};
   }
@@ -330,7 +379,14 @@ const FINISHED_KEY = "fourk.finished"; // covenantId -> ms timestamp first seen 
 
 function loadFinishedSeen(): Record<string, number> {
   try {
-    return JSON.parse(localStorage.getItem(FINISHED_KEY) ?? "{}");
+    const raw = JSON.parse(localStorage.getItem(FINISHED_KEY) ?? "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    return Object.fromEntries(
+      Object.entries(raw).filter(
+        (entry): entry is [string, number] =>
+          typeof entry[1] === "number" && Number.isFinite(entry[1]) && entry[1] > 0,
+      ),
+    );
   } catch {
     return {};
   }

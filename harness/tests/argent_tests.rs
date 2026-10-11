@@ -29,7 +29,7 @@ use kaspa_consensus_core::{
         sighash_type::SIG_HASH_ALL,
     },
     tx::{
-        ComputeCommit, CovenantBinding, MutableTransaction, ScriptPublicKey, Transaction,
+        CovenantBinding, MutableTransaction, ScriptPublicKey, Transaction,
         TransactionId, TransactionOutpoint, UtxoEntry,
     },
 };
@@ -558,12 +558,13 @@ fn run_sudden_death(
     active: BTreeMap<String, ArtifactValue>,
     payouts: Vec<(ScriptPublicKey, u64)>,
     lock_time: u64,
+    sequence: u64,
 ) -> RunResult {
     run_match_entry(
         EntryCall::new("sudden_death"),
         active,
         POT,
-        0,
+        sequence,
         lock_time,
         payouts,
         None,
@@ -591,77 +592,6 @@ fn assert_fail(result: RunResult, label: &str) {
 }
 
 // -- single-input API (used by the wasm browser bindings) ------------------
-
-/// The tx-free single-input API must reproduce byte-for-byte what build()
-/// puts in a fully verified transaction. join is the strongest case: its sig
-/// script carries compiler-generated template witness arguments.
-#[test]
-fn single_input_api_matches_build_output() {
-    let builder = TxBuilder::new(artifact()).expect("builder");
-    let lobby = lobby_state();
-    let utxo = builder
-        .covenant_utxo(
-            "FourkLobby",
-            lobby.clone(),
-            STAKE,
-            0,
-            false,
-            Some(covenant_id()),
-        )
-        .expect("lobby utxo");
-
-    let joiner = p2();
-    let captured = std::cell::RefCell::new(Vec::new());
-    let entry = EntryCall::new("join").args_with(|tx, idx| {
-        let sig = sign_input(tx, idx, &joiner);
-        *captured.borrow_mut() = sig.clone();
-        args![sig, pk(&p2())]
-    });
-    let context = TxContext::new()
-        .actor_input(
-            "FourkLobby",
-            lobby.clone(),
-            entry,
-            outpoint(),
-            utxo.clone(),
-            0,
-        )
-        .actor_output(
-            "FourkMatch",
-            match_state(&new_game()),
-            CovenantBinding::new(0, covenant_id()),
-            POT,
-        );
-    let tx = builder.build(&context).expect("join builds and verifies");
-
-    let reproduced = builder
-        .entry_signature_script(
-            "FourkLobby",
-            lobby.clone(),
-            "join",
-            args![captured.borrow().clone(), pk(&p2())],
-        )
-        .expect("single-input sig script");
-    assert_eq!(
-        tx.inputs[0].signature_script, reproduced,
-        "sig script mismatch"
-    );
-
-    let spk = builder
-        .actor_script_public_key("FourkLobby", lobby.clone())
-        .expect("lobby spk");
-    assert_eq!(utxo.script_public_key, spk, "lock script mismatch");
-
-    let redeem = builder
-        .actor_redeem_script("FourkLobby", lobby)
-        .expect("lobby redeem script");
-    assert_eq!(
-        spk,
-        kaspa_txscript::pay_to_script_hash_script(&redeem),
-        "redeem/spk mismatch"
-    );
-}
-
 // -- join ------------------------------------------------------------------
 
 #[test]
@@ -1498,39 +1428,79 @@ fn claim_forfeit_must_end_the_lineage() {
 
 // -- sudden_death ----------------------------------------------------------
 
+// The cap waits out the mover's clock (sequence) as well as the deadline
+// (lock time); then a begun, unfinished game pays the waiting player — the
+// one a forfeit would pay — and only an unmoved or full board splits. A
+// player to move who stalls into the cap cannot turn an owed forfeit into a
+// split.
+
+const CLOCK: u64 = MOVE_TIMEOUT as u64;
+
+fn whole_pot_to(winner: &[u8; 32]) -> Vec<(ScriptPublicKey, u64)> {
+    vec![(p2pk_spk(winner), POT)]
+}
+
 #[test]
-fn sudden_death_splits_past_the_deadline() {
+fn sudden_death_pays_the_waiting_player_once_the_clock_runs_out() {
+    // play([3, 3]): two moves, p1 to move, so p2 is the waiting player.
+    let begun = || match_state(&play(&[3, 3]));
     assert_pass(
-        run_sudden_death(match_state(&play(&[3, 3])), half_split(), DEADLINE as u64),
-        "at the cap",
+        run_sudden_death(begun(), whole_pot_to(&pk(&p2())), DEADLINE as u64, CLOCK),
+        "at the cap, clock out",
     );
+    assert_pass(
+        run_sudden_death(begun(), whole_pot_to(&pk(&p2())), DEADLINE as u64 + 1, CLOCK + 1),
+        "past both",
+    );
+    assert_fail(
+        run_sudden_death(begun(), whole_pot_to(&pk(&p2())), DEADLINE as u64, CLOCK - 1),
+        "the mover's clock still running",
+    );
+    assert_fail(
+        run_sudden_death(begun(), half_split(), DEADLINE as u64, CLOCK),
+        "a stalling mover cannot force the split",
+    );
+    assert_fail(
+        run_sudden_death(begun(), whole_pot_to(&pk(&p1())), DEADLINE as u64, CLOCK),
+        "the pot to the player who owes the move",
+    );
+    // After a third move the roles swap.
     assert_pass(
         run_sudden_death(
-            match_state(&play(&[3, 3])),
-            half_split(),
-            DEADLINE as u64 + 1,
+            match_state(&play(&[3, 3, 4])),
+            whole_pot_to(&pk(&p1())),
+            DEADLINE as u64,
+            CLOCK,
         ),
-        "past the cap",
+        "p2 to move pays p1",
+    );
+}
+
+#[test]
+fn sudden_death_splits_an_unmoved_or_full_board() {
+    assert_pass(
+        run_sudden_death(match_state(&new_game()), half_split(), DEADLINE as u64, CLOCK),
+        "unmoved game",
+    );
+    assert_fail(
+        run_sudden_death(match_state(&new_game()), half_split(), DEADLINE as u64, CLOCK - 1),
+        "unmoved game, clock still running",
     );
     assert_pass(
-        run_sudden_death(match_state(&new_game()), half_split(), DEADLINE as u64),
-        "unmoved game",
+        run_sudden_death(match_state(&full_board()), half_split(), DEADLINE as u64, CLOCK),
+        "full board",
     );
 }
 
 #[test]
 fn sudden_death_rejects_early_or_uncapped() {
     assert_fail(
-        run_sudden_death(
-            match_state(&play(&[3, 3])),
-            half_split(),
-            DEADLINE as u64 - 1,
-        ),
+        run_sudden_death(match_state(&new_game()), half_split(), DEADLINE as u64 - 1, CLOCK),
         "one block early",
     );
     let uncapped = match_state_full(&play(&[3, 3]), pk(&p1()), pk(&p2()), MOVE_TIMEOUT, 0);
     assert_fail(
-        run_sudden_death(uncapped, half_split(), u32::MAX as u64),
+        run_sudden_death(uncapped, whole_pot_to(&pk(&p2())), u32::MAX as u64, CLOCK),
         "uncapped game",
     );
 }
@@ -1539,18 +1509,28 @@ fn sudden_death_rejects_early_or_uncapped() {
 fn sudden_death_rejects_bad_payouts() {
     let p1_spk = p2pk_spk(&pk(&p1()));
     let p2_spk = p2pk_spk(&pk(&p2()));
-    let active = match_state(&play(&[3, 3]));
+    let unmoved = match_state(&new_game());
     assert_fail(
-        run_sudden_death(active.clone(), vec![(p1_spk.clone(), POT)], DEADLINE as u64),
-        "whole pot to p1",
+        run_sudden_death(unmoved.clone(), vec![(p1_spk.clone(), POT)], DEADLINE as u64, CLOCK),
+        "whole pot to p1 on an unmoved board",
     );
     assert_fail(
         run_sudden_death(
-            active,
+            unmoved,
             vec![(p2_spk, POT / 2), (p1_spk, POT / 2)],
             DEADLINE as u64,
+            CLOCK,
         ),
         "swapped split",
+    );
+    assert_fail(
+        run_sudden_death(
+            match_state(&play(&[3, 3])),
+            vec![(p2pk_spk(&pk(&stranger())), POT)],
+            DEADLINE as u64,
+            CLOCK,
+        ),
+        "the pot to a stranger",
     );
 }
 
@@ -1559,9 +1539,9 @@ fn sudden_death_must_end_the_lineage() {
     assert_fail(
         run_match_entry(
             EntryCall::new("sudden_death"),
-            match_state(&play(&[3, 3])),
+            match_state(&new_game()),
             POT,
-            0,
+            CLOCK,
             DEADLINE as u64,
             half_split(),
             Some((match_state(&play(&[3, 3])), 1_000)),
@@ -1716,13 +1696,23 @@ fn claim_draw_is_single_input_self_funded() {
 
 #[test]
 fn sudden_death_is_single_input_self_funded() {
+    let unmoved = || match_state(&new_game());
     assert_pass(
-        run_sudden_death(match_state(&play(&[3, 3])), self_funded_split(40_000), DEADLINE as u64),
-        "self-funded sudden death with a real fee",
+        run_sudden_death(unmoved(), self_funded_split(40_000), DEADLINE as u64, CLOCK),
+        "self-funded split with a real fee",
     );
     assert_fail(
-        run_sudden_death(match_state(&play(&[3, 3])), self_funded_split(3 * MAX_FEE), DEADLINE as u64),
+        run_sudden_death(unmoved(), self_funded_split(3 * MAX_FEE), DEADLINE as u64, CLOCK),
         "fee above the ceiling starves the split",
+    );
+    let winner = |fee: u64| vec![(p2pk_spk(&pk(&p2())), POT - fee)];
+    assert_pass(
+        run_sudden_death(match_state(&play(&[3, 3])), winner(40_000), DEADLINE as u64, CLOCK),
+        "self-funded winner payout with a real fee",
+    );
+    assert_fail(
+        run_sudden_death(match_state(&play(&[3, 3])), winner(3 * MAX_FEE), DEADLINE as u64, CLOCK),
+        "fee above the ceiling shorts the winner",
     );
 }
 
@@ -1760,193 +1750,3 @@ fn pinned_doors_reject_pot_aggregation() {
 }
 
 // -- compute budget --------------------------------------------------------
-
-/// Measures the compute budget the engine actually charges per classic entry,
-/// at each door's worst case. The app declares covenantBudget: 12 for classic
-/// covenant inputs (app/src/shared/modes/classic/engine.ts) — a node rejects
-/// any spend whose declared budget is below what execution uses, so every
-/// door must fit 12 or the app's transactions bounce off mainnet. Same
-/// measurement technique as simul_tests.rs compute_budget_probe.
-#[test]
-fn compute_budget_probe() {
-    /// The app's declared per-input budget for classic covenant spends.
-    const CLASSIC_COVENANT_BUDGET: u16 = 12;
-
-    let budget_of = |tx: &Transaction, input_idx: usize| match tx.inputs[input_idx].compute_commit {
-        ComputeCommit::ComputeBudget(b) => b.value(),
-        _ => panic!("v1 input carries a compute budget"),
-    };
-    let mut measured: Vec<(&str, u16)> = Vec::new();
-
-    // join (FourkLobby -> FourkMatch successor)
-    {
-        let builder = TxBuilder::new(artifact()).expect("builder");
-        let lobby = lobby_state();
-        let utxo = builder
-            .covenant_utxo(
-                "FourkLobby",
-                lobby.clone(),
-                STAKE,
-                0,
-                false,
-                Some(covenant_id()),
-            )
-            .expect("lobby utxo");
-        let joiner = p2();
-        let entry = EntryCall::new("join")
-            .args_with(move |tx, idx| args![sign_input(tx, idx, &joiner), pk(&p2())]);
-        let context = TxContext::new()
-            .actor_input("FourkLobby", lobby, entry, outpoint(), utxo.clone(), 0)
-            .actor_output(
-                "FourkMatch",
-                match_state(&new_game()),
-                CovenantBinding::new(0, covenant_id()),
-                POT,
-            );
-        let tx = build_executed_tx(context, vec![utxo]).expect("join executes");
-        measured.push(("join", budget_of(&tx, 0)));
-    }
-
-    // 41 discs, only column 6 open (height 5): the height scan and the
-    // successor board splice at their dearest. move_count 41 puts p2 on turn.
-    let nearly_full = {
-        let mut cells = Vec::new();
-        for col in 0..COLS {
-            let rows = if col == 6 { 5 } else { ROWS };
-            for row in 0..rows {
-                cells.push((col, row, ((col + row) % 2) as u8 + 1));
-            }
-        }
-        with_cells(&cells, 41)
-    };
-
-    // move on the nearly-full board
-    {
-        let next = apply_move(&nearly_full, 6);
-        let signer = p2();
-        let entry = EntryCall::new("move")
-            .args_with(move |tx, idx| args![sign_input(tx, idx, &signer), 6i64]);
-        let tx = run_match_entry(
-            entry,
-            match_state(&nearly_full),
-            POT,
-            0,
-            0,
-            vec![],
-            Some((match_state(&next), POT)),
-        )
-        .expect("move executes");
-        measured.push(("move", budget_of(&tx, 0)));
-    }
-
-    // winning_move on a nearly-full board with the SE diagonal witness — the
-    // height scan, board splice, and the dearest direction arm all at once.
-    // P1's SE line (0,3)->(3,0) sits in the fill; move_count 40 puts p1 on
-    // turn to play the one open column and point at the old line.
-    {
-        let mut cells = Vec::new();
-        for col in 0..COLS {
-            let rows = if col == 6 { 5 } else { ROWS };
-            for row in 0..rows {
-                let se_line = (col, row) == (0, 3)
-                    || (col, row) == (1, 2)
-                    || (col, row) == (2, 1)
-                    || (col, row) == (3, 0);
-                cells.push((col, row, if se_line { 1 } else { 2 }));
-            }
-        }
-        let board = with_cells(&cells, 40);
-        let winner = pk(&p1());
-        let signer = p1();
-        let entry = EntryCall::new("winning_move")
-            .args_with(move |tx, idx| args![sign_input(tx, idx, &signer), 6i64, 0i64, 3i64, SE]);
-        let tx = run_match_entry(
-            entry,
-            match_state(&board),
-            POT,
-            0,
-            0,
-            vec![(p2pk_spk(&winner), POT)],
-            None,
-        )
-        .expect("winning_move executes");
-        measured.push(("winning_move", budget_of(&tx, 0)));
-    }
-
-    // claim_draw on the full board
-    {
-        let tx = run_match_entry(
-            EntryCall::new("claim_draw"),
-            match_state(&full_board()),
-            POT,
-            0,
-            0,
-            half_split(),
-            None,
-        )
-        .expect("claim_draw executes");
-        measured.push(("claim_draw", budget_of(&tx, 0)));
-    }
-
-    // claim_forfeit on a begun game
-    {
-        let signer = p1();
-        let claimant = pk(&p1());
-        let entry = EntryCall::new("claim_forfeit")
-            .args_with(move |tx, idx| args![sign_input(tx, idx, &signer)]);
-        let tx = run_match_entry(
-            entry,
-            match_state(&play(&[3])),
-            POT,
-            MOVE_TIMEOUT as u64,
-            0,
-            vec![(p2pk_spk(&claimant), POT)],
-            None,
-        )
-        .expect("claim_forfeit executes");
-        measured.push(("claim_forfeit", budget_of(&tx, 0)));
-    }
-
-    // dissolve (p2's exit takes the age-gate branch too; p1's kick suffices —
-    // the branch is two extra compares, both bodies execute the same pins)
-    {
-        let signer = p1();
-        let claimed = pk(&p1());
-        let entry = EntryCall::new("dissolve")
-            .args_with(move |tx, idx| args![sign_input(tx, idx, &signer), claimed]);
-        let tx = run_match_entry(
-            entry,
-            match_state(&new_game()),
-            POT,
-            0,
-            0,
-            half_split(),
-            None,
-        )
-        .expect("dissolve executes");
-        measured.push(("dissolve", budget_of(&tx, 0)));
-    }
-
-    // sudden_death
-    {
-        let tx = run_match_entry(
-            EntryCall::new("sudden_death"),
-            match_state(&play(&[3, 3])),
-            POT,
-            0,
-            DEADLINE as u64,
-            half_split(),
-            None,
-        )
-        .expect("sudden_death executes");
-        measured.push(("sudden_death", budget_of(&tx, 0)));
-    }
-
-    println!("measured budgets: {measured:?}");
-    for (entry, budget) in measured {
-        assert!(
-            budget <= CLASSIC_COVENANT_BUDGET,
-            "{entry} needs budget {budget}, app declares {CLASSIC_COVENANT_BUDGET}"
-        );
-    }
-}

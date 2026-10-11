@@ -167,13 +167,6 @@ function debugString(val) {
     return className;
 }
 
-function passArray8ToWasm0(arg, malloc) {
-    const ptr = malloc(arg.length * 1, 1) >>> 0;
-    getUint8ArrayMemory0().set(arg, ptr / 1);
-    WASM_VECTOR_LEN = arg.length;
-    return ptr;
-}
-
 function takeFromExternrefTable0(idx) {
     const value = wasm.__wbindgen_export_2.get(idx);
     wasm.__externref_table_dealloc(idx);
@@ -185,289 +178,87 @@ function getArrayU8FromWasm0(ptr, len) {
     return getUint8ArrayMemory0().subarray(ptr / 1, ptr / 1 + len);
 }
 /**
- * Full signature script for spending a lobby UTXO via `function`
- * (join or cancel).
- * @param {Uint8Array} p1
- * @param {bigint} move_timeout
- * @param {bigint} deadline
- * @param {string} _function
- * @param {Uint8Array | null} [sig]
- * @param {Uint8Array | null} [pk]
+ * The script public key (version 0 script bytes) locking `actor` carrying
+ * the JSON `state` — hash-free input for the app's address derivation.
+ * @param {string} actor
+ * @param {string} state_json
  * @returns {Uint8Array}
  */
-export function lobbySigScript(p1, move_timeout, deadline, _function, sig, pk) {
-    const ptr0 = passArray8ToWasm0(p1, wasm.__wbindgen_malloc);
+export function actorScriptPublicKey(actor, state_json) {
+    const ptr0 = passStringToWasm0(actor, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passStringToWasm0(_function, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+    const ptr1 = passStringToWasm0(state_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
     const len1 = WASM_VECTOR_LEN;
-    var ptr2 = isLikeNone(sig) ? 0 : passArray8ToWasm0(sig, wasm.__wbindgen_malloc);
-    var len2 = WASM_VECTOR_LEN;
-    var ptr3 = isLikeNone(pk) ? 0 : passArray8ToWasm0(pk, wasm.__wbindgen_malloc);
-    var len3 = WASM_VECTOR_LEN;
-    const ret = wasm.lobbySigScript(ptr0, len0, move_timeout, deadline, ptr1, len1, ptr2, len2, ptr3, len3);
+    const ret = wasm.actorScriptPublicKey(ptr0, len0, ptr1, len1);
     if (ret[3]) {
         throw takeFromExternrefTable0(ret[2]);
     }
-    var v5 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+    var v3 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
     wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v5;
+    return v3;
 }
 
-/**
- * The redeem script for an open fourk-mode seat awaiting a joiner.
- * @param {Uint8Array} p1
- * @param {bigint} move_timeout
- * @param {bigint} deadline
- * @returns {Uint8Array}
- */
-export function simulLobbyLockScript(p1, move_timeout, deadline) {
-    const ptr0 = passArray8ToWasm0(p1, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.simulLobbyLockScript(ptr0, len0, move_timeout, deadline);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
-    }
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-let cachedBigUint64ArrayMemory0 = null;
-
-function getBigUint64ArrayMemory0() {
-    if (cachedBigUint64ArrayMemory0 === null || cachedBigUint64ArrayMemory0.byteLength === 0) {
-        cachedBigUint64ArrayMemory0 = new BigUint64Array(wasm.memory.buffer);
-    }
-    return cachedBigUint64ArrayMemory0;
-}
-
-function passArray64ToWasm0(arg, malloc) {
-    const ptr = malloc(arg.length * 8, 8) >>> 0;
-    getBigUint64ArrayMemory0().set(arg, ptr / 8);
+function passArray8ToWasm0(arg, malloc) {
+    const ptr = malloc(arg.length * 1, 1) >>> 0;
+    getUint8ArrayMemory0().set(arg, ptr / 1);
     WASM_VECTOR_LEN = arg.length;
     return ptr;
 }
 /**
- * Full signature script for spending a fourk-mode match UTXO via `function`
- * (dissolve, commit, reveal, resolve, claim_win, claim_split, claim_draw,
- * claim_timeout, split_timeout, sudden_death, sweep_win).
- * @param {Uint8Array} p1
- * @param {Uint8Array} p2
- * @param {Uint8Array} board
- * @param {bigint} round
- * @param {Uint8Array} commit1
- * @param {Uint8Array} commit2
- * @param {bigint} reveal1
- * @param {bigint} reveal2
- * @param {bigint} pending_win
- * @param {bigint} move_timeout
- * @param {bigint} deadline
- * @param {string} _function
- * @param {Uint8Array | null} [sig]
- * @param {Uint8Array | null} [pk]
- * @param {Uint8Array | null} [blob]
- * @param {BigInt64Array | null} [ints]
- * @returns {Uint8Array}
- */
-export function simulMatchSigScript(p1, p2, board, round, commit1, commit2, reveal1, reveal2, pending_win, move_timeout, deadline, _function, sig, pk, blob, ints) {
-    const ptr0 = passArray8ToWasm0(p1, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArray8ToWasm0(p2, wasm.__wbindgen_malloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passArray8ToWasm0(board, wasm.__wbindgen_malloc);
-    const len2 = WASM_VECTOR_LEN;
-    const ptr3 = passArray8ToWasm0(commit1, wasm.__wbindgen_malloc);
-    const len3 = WASM_VECTOR_LEN;
-    const ptr4 = passArray8ToWasm0(commit2, wasm.__wbindgen_malloc);
-    const len4 = WASM_VECTOR_LEN;
-    const ptr5 = passStringToWasm0(_function, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len5 = WASM_VECTOR_LEN;
-    var ptr6 = isLikeNone(sig) ? 0 : passArray8ToWasm0(sig, wasm.__wbindgen_malloc);
-    var len6 = WASM_VECTOR_LEN;
-    var ptr7 = isLikeNone(pk) ? 0 : passArray8ToWasm0(pk, wasm.__wbindgen_malloc);
-    var len7 = WASM_VECTOR_LEN;
-    var ptr8 = isLikeNone(blob) ? 0 : passArray8ToWasm0(blob, wasm.__wbindgen_malloc);
-    var len8 = WASM_VECTOR_LEN;
-    var ptr9 = isLikeNone(ints) ? 0 : passArray64ToWasm0(ints, wasm.__wbindgen_malloc);
-    var len9 = WASM_VECTOR_LEN;
-    const ret = wasm.simulMatchSigScript(ptr0, len0, ptr1, len1, ptr2, len2, round, ptr3, len3, ptr4, len4, reveal1, reveal2, pending_win, move_timeout, deadline, ptr5, len5, ptr6, len6, ptr7, len7, ptr8, len8, ptr9, len9);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
-    }
-    var v11 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v11;
-}
-
-/**
- * Artifact sanity info for the UI's about box / debugging.
+ * Build, sign, and engine-verify a transaction from a JSON spec (see
+ * builder.rs). `secrets` is the concatenation of the 32-byte secret keys the
+ * spec's signer indices refer to. Returns the finished transaction as JSON.
+ * @param {string} spec_json
+ * @param {Uint8Array} secrets
  * @returns {string}
  */
-export function contractInfo() {
-    let deferred2_0;
-    let deferred2_1;
+export function buildTransaction(spec_json, secrets) {
+    let deferred4_0;
+    let deferred4_1;
     try {
-        const ret = wasm.contractInfo();
-        var ptr1 = ret[0];
-        var len1 = ret[1];
+        const ptr0 = passStringToWasm0(spec_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passArray8ToWasm0(secrets, wasm.__wbindgen_malloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.buildTransaction(ptr0, len0, ptr1, len1);
+        var ptr3 = ret[0];
+        var len3 = ret[1];
         if (ret[3]) {
-            ptr1 = 0; len1 = 0;
+            ptr3 = 0; len3 = 0;
             throw takeFromExternrefTable0(ret[2]);
         }
-        deferred2_0 = ptr1;
-        deferred2_1 = len1;
-        return getStringFromWasm0(ptr1, len1);
+        deferred4_0 = ptr3;
+        deferred4_1 = len3;
+        return getStringFromWasm0(ptr3, len3);
     } finally {
-        wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
     }
 }
 
 /**
- * The redeem script for an open seat awaiting a joiner.
- * @param {Uint8Array} p1
- * @param {bigint} move_timeout
- * @param {bigint} deadline
- * @returns {Uint8Array}
+ * JSON object mapping `actor`'s entry dispatch tags (hex) to entry names.
+ * @param {string} actor
+ * @returns {string}
  */
-export function lobbyLockScript(p1, move_timeout, deadline) {
-    const ptr0 = passArray8ToWasm0(p1, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ret = wasm.lobbyLockScript(ptr0, len0, move_timeout, deadline);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
+export function entryTags(actor) {
+    let deferred3_0;
+    let deferred3_1;
+    try {
+        const ptr0 = passStringToWasm0(actor, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.entryTags(ptr0, len0);
+        var ptr2 = ret[0];
+        var len2 = ret[1];
+        if (ret[3]) {
+            ptr2 = 0; len2 = 0;
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        deferred3_0 = ptr2;
+        deferred3_1 = len2;
+        return getStringFromWasm0(ptr2, len2);
+    } finally {
+        wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
     }
-    var v2 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v2;
-}
-
-/**
- * Full signature script for spending a match UTXO via `function`
- * (dissolve, move, winning_move, claim_draw, claim_forfeit, sudden_death).
- * @param {Uint8Array} p1
- * @param {Uint8Array} p2
- * @param {Uint8Array} board
- * @param {bigint} move_count
- * @param {bigint} move_timeout
- * @param {bigint} deadline
- * @param {string} _function
- * @param {Uint8Array | null} [sig]
- * @param {Uint8Array | null} [pk]
- * @param {BigInt64Array | null} [ints]
- * @returns {Uint8Array}
- */
-export function matchSigScript(p1, p2, board, move_count, move_timeout, deadline, _function, sig, pk, ints) {
-    const ptr0 = passArray8ToWasm0(p1, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArray8ToWasm0(p2, wasm.__wbindgen_malloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passArray8ToWasm0(board, wasm.__wbindgen_malloc);
-    const len2 = WASM_VECTOR_LEN;
-    const ptr3 = passStringToWasm0(_function, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len3 = WASM_VECTOR_LEN;
-    var ptr4 = isLikeNone(sig) ? 0 : passArray8ToWasm0(sig, wasm.__wbindgen_malloc);
-    var len4 = WASM_VECTOR_LEN;
-    var ptr5 = isLikeNone(pk) ? 0 : passArray8ToWasm0(pk, wasm.__wbindgen_malloc);
-    var len5 = WASM_VECTOR_LEN;
-    var ptr6 = isLikeNone(ints) ? 0 : passArray64ToWasm0(ints, wasm.__wbindgen_malloc);
-    var len6 = WASM_VECTOR_LEN;
-    const ret = wasm.matchSigScript(ptr0, len0, ptr1, len1, ptr2, len2, move_count, move_timeout, deadline, ptr3, len3, ptr4, len4, ptr5, len5, ptr6, len6);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
-    }
-    var v8 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v8;
-}
-
-/**
- * Full signature script for spending a fourk-mode lobby UTXO via `function`
- * (join or cancel).
- * @param {Uint8Array} p1
- * @param {bigint} move_timeout
- * @param {bigint} deadline
- * @param {string} _function
- * @param {Uint8Array | null} [sig]
- * @param {Uint8Array | null} [pk]
- * @returns {Uint8Array}
- */
-export function simulLobbySigScript(p1, move_timeout, deadline, _function, sig, pk) {
-    const ptr0 = passArray8ToWasm0(p1, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passStringToWasm0(_function, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
-    const len1 = WASM_VECTOR_LEN;
-    var ptr2 = isLikeNone(sig) ? 0 : passArray8ToWasm0(sig, wasm.__wbindgen_malloc);
-    var len2 = WASM_VECTOR_LEN;
-    var ptr3 = isLikeNone(pk) ? 0 : passArray8ToWasm0(pk, wasm.__wbindgen_malloc);
-    var len3 = WASM_VECTOR_LEN;
-    const ret = wasm.simulLobbySigScript(ptr0, len0, move_timeout, deadline, ptr1, len1, ptr2, len2, ptr3, len3);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
-    }
-    var v5 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v5;
-}
-
-/**
- * The redeem script for a live fourk-mode game state.
- * @param {Uint8Array} p1
- * @param {Uint8Array} p2
- * @param {Uint8Array} board
- * @param {bigint} round
- * @param {Uint8Array} commit1
- * @param {Uint8Array} commit2
- * @param {bigint} reveal1
- * @param {bigint} reveal2
- * @param {bigint} pending_win
- * @param {bigint} move_timeout
- * @param {bigint} deadline
- * @returns {Uint8Array}
- */
-export function simulMatchLockScript(p1, p2, board, round, commit1, commit2, reveal1, reveal2, pending_win, move_timeout, deadline) {
-    const ptr0 = passArray8ToWasm0(p1, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArray8ToWasm0(p2, wasm.__wbindgen_malloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passArray8ToWasm0(board, wasm.__wbindgen_malloc);
-    const len2 = WASM_VECTOR_LEN;
-    const ptr3 = passArray8ToWasm0(commit1, wasm.__wbindgen_malloc);
-    const len3 = WASM_VECTOR_LEN;
-    const ptr4 = passArray8ToWasm0(commit2, wasm.__wbindgen_malloc);
-    const len4 = WASM_VECTOR_LEN;
-    const ret = wasm.simulMatchLockScript(ptr0, len0, ptr1, len1, ptr2, len2, round, ptr3, len3, ptr4, len4, reveal1, reveal2, pending_win, move_timeout, deadline);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
-    }
-    var v6 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v6;
-}
-
-/**
- * The redeem script for a live game state.
- * @param {Uint8Array} p1
- * @param {Uint8Array} p2
- * @param {Uint8Array} board
- * @param {bigint} move_count
- * @param {bigint} move_timeout
- * @param {bigint} deadline
- * @returns {Uint8Array}
- */
-export function matchLockScript(p1, p2, board, move_count, move_timeout, deadline) {
-    const ptr0 = passArray8ToWasm0(p1, wasm.__wbindgen_malloc);
-    const len0 = WASM_VECTOR_LEN;
-    const ptr1 = passArray8ToWasm0(p2, wasm.__wbindgen_malloc);
-    const len1 = WASM_VECTOR_LEN;
-    const ptr2 = passArray8ToWasm0(board, wasm.__wbindgen_malloc);
-    const len2 = WASM_VECTOR_LEN;
-    const ret = wasm.matchLockScript(ptr0, len0, ptr1, len1, ptr2, len2, move_count, move_timeout, deadline);
-    if (ret[3]) {
-        throw takeFromExternrefTable0(ret[2]);
-    }
-    var v4 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
-    wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
-    return v4;
 }
 
 function _assertClass(instance, klass) {
@@ -476,16 +267,17 @@ function _assertClass(instance, klass) {
     }
 }
 /**
- * Configuration for the WASM32 bindings runtime interface.
- * @see {@link IWASM32BindingsConfig}
- * @category General
- * @param {IWASM32BindingsConfig} config
+ * r" Deferred promise - an object that has `resolve()` and `reject()`
+ * r" functions that can be called outside of the promise body.
+ * r" WARNING: This function uses `eval` and can not be used in environments
+ * r" where dynamically-created code can not be executed such as web browser
+ * r" extensions.
+ * r" @category General
+ * @returns {Promise<any>}
  */
-export function initWASM32Bindings(config) {
-    const ret = wasm.initWASM32Bindings(config);
-    if (ret[1]) {
-        throw takeFromExternrefTable0(ret[0]);
-    }
+export function defer() {
+    const ret = wasm.defer();
+    return ret;
 }
 
 /**
@@ -499,6 +291,17 @@ export function initWASM32Bindings(config) {
  */
 export function presentPanicHookLogs() {
     wasm.presentPanicHookLogs();
+}
+
+/**
+ * Initialize Rust panic handler in console mode.
+ *
+ * This will output additional debug information during a panic to the console.
+ * This function should be called right after loading WASM libraries.
+ * @category General
+ */
+export function initConsolePanicHook() {
+    wasm.initConsolePanicHook();
 }
 
 /**
@@ -517,28 +320,16 @@ export function initBrowserPanicHook() {
 }
 
 /**
- * Initialize Rust panic handler in console mode.
- *
- * This will output additional debug information during a panic to the console.
- * This function should be called right after loading WASM libraries.
+ * Configuration for the WASM32 bindings runtime interface.
+ * @see {@link IWASM32BindingsConfig}
  * @category General
+ * @param {IWASM32BindingsConfig} config
  */
-export function initConsolePanicHook() {
-    wasm.initConsolePanicHook();
-}
-
-/**
- * r" Deferred promise - an object that has `resolve()` and `reject()`
- * r" functions that can be called outside of the promise body.
- * r" WARNING: This function uses `eval` and can not be used in environments
- * r" where dynamically-created code can not be executed such as web browser
- * r" extensions.
- * r" @category General
- * @returns {Promise<any>}
- */
-export function defer() {
-    const ret = wasm.defer();
-    return ret;
+export function initWASM32Bindings(config) {
+    const ret = wasm.initWASM32Bindings(config);
+    if (ret[1]) {
+        throw takeFromExternrefTable0(ret[0]);
+    }
 }
 
 /**
@@ -1236,10 +1027,18 @@ function __wbg_get_imports() {
         const ret = arg0.call(arg1);
         return ret;
     }, arguments) };
+    imports.wbg.__wbg_call_7cccdd69e0791ae2 = function() { return handleError(function (arg0, arg1, arg2) {
+        const ret = arg0.call(arg1, arg2);
+        return ret;
+    }, arguments) };
     imports.wbg.__wbg_createElement_8c9931a732ee2fea = function() { return handleError(function (arg0, arg1, arg2) {
         const ret = arg0.createElement(getStringFromWasm0(arg1, arg2));
         return ret;
     }, arguments) };
+    imports.wbg.__wbg_crypto_86f2631e91b51511 = function(arg0) {
+        const ret = arg0.crypto;
+        return ret;
+    };
     imports.wbg.__wbg_document_d249400bd7bd996d = function(arg0) {
         const ret = arg0.document;
         return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
@@ -1255,6 +1054,9 @@ function __wbg_get_imports() {
             wasm.__wbindgen_free(deferred0_0, deferred0_1, 1);
         }
     };
+    imports.wbg.__wbg_getRandomValues_b3f15fcbfabb0f8b = function() { return handleError(function (arg0, arg1) {
+        arg0.getRandomValues(arg1);
+    }, arguments) };
     imports.wbg.__wbg_get_67b2ba62fc30de12 = function() { return handleError(function (arg0, arg1) {
         const ret = Reflect.get(arg0, arg1);
         return ret;
@@ -1280,6 +1082,10 @@ function __wbg_get_imports() {
         const ret = arg0.length;
         return ret;
     };
+    imports.wbg.__wbg_msCrypto_d562bbe83e0d4b91 = function(arg0) {
+        const ret = arg0.msCrypto;
+        return ret;
+    };
     imports.wbg.__wbg_new_a12002a7f91c75be = function(arg0) {
         const ret = new Uint8Array(arg0);
         return ret;
@@ -1292,8 +1098,31 @@ function __wbg_get_imports() {
         const ret = new Function(getStringFromWasm0(arg0, arg1));
         return ret;
     };
+    imports.wbg.__wbg_newwithbyteoffsetandlength_d97e637ebe145a9a = function(arg0, arg1, arg2) {
+        const ret = new Uint8Array(arg0, arg1 >>> 0, arg2 >>> 0);
+        return ret;
+    };
+    imports.wbg.__wbg_newwithlength_a381634e90c276d4 = function(arg0) {
+        const ret = new Uint8Array(arg0 >>> 0);
+        return ret;
+    };
+    imports.wbg.__wbg_node_e1f24f89a7336c2e = function(arg0) {
+        const ret = arg0.node;
+        return ret;
+    };
+    imports.wbg.__wbg_process_3975fd6c72f520aa = function(arg0) {
+        const ret = arg0.process;
+        return ret;
+    };
+    imports.wbg.__wbg_randomFillSync_f8c153b79f285817 = function() { return handleError(function (arg0, arg1) {
+        arg0.randomFillSync(arg1);
+    }, arguments) };
     imports.wbg.__wbg_removeAttribute_e419cd6726b4c62f = function() { return handleError(function (arg0, arg1, arg2) {
         arg0.removeAttribute(getStringFromWasm0(arg1, arg2));
+    }, arguments) };
+    imports.wbg.__wbg_require_b74f47fc2d022fd6 = function() { return handleError(function () {
+        const ret = module.require;
+        return ret;
     }, arguments) };
     imports.wbg.__wbg_setAttribute_2704501201f15687 = function() { return handleError(function (arg0, arg1, arg2, arg3, arg4) {
         arg0.setAttribute(getStringFromWasm0(arg1, arg2), getStringFromWasm0(arg3, arg4));
@@ -1327,6 +1156,14 @@ function __wbg_get_imports() {
         const ret = typeof window === 'undefined' ? null : window;
         return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
     };
+    imports.wbg.__wbg_subarray_aa9065fa9dc5df96 = function(arg0, arg1, arg2) {
+        const ret = arg0.subarray(arg1 >>> 0, arg2 >>> 0);
+        return ret;
+    };
+    imports.wbg.__wbg_versions_4e31226f5e8dc909 = function(arg0) {
+        const ret = arg0.versions;
+        return ret;
+    };
     imports.wbg.__wbindgen_boolean_get = function(arg0) {
         const v = arg0;
         const ret = typeof(v) === 'boolean' ? (v ? 1 : 0) : 2;
@@ -1352,6 +1189,10 @@ function __wbg_get_imports() {
         table.set(offset + 2, true);
         table.set(offset + 3, false);
         ;
+    };
+    imports.wbg.__wbindgen_is_function = function(arg0) {
+        const ret = typeof(arg0) === 'function';
+        return ret;
     };
     imports.wbg.__wbindgen_is_null = function(arg0) {
         const ret = arg0 === null;
@@ -1406,7 +1247,6 @@ function __wbg_init_memory(imports, memory) {
 function __wbg_finalize_init(instance, module) {
     wasm = instance.exports;
     __wbg_init.__wbindgen_wasm_module = module;
-    cachedBigUint64ArrayMemory0 = null;
     cachedDataViewMemory0 = null;
     cachedUint8ArrayMemory0 = null;
 

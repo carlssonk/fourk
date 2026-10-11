@@ -1,16 +1,38 @@
 import { atom, getDefaultStore } from "jotai";
-import { friendlyCatch } from "../lib/errors";
+import { classifyFailure, friendlyCatch } from "../lib/errors";
 import { ZERO_PK } from "../lib/game";
 import { FREE_STAKE, SOMPI_PER_KAS, isStaked, saveCheckpoint, type Match } from "../lib/match";
 import { refreshBalance } from "./balance";
 import { realDeps, type Deps } from "./deps";
-import { clearInvite, matchesAtom, openMatch } from "./matches";
+import {
+  clearInvite,
+  matchesAtom,
+  openMatch,
+  removeMatch,
+  unfinishedGamesOn,
+  updateMatch,
+} from "./matches";
+import { ownedWallet } from "./wallet";
 import { getDiscColor, getGameMode, getMatchTiming, getProfile, getStake } from "./profile";
 
-/** Fee buffer reserved alongside a stake — covers a whole game's worth of
- * transaction fees. The account panel's Max also holds this back while any
- * game is unfinished. */
-export const FEE_MARGIN = SOMPI_PER_KAS / 2n;
+/** Fee buffer reserved per unfinished staked game. A Fourk player pays for
+ * a commit and a reveal or resolve every round, ~0.016 KAS each at the
+ * relay floor (each carries the ~7.4 KB covenant script); a full board takes
+ * 21+ rounds, so ~0.7 KAS, with headroom for a busier fee market. The
+ * account panel's Max holds back one per unfinished game too. */
+export const FEE_MARGIN = SOMPI_PER_KAS;
+
+/** What a key must hold back for the games it already sits in, plus one
+ * more if it is about to take a seat. */
+export function feeReserve(pk: string, opening = 0): bigint {
+  return FEE_MARGIN * BigInt(unfinishedGamesOn(store.get(matchesAtom), pk).length + opening);
+}
+
+/** feeReserve for the owned account (staked games only ever sit there). */
+export function ownedFeeReserve(opening = 0): bigint {
+  const pk = ownedWallet()?.myPk;
+  return pk ? feeReserve(pk, opening) : FEE_MARGIN * BigInt(opening);
+}
 
 const store = getDefaultStore();
 
@@ -48,6 +70,7 @@ export function reportError(e: unknown): void {
 
 /** One user action at a time; failures land in the error banner. */
 export async function runAction(action: () => Promise<void>): Promise<void> {
+  if (store.get(busyAtom)) return;
   store.set(busyAtom, true);
   store.set(errorAtom, null);
   try {
@@ -72,33 +95,48 @@ export async function createGame(deps: Deps = realDeps): Promise<void> {
   const staked = stakeSetting > 0n;
   const stake = staked ? stakeSetting : FREE_STAKE;
   startConnecting("Creating your game", [
-    "Connecting to the Kaspa network",
-    staked ? "Placing your stake" : "Topping up your stake",
-    "Opening the game on-chain",
+    staked ? "Connecting to the Kaspa network" : "Connecting to the game",
+    staked ? "Placing your stake" : "Preparing your seat",
+    staked ? "Opening the game on-chain" : "Creating your invite link",
   ]);
   // Free games are seated by the invisible guest key and paid for by the
   // dispenser; staked games are seated by the player's own account. The two
   // pots of money never meet.
-  const { key } = deps.account.signingWallet({ staked });
+  const { key, myPk } = deps.account.signingWallet({ staked });
   await deps.chain.connect();
   advanceConnecting();
-  await deps.chain.ensureFunds(key, stake + FEE_MARGIN, { staked });
+  await deps.chain.ensureFunds(key, stake + feeReserve(myPk, 1), { staked });
   advanceConnecting();
   // Checkpoint the chain from before the open: a join spends the genesis
   // UTXO, and scanning blocks forward from here finds it even if this tab
   // is long gone by then (the watcher persists fresher checkpoints while
   // it runs, this is the floor).
   const preOpen = await deps.chain.chainCheckpoint();
-  const match = await deps.chain.openMatch(key, stake, getMatchTiming(), getGameMode());
-  saveCheckpoint(match.covenantId, preOpen);
   const me = getProfile();
   // My identity and disc colour travel to the opponent inside the link;
   // they take the other colour.
-  openMatch({
-    ...match,
+  const dress = (m: Match): Match => ({
+    ...m,
     ...(me.name && { profiles: { p1: me } }),
     ...(getDiscColor() === "blue" && { p1Color: "blue" as const }),
   });
+  // Stored the moment the stake is about to leave: a reload while the open
+  // confirms must not strand a staked lobby with no record and no cancel.
+  let pending: string | null = null;
+  try {
+    const match = await deps.chain.openMatch(key, stake, getMatchTiming(), getGameMode(), (m) => {
+      pending = m.covenantId;
+      saveCheckpoint(m.covenantId, preOpen);
+      updateMatch(dress(m));
+    });
+    saveCheckpoint(match.covenantId, preOpen);
+    openMatch(dress(match));
+  } catch (e) {
+    // Only a refused transaction is known not to exist; after a dropped
+    // connection it may have landed, and the record is how it gets found.
+    if (pending && classifyFailure(e) !== "transient") removeMatch(pending);
+    throw e;
+  }
 }
 
 /** Open a fresh game with the free stake. */
@@ -107,7 +145,6 @@ export const newGame = (): Promise<void> => runAction(createGame);
 /** Sit down at an invite — or reopen a known game, or spectate. */
 export const takeSeat = (invite: Match, deps: Deps = realDeps): Promise<void> =>
   runAction(async () => {
-    clearInvite();
     const known = store.get(matchesAtom).find((m) => m.covenantId === invite.covenantId);
     if (known) {
       // A game we're already in: reopen our TRACKED state, never the link's. An
@@ -116,6 +153,7 @@ export const takeSeat = (invite: Match, deps: Deps = realDeps): Promise<void> =>
       // watcher maintains — that is exactly the blinding vector. The watcher
       // advances `known` from the chain; the link never does.
       openMatch(known);
+      clearInvite();
       return;
     }
     // Whether the open seat is ours to take is a question about the key
@@ -126,11 +164,11 @@ export const takeSeat = (invite: Match, deps: Deps = realDeps): Promise<void> =>
     const iAmHost = seatOpen && deps.account.matchWallet(invite)?.myPk === invite.state.p1;
     if (seatOpen && !iAmHost) {
       const staked = isStaked(invite);
-      const { key } = deps.account.signingWallet({ staked });
+      const { key, myPk } = deps.account.signingWallet({ staked });
       startConnecting("Joining the game", [
-        "Connecting to the Kaspa network",
-        staked ? "Placing your stake" : "Topping up your stake",
-        "Taking your seat on-chain",
+        staked ? "Connecting to the Kaspa network" : "Connecting to the game",
+        staked ? "Placing your stake" : "Preparing your seat",
+        staked ? "Taking your seat on-chain" : "Joining your opponent",
       ]);
       await deps.chain.connect();
       // A deadline the chain has already passed (or nearly so) is a trap —
@@ -139,28 +177,40 @@ export const takeSeat = (invite: Match, deps: Deps = realDeps): Promise<void> =>
       // remaining). Refuse before any funds move.
       await deps.chain.assertJoinableDeadline(invite);
       advanceConnecting();
-      await deps.chain.ensureFunds(key, invite.value + FEE_MARGIN, { staked });
+      await deps.chain.ensureFunds(key, invite.value + feeReserve(myPk, 1), { staked });
       advanceConnecting();
       try {
         // Checkpoint from before the join: the host may act the moment they
         // see us arrive, and without a stored checkpoint the joiner's
         // watcher could never trace that spend (it would just sit stuck).
         const preJoin = await deps.chain.chainCheckpoint();
+        saveCheckpoint(invite.covenantId, preJoin);
         // My profile rides the join tx's payload so P1 learns who sat down.
-        const joined = await deps.chain.joinMatch(key, invite, getProfile());
-        saveCheckpoint(joined.covenantId, preJoin);
-        openMatch(joined);
+        // Stored before the stake leaves (see createGame).
+        let submitted = false;
+        try {
+          const joined = await deps.chain.joinMatch(key, invite, getProfile(), (m) => {
+            submitted = true;
+            updateMatch(m);
+          });
+          openMatch(joined);
+          clearInvite();
+        } catch (e) {
+          if (submitted && classifyFailure(e) !== "transient") removeMatch(invite.covenantId);
+          throw e;
+        }
       } catch (e) {
         // The genesis UTXO being gone has one meaning here: the seat is no
         // longer up for grabs. Say that, not "sync first".
         if (/game UTXO not found/.test(String((e as any)?.message ?? e)))
           throw new Error(
-            "This game is no longer open — someone else took the seat, or the host called it off.",
+            "This game is no longer open. Someone else took the seat, or the host called it off.",
             { cause: e },
           );
         throw e;
       }
     } else {
       openMatch(invite); // a game in progress or spectating
+      clearInvite();
     }
   });

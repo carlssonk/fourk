@@ -7,28 +7,32 @@
 import type { Match } from "../lib/match";
 import type { GameMode, GameModeKey } from "./types";
 import { classicMode } from "./classic";
-import { fourkMode } from "./fourk";
+import { fourk2Mode } from "./fourk2";
 
 export const MODES: Record<GameModeKey, GameMode> = {
   classic: classicMode,
-  fourk: fourkMode,
+  fourk2: fourk2Mode,
 };
 
 /** Picker order: the signature mode first. */
-export const MODE_LIST: GameMode[] = [fourkMode, classicMode];
+export const MODE_LIST: GameMode[] = [fourk2Mode, classicMode];
 
 /** The mode hosted games default to. */
-export const DEFAULT_MODE_KEY: GameModeKey = "fourk";
+export const DEFAULT_MODE_KEY: GameModeKey = "fourk2";
 
 /** A Match's mode. The wire rule "absent = classic" is interpreted here and
  * in the codecs — nowhere else. */
 export function modeOf(m: Match): GameMode {
-  return m.mode === "fourk" ? fourkMode : classicMode;
+  return m.mode === "fourk2" ? fourk2Mode : classicMode;
 }
 
-/** Parse a stored mode key (settings), falling back to the default. */
+/** Parse a stored mode key (settings), falling back to the default. A
+ * remembered legacy "fourk" hosts on the current fourk protocol. */
 export function parseModeKey(raw: string | null): GameModeKey {
-  return raw !== null && raw in MODES ? (raw as GameModeKey) : DEFAULT_MODE_KEY;
+  if (raw === "fourk") return "fourk2";
+  return raw !== null && raw in MODES && !MODE_LIST.every((m) => m.meta.key !== raw)
+    ? (raw as GameModeKey)
+    : DEFAULT_MODE_KEY;
 }
 
 /** The more advanced of two snapshots of the same match, by the mode's own

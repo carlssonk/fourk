@@ -1,9 +1,10 @@
-# CI for what a clean clone can verify. The Rust harness (harness/) and the
-# contract/wasm rebuilds need the sibling checkouts ../silverscript and
-# ../argent-lang, which are not pinnable yet (argent-lang is not a git repo)
-# — those suites stay local until the toolchain repos are vendored or
-# published. Everything TypeScript-side runs here, against the committed
-# wasm artifacts, exactly like a fresh contributor's machine.
+# CI for a clean clone. Every toolchain dependency (argent-runtime,
+# silverscript, rusty-kaspa) is git-pinned, so the Rust side — the harness
+# that executes the compiled covenants on the real script engine, the wasm
+# crate's native engine tests, and a reproducibility check of the committed
+# artifact against contracts/fourk.ag — runs here alongside everything
+# TypeScript-side, which builds against the committed wasm packages exactly
+# like a fresh contributor's machine.
 name: ci
 
 on:
@@ -60,3 +61,72 @@ jobs:
       - run: pnpm build
         env:
           VITE_COMMIT_SHA: ${{ github.sha }}
+      # The built bundle must actually reach a node through the public
+      # resolver: dev servers and pinned-node builds never take that path,
+      # which is how a minified bundle that could not connect went unseen.
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: node scripts/check-dist.mjs --timeout 90
+
+  covenant:
+    name: covenant (harness + wasm + artifact)
+    # Three builds of the rusty-kaspa dependency tree (harness, wasm, and the
+    # argentc install): 20-30 min on a cold cache, a few minutes once
+    # rust-cache is warm.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            harness
+            wasm
+      # The compiled covenants against the real script engine.
+      - run: cargo test --locked
+        working-directory: harness
+      # The browser transaction path, natively, plus the wasm32 build.
+      - run: cargo test --locked
+        working-directory: wasm
+      - run: cargo check --target wasm32-unknown-unknown
+        working-directory: wasm
+      # The committed artifact must be exactly what the pinned argentc
+      # produces from contracts/fourk.ag.
+      - run: cargo install --locked --git https://github.com/argent-lang/argent --rev 867b080b973f93d75c4b7ca8ce06950a963accbb argent
+      - run: argentc build contracts/fourk.ag --out contracts/build
+      # Untracked new outputs count as drift too, not just modified ones.
+      - run: test -z "$(git status --porcelain -- contracts/build)" || (git status -- contracts/build; exit 1)
+
+  live:
+    name: live simnet suites (localnet/live.sh)
+    # A throwaway kaspad at the harness's rusty-kaspa pin, a miner, and the
+    # app's real transaction engine against it: app/e2e/*-live.test.ts.
+    # Building kaspad (rocksdb included) is the slow part on a cold cache;
+    # rust-cache keeps the installed binary afterwards.
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: kaspad-a41a333b08848f41bf737b72592e463a6011b8ac
+      - run: sudo apt-get update && sudo apt-get install -y protobuf-compiler libprotobuf-dev
+      - run: |
+          command -v kaspad || cargo install --locked --git https://github.com/kaspanet/rusty-kaspa \
+            --rev a41a333b08848f41bf737b72592e463a6011b8ac kaspad
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
+        working-directory: app
+      - run: ./localnet/live.sh
+      # The browser suite through the real UI, on its own throwaway chain.
+      - run: pnpm exec playwright install --with-deps chromium
+        working-directory: app
+      - run: ./localnet/live.sh ./localnet/browser.sh

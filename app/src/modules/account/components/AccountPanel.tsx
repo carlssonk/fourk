@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useAtom, useAtomValue } from "jotai";
 import { Dialog } from "@shared/components/Dialog";
+import { QrCode } from "@shared/components/QrCode";
+import { useCopy } from "@shared/components/useCopy";
 import * as cov from "@shared/lib/covenant";
 import { friendlyCatch } from "@shared/lib/errors";
 import { generatePhrase, parsePhrase } from "@shared/lib/mnemonic";
-import { fmtKas, parseKas } from "@shared/lib/match";
+import { NETWORK_ID, fmtKas, fmtKasExact, parseKas } from "@shared/lib/match";
 import {
   FEE_MARGIN,
   accountPanelAtom,
@@ -23,21 +25,11 @@ import {
   type AccountView,
 } from "@shared/state";
 
-/** Copy-to-clipboard with the standard 1.5s "Copied!" flip. */
-const useCopy = () => {
-  const [copied, setCopied] = useState(false);
-  const copy = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-  return { copied, copy };
-};
-
 const Row = ({ value, copied, onCopy }: { value: string; copied: boolean; onCopy: () => void }) => (
   <div className="flex items-center gap-2">
     <input
       className="input font-mono text-sm"
+      aria-label="Deposit address"
       readOnly
       value={value}
       onFocus={(e) => e.target.select()}
@@ -152,7 +144,7 @@ const GetStarted = ({ setView }: { setView: (v: AccountView) => void }) => (
  * what re-wires every consumer around the new account. */
 const NewPhrase = () => {
   const [phrase] = useState(generatePhrase);
-  const { copied, copy } = useCopy();
+  const { copied, copyError, copy } = useCopy();
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -172,7 +164,7 @@ const NewPhrase = () => {
     <>
       <p className="mb-3 text-sm text-dim">
         These 12 words are the only way back into your account. Write them down and keep them
-        somewhere safe — anyone who has them controls your funds, and nobody can restore them for
+        somewhere safe. Anyone who has them controls your funds, and nobody can restore them for
         you.
       </p>
       <ol className="mb-3 grid grid-cols-3 gap-1.5">
@@ -186,6 +178,11 @@ const NewPhrase = () => {
       <button className="btn btn-ghost mb-3" onClick={() => copy(phrase)}>
         {copied ? "Copied!" : "Copy"}
       </button>
+      {copyError && (
+        <p role="status" className="mb-2 text-sm text-red">
+          {copyError}
+        </p>
+      )}
       <label className="mb-3 flex cursor-pointer items-center gap-2 text-sm">
         <input
           type="checkbox"
@@ -251,15 +248,26 @@ const Overview = ({ setView }: { setView: (v: AccountView) => void }) => {
 };
 
 const AddFunds = () => {
-  const { copied, copy } = useCopy();
+  const { copied, copyError, copy } = useCopy();
   const address = activeAccount()?.address;
   if (!address) return null; // guests have no deposit address to show
   return (
     <>
       <p className="mb-3 text-sm text-dim">
-        Send KAS to your deposit address and it lands in your balance, usually within seconds.
+        Scan the code from another wallet, or send KAS to your deposit address.
       </p>
+      {/* The code and the text are the same address in two forms, so they
+       * stack as one block: point a phone at the top of it, or copy from the
+       * bottom. */}
+      <div className="mb-3 flex justify-center">
+        <QrCode value={address} label="Your deposit address as a QR code" />
+      </div>
       <Row value={address} copied={copied} onCopy={() => copy(address)} />
+      {copyError && (
+        <p role="status" className="mt-2 text-sm text-red">
+          {copyError}
+        </p>
+      )}
     </>
   );
 };
@@ -278,8 +286,10 @@ const CashOut = () => {
   // margin so it can still be played out. Free games don't count — the
   // guest key pays their fees out of dispenser funds.
   const ownedPk = ownedWallet()?.myPk;
-  const playing = !!ownedPk && unfinishedGamesOn(matches, ownedPk).length > 0;
-  const maxOut = balance === null ? null : playing ? bigMax(balance - FEE_MARGIN, 0n) : balance;
+  const open = ownedPk ? unfinishedGamesOn(matches, ownedPk).length : 0;
+  const playing = open > 0;
+  const reserve = FEE_MARGIN * BigInt(open);
+  const maxOut = balance === null ? null : playing ? bigMax(balance - reserve, 0n) : balance;
 
   const submit = async () => {
     setError(null);
@@ -295,8 +305,9 @@ const CashOut = () => {
       if (value !== "all" && (value <= 0n || (maxOut !== null && value > maxOut)))
         throw new Error("LOW_BALANCE");
       const res = await cov.sendTo(rpc, key, dest.trim(), value);
-      setSent(`Sent — ${fmtKas(res.amount)} KAS is on its way.`);
+      setSent(`Sent: ${fmtKas(res.amount)} KAS.`);
       setAmount("");
+      setMaxed(false);
       void refreshBalance();
     } catch (e) {
       setError(friendlyCatch(e));
@@ -313,6 +324,8 @@ const CashOut = () => {
       <input
         className="input mb-2 font-mono text-sm"
         placeholder="Kaspa address (kaspa…)"
+        aria-label="Destination Kaspa address"
+        disabled={busy}
         value={dest}
         onChange={(e) => setDest(e.target.value)}
       />
@@ -320,6 +333,8 @@ const CashOut = () => {
         <input
           className="input"
           placeholder="Amount (KAS)"
+          aria-label="Amount (KAS)"
+          disabled={busy}
           inputMode="decimal"
           value={amount}
           onChange={(e) => {
@@ -330,10 +345,10 @@ const CashOut = () => {
         <button
           type="button"
           className="btn btn-muted px-2.5 py-1 text-sm"
-          disabled={maxOut === null}
+          disabled={busy || maxOut === null || maxOut <= 0n}
           onClick={() => {
             if (maxOut === null) return;
-            setAmount(fmtKas(maxOut).replace("<", ""));
+            setAmount(fmtKasExact(maxOut));
             setMaxed(true);
           }}
         >
@@ -342,14 +357,21 @@ const CashOut = () => {
       </div>
       {playing && (
         <p className="mb-2 text-xs text-dim">
-          We're keeping {fmtKas(FEE_MARGIN)} KAS aside so you can finish your open games.
+          We're keeping {fmtKas(reserve)} KAS aside so you can finish your open games.
         </p>
       )}
       {error && <p className="mb-2 text-sm text-red">{error}</p>}
       {sent && <p className="mb-2 text-sm text-ok">{sent}</p>}
       <button
         className="btn"
-        disabled={busy || !dest.trim() || (!maxed && parseKas(amount) === null)}
+        disabled={
+          busy ||
+          !dest.trim() ||
+          maxOut === null ||
+          maxOut <= 0n ||
+          parseKas(amount) === null ||
+          (!maxed && parseKas(amount)! > maxOut)
+        }
         onClick={() => void submit()}
       >
         {busy ? "Sending…" : "Cash out"}
@@ -360,7 +382,7 @@ const CashOut = () => {
 
 const Backup = () => {
   const [revealed, setRevealed] = useState(false);
-  const { copied, copy } = useCopy();
+  const { copied, copyError, copy } = useCopy();
   const account = activeAccount();
   if (!account) return null; // guests have nothing to back up
   const { phrase } = account;
@@ -368,8 +390,9 @@ const Backup = () => {
   return (
     <>
       <p className="mb-3 text-sm text-dim">
-        Your recovery phrase is the only way back into this account. Write these 12 words down and
-        keep them safe — anyone who has them controls your balance.
+        Your recovery phrase is the only way back into this account. Write these{" "}
+        {phrase.split(" ").length} words down and keep them safe. Anyone who has them controls your
+        balance.
       </p>
       <div className="relative">
         <ol className={`mb-2 grid grid-cols-3 gap-1.5 ${revealed ? "" : "blur-sm select-none"}`}>
@@ -393,6 +416,11 @@ const Backup = () => {
         <button className="btn btn-ghost" onClick={() => copy(phrase)}>
           {copied ? "Copied!" : "Copy"}
         </button>
+      )}
+      {copyError && (
+        <p role="status" className="mt-2 text-sm text-red">
+          {copyError}
+        </p>
       )}
     </>
   );
@@ -436,7 +464,7 @@ const SignIn = () => {
     <>
       {others.length > 0 && (
         <>
-          <p className="mb-2 text-sm text-dim">Accounts saved on this device — pick one:</p>
+          <p className="mb-2 text-sm text-dim">Accounts saved on this device:</p>
           <div className="mb-4 flex flex-col items-stretch gap-1.5">
             {others.map((a) => (
               <button
@@ -454,12 +482,21 @@ const SignIn = () => {
       <p className="mb-3 text-sm text-dim">
         {others.length > 0 ? "Or paste" : "Paste"} the recovery phrase (12 or 24 words) of the
         account you want to use.
-        {accounts.length > 0 &&
-          " The account you're using now stays saved here — switch back any time."}
+        {accounts.length > 0 && " Your current account stays saved on this device."}
       </p>
+      {NETWORK_ID !== "mainnet" && (
+        <p className="mb-3 text-sm text-red">
+          This is a test version, and recovery phrases are kept in this browser. Only use a phrase
+          you created here, never one that holds real KAS.
+        </p>
+      )}
       <textarea
         className="input mb-2 h-20 resize-none"
         placeholder="recovery phrase…"
+        aria-label="Recovery phrase"
+        autoComplete="off"
+        autoCapitalize="none"
+        spellCheck={false}
         value={input}
         onChange={(e) => setInput(e.target.value)}
       />
@@ -502,14 +539,13 @@ const Remove = ({ setView }: { setView: (v: AccountView) => void }) => {
       <p className="mb-3 text-sm text-dim">
         This device will forget the recovery phrase of{" "}
         <span className="font-mono text-ink">{shortAddress(account.address)}</span>. The account
-        itself isn't deleted — signing in with the phrase brings it back, balance and all — but
-        nobody can restore a lost phrase. If your only copy is on this device, the balance is gone
-        with it.
+        itself isn't deleted. You can sign in again with the recovery phrase. If you lose the
+        phrase, you lose access to the account and its balance.
       </p>
       {open > 0 && (
         <p className="mb-3 text-sm text-red">
           This account is still seated in{" "}
-          {open === 1 ? "an unfinished game" : `${open} unfinished games`} — after removal this
+          {open === 1 ? "an unfinished game" : `${open} unfinished games`}. After removal this
           device can't play {open === 1 ? "it" : "them"} out, and the move timers keep running.
         </p>
       )}

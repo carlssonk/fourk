@@ -8,11 +8,11 @@
  * inherently shared wire-format arms (share-code mode byte, JSON fields).
  */
 
-import type { ModeEngine, PrivateKey, Rpc, SpendInfo } from "../lib/engine";
+import type { MatchTiming, ModeEngine, PrivateKey, Rpc, SpendInfo } from "../lib/engine";
 import type { State } from "../lib/game";
 import type { Match } from "../lib/match";
 
-export type GameModeKey = "classic" | "fourk";
+export type GameModeKey = "classic" | "fourk2";
 
 export interface ModeMeta {
   key: GameModeKey;
@@ -30,6 +30,12 @@ export interface ModeMeta {
  * successor adoption failed: a continuation means "retry later", a terminal
  * means "classify the ending". */
 export type SpendClass = "continuation" | "terminal";
+
+/** The obligation clock a match is on: `age` counts the game UTXO's DAA age
+ * up to `daa` (every transition resets it — the legacy forfeit clock);
+ * `absolute` counts the chain's DAA score up to `daa` (fourk2's shared
+ * picking cutoff, which survives the first commit's transition). */
+export type ClockSpec = { kind: "age"; daa: number } | { kind: "absolute"; daa: number };
 
 // --- View surface (React-free: plain data the UI renders) --------------------
 
@@ -119,10 +125,6 @@ export interface AutoAction {
    * distance to the deadline). Skipped when it exceeds the timer cap. */
   scheduleMs?(rpc: Rpc): Promise<number>;
   run(rpc: Rpc, key: PrivateKey, m: Match): Promise<AutoOutcome>;
-  /** finish() message when the post-failure sync says "terminated" — the
-   * opponent's client cranked the same permissionless door first. Omitted =
-   * stay silent and let the watcher classify the ending. */
-  onTerminated?: string;
 }
 
 export interface ModeActions {
@@ -131,6 +133,10 @@ export interface ModeActions {
   drop(rpc: Rpc, key: PrivateKey, m: Match, col: number): Promise<DropResult>;
   /** The timeout door: classic claim_forfeit; fourk claim_timeout. */
   claimTimeout(rpc: Rpc, key: PrivateKey, m: Match): Promise<string>;
+  /** The whole-game cap door, when the mode's sudden_death has a shape the
+   * shared crank (modes/common.ts) does not know — fourk2 pays a decided
+   * timeout winner in full. */
+  settleCap?(rpc: Rpc, key: PrivateKey, m: Match): Promise<string>;
 }
 
 export interface GameMode extends ModeEngine {
@@ -143,6 +149,9 @@ export interface GameMode extends ModeEngine {
   roundStarted(m: Match): boolean;
   /** Joined but still unwindable via dissolve (both stakes back). */
   inLobby(m: Match): boolean;
+  /** The obligation clock the seats count down, or null when nothing is
+   * on the clock (lobby, pending win, decided round). */
+  clock(m: Match): ClockSpec | null;
   view(m: Match, ctx: ViewCtx): ModeView;
   /** Friendly ending copy for a discovered terminal spend. */
   describeEnd(spend: SpendInfo | null, m: Match, myPk: string): string;
@@ -155,7 +164,11 @@ export interface GameMode extends ModeEngine {
   autoActions(m: Match, ctx: AutoCtx): AutoAction[];
 
   /** Mode-specific Match fields stamped on a fresh genesis. */
-  genesisFields(): Partial<Match>;
+  genesisFields(timing: MatchTiming): Partial<Match>;
+  /** The game UTXO age claim_draw demands (0 = none): the sequence the draw
+   * crank must carry, and how long after a board-filling transition it
+   * waits. */
+  drawAge(m: Match): number;
   /** Mode-specific fields the join successor carries. */
   joinFields(m: Match): Partial<Match>;
   /** Enumerable successor snapshots of a live match, as full Matches with
@@ -173,6 +186,10 @@ export interface GameMode extends ModeEngine {
   rederiveSpend(m: Match, spend: SpendInfo): Match | null;
   /** Classify a traced spend (null = untraceable) for the watcher. */
   classifySpend(spend: SpendInfo | null): SpendClass;
+  /** Does re-deriving this spend need the spent UTXO's acceptance score
+   * (fourk2's commit successors embed the picking cutoff derived from it)?
+   * The adopter fetches it from the chain when the snapshot lacks the stamp. */
+  needsAcceptedDaa?(m: Match, spend: SpendInfo): boolean;
   /** Monotone progress key — which of two snapshots of the same match is
    * fresher. */
   progress(m: Match): number;
@@ -191,7 +208,7 @@ export interface GameMode extends ModeEngine {
 /** What a mode's view.ts supplies: everything the UI reads. */
 export type ModeViewSurface = Pick<
   GameMode,
-  "roundStarted" | "inLobby" | "view" | "describeEnd" | "finalSnapshot"
+  "roundStarted" | "inLobby" | "clock" | "view" | "describeEnd" | "finalSnapshot"
 >;
 
 /** What a mode's engine.ts supplies: script derivation, successor

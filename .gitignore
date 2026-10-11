@@ -3,6 +3,8 @@ harness/target/
 contracts/fourk.json
 *.key
 app/dist/
+app/test-results/
+app/playwright-report/
 wasm/target/
 faucet/faucet.key
 
@@ -18,3 +20,7 @@ localnet/.kaspad-*/
 
 # local design notes
 app/IDEAS.md
+
+# agent working documents (specs, plans, session notes): never committed,
+# and nothing committed refers to them
+docs/internal/

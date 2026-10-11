@@ -1,11 +1,15 @@
 # Dispenser runbook
 
-The dispenser is a 40-byte stateless covenant (`contracts/drip.sil`) that
-funds free-play seats with no backend: its address never changes, and each
-UTXO held at it is an independent "lane" that anyone can drip 10 TKAS from
-at most once per cooldown (1200 DAA ≈ 2 minutes) via an unsigned spend.
-Refilling is nothing more than sending TKAS to the address — every send
-becomes a new lane. When all lanes are drained or cooling, free-mode
+The dispenser is a 63-byte stateless covenant (`contracts/drip.sil`) that
+funds free-play seats with no backend: its address is fixed by the compiled
+script, and each UTXO held at it is an independent "lane" that anyone can
+drip 10 TKAS from at most once per cooldown (1200 DAA ≈ 2 minutes) via an
+unsigned spend. Refilling is nothing more than sending TKAS to the address —
+every send becomes a new lane. The address only moves when `drip.sil` or the
+Silverscript compiler changes (the script bytes are pinned in
+`app/src/shared/lib/dispenser.ts` and `fund-dispenser.mjs`); after such a
+change, lanes at the old address stay claimable by old clients only, so
+refill the new address. When all lanes are drained or cooling, free-mode
 onboarding breaks (`DISPENSER_EMPTY` / `DISPENSER_COOLING` in
 `app/src/shared/lib/dispenser.ts`), so the operational job is simply:
 keep enough float in enough lanes.
@@ -62,8 +66,9 @@ to a log and alert on the exit code):
 */30 * * * * cd /path/to/fourk && node faucet/fund-dispenser.mjs status >> /var/log/fourk-dispenser.log 2>&1 || <your-alert-command> "fourk dispenser needs a refill"
 ```
 
-Every 30 minutes is plenty: the float policy below gives days of headroom,
-and the point of the alert is "refill this week", not "refill this minute".
+Every 30 minutes is plenty in quiet weeks: the float policy below gives
+days of headroom. Around a launch or a public post, check every few minutes
+and keep a funded key at hand (see Abuse below).
 
 ## Float policy
 
@@ -77,6 +82,24 @@ float to your expected traffic between checks, keeping in mind:
   funded but `cooling`, add lanes, not balance.
 - It's all valueless testnet float — err generous; there is nothing to
   protect by keeping it lean.
+- **Lanes hold whole drips.** Every claim takes exactly one drip (the
+  covenant pins the re-lock to `balance - DRIP`), so `fund-dispenser.mjs`
+  only funds lanes in multiples of 10 TKAS: a remainder too small to
+  re-lock would make the lane unclaimable.
+
+## Abuse
+
+Claims are unsigned by design, so anyone can claim, a script included. What
+the covenant bounds is the rate: one drip per lane per cooldown, never more
+than one lane per transaction, and every claim takes a full drip. The cheap
+attack (a claim taking nothing, which used to restart a lane's cooldown for
+free) is closed; what remains is draining, at most `lanes x 10 TKAS` every
+~2 minutes, paid for by refills. Signs of it: `status` shows every lane
+cooling while the app shows few games, and the float falls far faster than
+games are played. The answers are operational: more lanes (throughput for
+real players), more frequent checks during a launch, and refilling sooner.
+The dispenser must never exist on mainnet; `fund-dispenser.mjs` and the app
+both refuse it there.
 
 ## Key custody
 

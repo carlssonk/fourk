@@ -7,7 +7,7 @@
  *   - phase:  OPEN iff p2 == ZERO_PK, PLAYING otherwise (terminal states have
  *             no successor UTXO at all — the covenant ends).
  *   - turn:   moveCount & 1 (player 1 always moves first).
- *   - move deadline: the age of the current state UTXO (`this.age`), which
+ *   - move deadline: the age of the current state UTXO (`this.ageDaa`), which
  *             resets automatically on every transition. No field needed.
  */
 

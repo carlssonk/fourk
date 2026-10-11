@@ -63,10 +63,13 @@ dependencies = [
 [[package]]
 name = "argent-artifact"
 version = "0.1.0"
+source = "git+https://github.com/argent-lang/argent?rev=867b080b973f93d75c4b7ca8ce06950a963accbb#867b080b973f93d75c4b7ca8ce06950a963accbb"
 dependencies = [
  "blake2b_simd",
+ "blake3",
  "faster-hex 0.10.0",
  "serde",
+ "serde_bytes",
  "serde_json",
  "silverscript-abi",
  "thiserror 2.0.19",
@@ -75,9 +78,11 @@ dependencies = [
 [[package]]
 name = "argent-runtime"
 version = "0.1.0"
+source = "git+https://github.com/argent-lang/argent?rev=867b080b973f93d75c4b7ca8ce06950a963accbb#867b080b973f93d75c4b7ca8ce06950a963accbb"
 dependencies = [
  "argent-artifact",
  "blake2b_simd",
+ "blake3",
  "kaspa-consensus-core",
  "kaspa-txscript",
  "kaspa-txscript-errors",
@@ -1174,9 +1179,14 @@ name = "fourk-wasm"
 version = "0.1.0"
 dependencies = [
  "argent-runtime",
+ "blake2b_simd",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
+ "kaspa-consensus-core",
+ "secp256k1",
+ "serde",
  "serde_json",
+ "silverscript-abi",
  "wasm-bindgen",
 ]
 
@@ -1530,7 +1540,7 @@ dependencies = [
 [[package]]
 name = "kaspa-addresses"
 version = "2.0.1"
-source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.0.1#cfafeb4c093fa37a303f1b9f19c58f986b870ce3"
+source = "git+https://github.com/kaspanet/rusty-kaspa?rev=a41a333b08848f41bf737b72592e463a6011b8ac#a41a333b08848f41bf737b72592e463a6011b8ac"
 dependencies = [
  "borsh",
  "js-sys",
@@ -1545,7 +1555,7 @@ dependencies = [
 [[package]]
 name = "kaspa-consensus-core"
 version = "2.0.1"
-source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.0.1#cfafeb4c093fa37a303f1b9f19c58f986b870ce3"
+source = "git+https://github.com/kaspanet/rusty-kaspa?rev=a41a333b08848f41bf737b72592e463a6011b8ac#a41a333b08848f41bf737b72592e463a6011b8ac"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -1584,7 +1594,7 @@ dependencies = [
 [[package]]
 name = "kaspa-core"
 version = "2.0.1"
-source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.0.1#cfafeb4c093fa37a303f1b9f19c58f986b870ce3"
+source = "git+https://github.com/kaspanet/rusty-kaspa?rev=a41a333b08848f41bf737b72592e463a6011b8ac#a41a333b08848f41bf737b72592e463a6011b8ac"
 dependencies = [
  "anyhow",
  "cfg-if",
@@ -1604,7 +1614,7 @@ dependencies = [
 [[package]]
 name = "kaspa-hashes"
 version = "2.0.1"
-source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.0.1#cfafeb4c093fa37a303f1b9f19c58f986b870ce3"
+source = "git+https://github.com/kaspanet/rusty-kaspa?rev=a41a333b08848f41bf737b72592e463a6011b8ac#a41a333b08848f41bf737b72592e463a6011b8ac"
 dependencies = [
  "blake2b_simd",
  "blake3",
@@ -1623,7 +1633,7 @@ dependencies = [
 [[package]]
 name = "kaspa-math"
 version = "2.0.1"
-source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.0.1#cfafeb4c093fa37a303f1b9f19c58f986b870ce3"
+source = "git+https://github.com/kaspanet/rusty-kaspa?rev=a41a333b08848f41bf737b72592e463a6011b8ac#a41a333b08848f41bf737b72592e463a6011b8ac"
 dependencies = [
  "borsh",
  "faster-hex 0.9.0",
@@ -1643,7 +1653,7 @@ dependencies = [
 [[package]]
 name = "kaspa-merkle"
 version = "2.0.1"
-source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.0.1#cfafeb4c093fa37a303f1b9f19c58f986b870ce3"
+source = "git+https://github.com/kaspanet/rusty-kaspa?rev=a41a333b08848f41bf737b72592e463a6011b8ac#a41a333b08848f41bf737b72592e463a6011b8ac"
 dependencies = [
  "kaspa-hashes",
 ]
@@ -1651,7 +1661,7 @@ dependencies = [
 [[package]]
 name = "kaspa-muhash"
 version = "2.0.1"
-source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.0.1#cfafeb4c093fa37a303f1b9f19c58f986b870ce3"
+source = "git+https://github.com/kaspanet/rusty-kaspa?rev=a41a333b08848f41bf737b72592e463a6011b8ac#a41a333b08848f41bf737b72592e463a6011b8ac"
 dependencies = [
  "kaspa-hashes",
  "kaspa-math",
@@ -1662,7 +1672,7 @@ dependencies = [
 [[package]]
 name = "kaspa-smt"
 version = "2.0.1"
-source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.0.1#cfafeb4c093fa37a303f1b9f19c58f986b870ce3"
+source = "git+https://github.com/kaspanet/rusty-kaspa?rev=a41a333b08848f41bf737b72592e463a6011b8ac#a41a333b08848f41bf737b72592e463a6011b8ac"
 dependencies = [
  "blake3",
  "kaspa-hashes",
@@ -1673,7 +1683,7 @@ dependencies = [
 [[package]]
 name = "kaspa-txscript"
 version = "2.0.1"
-source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.0.1#cfafeb4c093fa37a303f1b9f19c58f986b870ce3"
+source = "git+https://github.com/kaspanet/rusty-kaspa?rev=a41a333b08848f41bf737b72592e463a6011b8ac#a41a333b08848f41bf737b72592e463a6011b8ac"
 dependencies = [
  "ark-bn254",
  "ark-ec",
@@ -1684,7 +1694,6 @@ dependencies = [
  "blake2b_simd",
  "blake3",
  "borsh",
- "cc",
  "cfg-if",
  "faster-hex 0.9.0",
  "hexplay",
@@ -1702,6 +1711,7 @@ dependencies = [
  "risc0-circuit-recursion",
  "risc0-core",
  "risc0-zkp",
+ "risc0-zkvm-platform",
  "secp256k1",
  "serde",
  "serde-wasm-bindgen",
@@ -1716,7 +1726,7 @@ dependencies = [
 [[package]]
 name = "kaspa-txscript-errors"
 version = "2.0.1"
-source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.0.1#cfafeb4c093fa37a303f1b9f19c58f986b870ce3"
+source = "git+https://github.com/kaspanet/rusty-kaspa?rev=a41a333b08848f41bf737b72592e463a6011b8ac#a41a333b08848f41bf737b72592e463a6011b8ac"
 dependencies = [
  "borsh",
  "kaspa-hashes",
@@ -1727,7 +1737,7 @@ dependencies = [
 [[package]]
 name = "kaspa-utils"
 version = "2.0.1"
-source = "git+https://github.com/kaspanet/rusty-kaspa?tag=v2.0.1#cfafeb4c093fa37a303f1b9f19c58f986b870ce3"
+source = "git+https://github.com/kaspanet/rusty-kaspa?rev=a41a333b08848f41bf737b72592e463a6011b8ac#a41a333b08848f41bf737b72592e463a6011b8ac"
 dependencies = [
  "async-channel 2.5.0",
  "borsh",
@@ -2520,9 +2530,9 @@ dependencies = [
 
 [[package]]
 name = "risc0-zkvm-platform"
-version = "2.2.3"
+version = "2.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2eb37a97ff7e8e4ee1b2a1c43ec143b4887759883c343507af9e4787a57914cd"
+checksum = "4db893788c416287e2e1a87e6b8f5302511a04a45329e699d6a32a16874fd24f"
 dependencies = [
  "cfg-if",
  "num_enum",
@@ -2696,6 +2706,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_bytes"
+version = "0.11.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5d440709e79d88e51ac01c4b72fc6cb7314017bb7da9eeff678aa94c10e3ea8"
+dependencies = [
+ "serde",
+ "serde_core",
+]
+
+[[package]]
 name = "serde_core"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2795,12 +2815,15 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 [[package]]
 name = "silverscript-abi"
 version = "0.1.0"
+source = "git+https://github.com/kaspanet/silverscript?rev=3ed973335b59269293564805cc2c58a14595ec03#3ed973335b59269293564805cc2c58a14595ec03"
 dependencies = [
- "blake2b_simd",
+ "blake3",
  "faster-hex 0.10.0",
  "kaspa-txscript",
  "serde",
- "thiserror 2.0.19",
+ "serde_bytes",
+ "serde_json",
+ "thiserror 1.0.69",
 ]
 
 [[package]]

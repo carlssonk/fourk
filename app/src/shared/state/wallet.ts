@@ -80,7 +80,7 @@ function persist(account: StoredAccount): void {
     // this session working; adoptAccount separately refuses to proceed when
     // a write doesn't stick (see there), so a phrase can't be "saved" into
     // thin air.
-    console.error("account record not saved — storage unavailable", e);
+    console.error("account record not saved. Storage unavailable", e);
   }
 }
 
@@ -93,7 +93,8 @@ function backupRecord(text: string): void {
   try {
     localStorage.setItem(`${ACCOUNT_STORAGE}.bak.${Date.now()}`, text);
   } catch (e) {
-    console.error("could not back up unrecognized account record", e, text);
+    // Never log the record itself: it holds recovery phrases.
+    console.error("could not back up unrecognized account record", e);
   }
 }
 
@@ -241,6 +242,17 @@ export function activeAccount(): AccountRow | undefined {
   return active ? accountRow(active) : undefined;
 }
 
+/** Ask the browser not to evict this origin's storage: it holds recovery
+ * phrases, and Safari drops unpersisted site data after a week without a
+ * visit. Best effort; browsers may decline silently. */
+export function requestPersistentStorage(): void {
+  try {
+    void navigator.storage?.persist?.().catch(() => {});
+  } catch {
+    /* unsupported */
+  }
+}
+
 /**
  * Make `phrase` the active account — adding it to the front of the stored
  * list if it's new — and reload: every consumer captured its wallet
@@ -267,7 +279,9 @@ export function adoptAccount(phrase: string): boolean {
   } catch {
     /* handled below */
   }
-  if (!readBack || !readBack.includes('"phrase"'))
+  // The new phrase itself, not just any phrase: a write that failed on quota
+  // leaves the previous record, which has phrases of its own.
+  if (!readBack || !readBack.includes(JSON.stringify(phrase)))
     throw new Error("ACCOUNT_NOT_SAVED: this browser is not persisting data");
   location.reload();
   return true;

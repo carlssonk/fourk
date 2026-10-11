@@ -26,7 +26,7 @@ const store = getDefaultStore();
  * stored high-water mark — the testnet was reset since we last looked. */
 export const networkResetAtom = atom(false);
 
-export const RESET_RESULT = "The test network was reset — this game no longer exists.";
+export const RESET_RESULT = "The test network was reset. This game no longer exists.";
 
 // Per-network key: a future network switch starts a fresh watermark.
 const WATERMARK_KEY = `fourk.daaHighWater.${NETWORK_ID}`;
@@ -35,7 +35,9 @@ const WATERMARK_KEY = `fourk.daaHighWater.${NETWORK_ID}`;
  * node, far less than the rewind of a real reset. VITE_RESET_MARGIN shrinks
  * it on a private local chain, where minutes of mining stand in for that
  * day (see localnet/README.md). */
-const RESET_MARGIN = Number(import.meta.env?.VITE_RESET_MARGIN ?? 1_000_000);
+// `||`, not `??`: an empty variable (VITE_RESET_MARGIN= in a build env) must
+// not read as a zero margin, which would call every routine dip a reset.
+const RESET_MARGIN = Number(import.meta.env?.VITE_RESET_MARGIN || 1_000_000);
 
 export function clearNetworkReset(): void {
   store.set(networkResetAtom, false);
@@ -79,7 +81,10 @@ async function confirmReset(rpc: Rpc, watermark: number): Promise<boolean> {
       }
     }
   } catch {
-    /* no second opinion available */
+    // No second opinion. On a pinned private node the double read is the
+    // whole check (no resolver to ask); on the public network one node's word
+    // is not enough to mark every stored game dead — the next connect retries.
+    return Boolean(import.meta.env?.VITE_NODE_URL);
   }
   return true;
 }

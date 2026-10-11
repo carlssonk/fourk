@@ -36,22 +36,22 @@ export function describeSharedEnd(
 ): string | null {
   switch (spend?.kind) {
     case "claim_draw":
-      return "It's a draw — the board filled up with no winner.";
+      return "It's a draw. The board filled up with no winner.";
     case "cancel":
       return "The game was called off before anyone joined.";
     case "sudden_death":
-      return suddenDeathMessage(m);
+      return suddenDeathMessage(m, myPk);
     case "dissolve": {
       // The dissolve call pushes the dissolving player's pubkey — read it to
       // tell a kick from a walk-out.
       const signer = spend.pushes.find((p) => p.length === 32);
       const by = signer ? toHex(signer) : null;
-      if (by === myPk) return "The game was dissolved — both stakes returned.";
+      if (by === myPk) return "The game was dissolved. Both stakes returned.";
       if (myPk === m.state.p2 && by === m.state.p1)
-        return "Your opponent called the game off — your stake is on its way back.";
+        return "Your opponent called the game off. Your stake is on its way back.";
       if (myPk === m.state.p1 && by === m.state.p2)
-        return "Your opponent left before the game began — your stake is on its way back.";
-      return "The game was dissolved before the first move — both stakes returned.";
+        return "Your opponent left before the game began. Your stake is on its way back.";
+      return "The game was dissolved before the first move. Both stakes returned.";
     }
     default:
       return null;
@@ -103,39 +103,55 @@ export async function drawMatch(
   mode: GameMode,
   match: Match,
 ): Promise<string> {
-  return engine.pinnedSplit(rpc, key, mode, match, "claim_draw", []);
+  // The fourk draws are age-gated (a board-filling resolve can hide a
+  // just-completed win); the sequence field carries the age proof.
+  return engine.pinnedSplit(rpc, key, mode, match, "claim_draw", [], {
+    sequence: BigInt(mode.drawAge(match)),
+  });
 }
 
-/** Settle a capped game that outlived its deadline; the tx's lockTime proves
- * the chain has passed the deadline — the node simply won't mine it early.
- * Almost always an even split, but on a pending win (a claimed, not-yet-swept
- * fourk win) the covenant pays the winner in FULL instead — so a vanished
- * winner's pot is pushed to them, not halved by a loser stalling to the cap. */
+/** Who the classic cap pays: the player NOT to move once the game has
+ * begun and the board is not full (the covenant waits out the mover's clock
+ * first, so they are exactly the one a forfeit would make lose); nobody — an
+ * even split — on an unmoved or full board. */
+export function classicCapWinner(m: Match): string | null {
+  const n = m.state.moveCount;
+  if (n === 0 || n >= CELLS) return null;
+  return n % 2 === 0 ? m.state.p2 : m.state.p1;
+}
+
+/** Settle a capped game that outlived its deadline. The lock time proves the
+ * chain passed the deadline, the sequence that the mover's clock ran out
+ * (the cap never shortens it); the node won't take either early. Modes with
+ * their own cap shape (fourk2) supply settleCap. */
 export async function suddenDeathMatch(
   rpc: engine.Rpc,
   key: engine.PrivateKey,
   mode: GameMode,
   match: Match,
 ): Promise<string> {
-  const lockTime = BigInt(match.state.deadline);
-  const pendingWin = match.simul?.pendingWin ?? 0;
-  if (pendingWin !== 0) {
-    const winnerPk = pendingWin === 1 ? match.state.p1 : match.state.p2;
-    return engine.pinnedWinner(rpc, mode, match, "sudden_death", winnerPk, { lockTime });
-  }
-  return engine.pinnedSplit(rpc, key, mode, match, "sudden_death", [], { lockTime });
+  if (mode.actions.settleCap) return mode.actions.settleCap(rpc, key, match);
+  const gates = {
+    lockTime: BigInt(match.state.deadline),
+    sequence: BigInt(match.state.moveTimeout),
+  };
+  const winner = classicCapWinner(match);
+  if (winner) return engine.pinnedWinner(rpc, mode, match, "sudden_death", winner, gates);
+  return engine.pinnedSplit(rpc, key, mode, match, "sudden_death", [], gates);
 }
 
-export const DRAW_MESSAGE = "It's a draw — the board filled up with no winner.";
+export const DRAW_MESSAGE = "It's a draw. The board filled up with no winner.";
 export const SUDDEN_DEATH_MESSAGE =
-  "Time's up — the game hit its total time limit and the pot split evenly.";
-export const SUDDEN_DEATH_WIN_MESSAGE =
-  "Time's up — the game hit its total time limit and the winner took the pot.";
+  "Time's up. The game hit its total time limit and the pot split evenly.";
 
-/** Sudden death splits an undecided game but pays a pending winner in full;
- * the ending copy has to match whichever the covenant did. */
-export function suddenDeathMessage(m: Match): string {
-  return (m.simul?.pendingWin ?? 0) !== 0 ? SUDDEN_DEATH_WIN_MESSAGE : SUDDEN_DEATH_MESSAGE;
+/** The cap's ending copy, personal like the result classifier expects
+ * ("you took" / "your opponent took" read as the win and the loss). */
+export function suddenDeathMessage(m: Match, myPk: string): string {
+  const winner = classicCapWinner(m);
+  if (!winner) return SUDDEN_DEATH_MESSAGE;
+  return winner === myPk
+    ? "Time's up. The game hit its total time limit and you took the pot."
+    : "Time's up. The game hit its total time limit and your opponent took the pot.";
 }
 
 /**
@@ -144,7 +160,7 @@ export function suddenDeathMessage(m: Match): string {
  * — either player's client cranks the permissionless door, and losing the
  * race to the opponent's client is success too.
  */
-export function sharedAutoActions(mode: GameMode, m: Match): AutoAction[] {
+export function sharedAutoActions(mode: GameMode, m: Match, myPk: string): AutoAction[] {
   const out: AutoAction[] = [];
   if (isOpen(m.state)) return out;
   // A pending win outranks the draw (the covenant gates claim_draw on it):
@@ -160,34 +176,36 @@ export function sharedAutoActions(mode: GameMode, m: Match): AutoAction[] {
       // crank for when the UTXO reaches that age. Classic's draw has no such
       // gate and fires immediately. Either door is self-funded (fee from the
       // pot), so no wallet top-up is needed to crank it.
-      ...(m.simul && {
+      ...(mode.drawAge(m) > 0 && {
         scheduleMs: async (rpc) => {
           const age = await engine.gameUtxoAge(rpc, mode, m);
-          return Math.max(0, (m.state.moveTimeout - (age ?? 0)) * 100 + 2000);
+          return Math.max(0, (mode.drawAge(m) - (age ?? 0)) * 100 + 2000);
         },
       }),
       run: async (rpc, key, mm) => {
         await drawMatch(rpc, key, mode, mm);
         return { kind: "finished", message: DRAW_MESSAGE };
       },
-      onTerminated: DRAW_MESSAGE,
     });
   if (m.state.deadline > 0)
     out.push({
       key: "sudden-death",
       oncePer: "match",
+      // Both gates: the chain past the deadline (lock time) and the game
+      // UTXO a full move clock old (sequence). The +2s pad lets the node's
+      // clock catch up before the gated tx is submitted.
       scheduleMs: async (rpc) => {
         const info: any = await rpc.getBlockDagInfo();
-        // Past-deadline claims fire now; the +2s pad lets the node's clock
-        // catch up before the lockTime-gated tx is submitted.
-        return Math.max(0, (m.state.deadline - Number(info.virtualDaaScore)) * 100 + 2000);
+        const lockWait = m.state.deadline - Number(info.virtualDaaScore);
+        const age = await engine.gameUtxoAge(rpc, mode, m);
+        const ageWait = age === null ? 30 : m.state.moveTimeout - age;
+        return Math.max(0, Math.max(lockWait, ageWait) * 100 + 2000);
       },
       // Self-funded (fee from the pot), so no wallet top-up to crank it.
       run: async (rpc, key, mm) => {
         await suddenDeathMatch(rpc, key, mode, mm);
-        return { kind: "finished", message: suddenDeathMessage(mm) };
+        return { kind: "finished", message: suddenDeathMessage(mm, myPk) };
       },
-      onTerminated: suddenDeathMessage(m),
     });
   return out;
 }

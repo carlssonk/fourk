@@ -1,62 +1,71 @@
 /**
- * Mode-free transaction engine for the Fourk covenants, on the kaspa wasm
- * SDK. Everything here is generic over `ModeEngine` — the per-mode strategy
- * that derives scripts, selector tables, and budgets. The engine owns:
+ * Mode-free transaction engine for the Fourk covenants. Every covenant spend
+ * is described as a plain JSON spec (inputs, outputs, entry arguments) and
+ * handed to fourk-wasm's `buildTransaction`, which signs it, assembles it,
+ * and executes every input through the real Kaspa script engine via
+ * argent-runtime's TxBuilder — the same builder the Rust harness drives. A
+ * malformed spend therefore fails here, with the engine's reason, instead of
+ * as an opaque node rejection; compute budgets are measured, not declared.
  *
+ * The engine owns:
  *   - node connection and transient-error resilience
- *   - wallet/UTXO access, funding selection, fee floor
- *   - the placeholder-sign-splice build cycle (sighash ignores sig scripts)
- *   - the four transaction shapes every door is one of:
+ *   - wallet/UTXO access, funding selection, fee sizing (two builds: the
+ *     first measures the fee mass, the second carries the fee)
+ *   - the door shapes every entrypoint is one of:
  *       openCovenant   genesis: wallet funding -> covenant output
  *       continuation   covenant input + funding, pot preserved (+delta)
  *       signedTerminal covenant input only, pot minus fee to the caller
- *       pinnedSplit    covenant input + funding, outputs 0/1 pinned to the
- *                      players at half the pot each (optionally signed)
- *   - spend tracing (discoverSpend) and script tokenizing
+ *       pinnedWinner   covenant input only, pot minus fee to a pinned winner
+ *       pinnedSplit    covenant input only, outputs 0/1 pinned to the players
+ *   - spend tracing (discoverSpend)
  *
- * Which entrypoint exists, what its sig script looks like, and what a
- * successor state is are all mode questions — see shared/modes/.
+ * Which actor holds a snapshot and what its state fields are is a mode
+ * question (`ModeEngine`, shared/modes/); which arguments a door takes is the
+ * caller's (ordered ABI argument lists — the builder checks count and type).
  */
 
-import { kaspa } from "./sdk";
+import { classifyFailure } from "./errors";
+import { fourk, kaspa } from "./sdk";
 import { NETWORK_ID, NETWORK_TYPE, fromHex, toHex, type Match, type PlayerProfile } from "./match";
 import { decodeProfileBytes, encodeProfileBytes } from "./sharecode";
 import type { State } from "./game";
 import type { SimulCore } from "../modes/fourk/core";
 
-const SUBNETWORK_ID = "00".repeat(20);
-const P2PK_BUDGET = 10;
-const DUST = 20_000n;
+/** Smallest output worth creating: KIP-9 storage mass is C/value per
+ * output (C = 10^12) and a transaction over the 500k block limit can never
+ * be mined, so anything near 0.02 KAS is unspendable in practice; change
+ * below this goes to the fee instead. */
+const DUST = 3_000_000n;
+/** The mempool's floor since Toccata: 100 sompi per gram of fee mass
+ * (rusty-kaspa mining/src/mempool/config.rs, 100_000 sompi/kg). */
 const MIN_RELAY_FEERATE = 100n;
-export const FEE_HEADROOM = 2_000_000n;
-const PLACEHOLDER_SIG = new Uint8Array(65);
+/** The covenant's fee ceiling for the self-funded split and winner doors
+ * (MAX_FEE in contracts/fourk.ag). A V2 split weighs ~15.4k grams, so the
+ * floor fee is ~77% of it: above ~130 sompi/g a fee sized off the priority
+ * estimate would make the covenant refuse the spend, so those doors pay the
+ * ceiling instead. */
+export const MAX_FEE = 2_000_000n;
+/** Funding headroom for one wallet-funded spend: a V2 commit or reveal
+ * carries the ~7.4 KB script, ~16k grams of fee mass, so this covers
+ * feerates up to ~300 sompi/g. */
+export const FEE_HEADROOM = 5_000_000n;
 
 export type Rpc = InstanceType<typeof kaspa.RpcClient>;
 export type PrivateKey = InstanceType<typeof kaspa.PrivateKey>;
-type Transaction = InstanceType<typeof kaspa.Transaction>;
 
-/** The per-mode strategy the engine is generic over: how a match snapshot
- * becomes scripts and how its entrypoints are numbered. Implemented by
- * shared/modes/(classic|fourk)/engine.ts; lobby-vs-live actor dispatch lives
- * inside the mode. */
+/** An actor's state fields as the wasm builder expects them: hex for
+ * byte-like fields, numbers for integers. Field names are the contract's. */
+export type ActorState = Record<string, string | number>;
+
+/** The per-mode strategy the engine is generic over: which actor holds a
+ * match snapshot and how the snapshot maps onto that actor's state fields.
+ * Implemented by shared/modes/(classic|fourk)/engine.ts. */
 export interface ModeEngine {
-  /** Covenant input compute budget (classic 12; fourk 20 — its continuations
-   * rebuild the ~4.3 KB successor template in-script). */
-  covenantBudget: number;
-  /** Redeem script (P2SH preimage) for the snapshot. */
-  lockRedeem(m: Match): Uint8Array;
-  /** Full entry signature script, hex. `blob` carries 32-byte data args
-   * (fourk's commitment hash / reveal salt); modes without them ignore it. */
-  sigScript(
-    m: Match,
-    fn: string,
-    sig: Uint8Array | undefined,
-    pk: Uint8Array | undefined,
-    ints: number[],
-    blob?: Uint8Array,
-  ): string;
-  /** ABI selector table for the snapshot's current phase. */
-  selectorTable(m: Match): readonly string[];
+  /** The actor (contract) holding the snapshot: the lobby actor while the
+   * seat is open, the live actor afterwards. */
+  actorOf(m: Match): string;
+  /** The snapshot as that actor's state fields. */
+  stateOf(m: Match): ActorState;
 }
 
 /** RPC UTXO entries arrive in two shapes depending on the SDK path — read
@@ -65,14 +74,21 @@ export interface UtxoEntryLike {
   address?: unknown;
   amount?: bigint | number | string;
   blockDaaScore?: bigint | number | string;
+  isCoinbase?: boolean;
   covenantId?: string;
   outpoint?: { transactionId: unknown; index?: unknown };
   entry?: {
     address?: unknown;
     covenantId?: string;
+    isCoinbase?: boolean;
+    blockDaaScore?: bigint | number | string;
     outpoint?: { transactionId: unknown; index?: unknown };
   };
-  utxoEntry?: { amount?: bigint | number | string; blockDaaScore?: bigint | number | string };
+  utxoEntry?: {
+    amount?: bigint | number | string;
+    blockDaaScore?: bigint | number | string;
+    isCoinbase?: boolean;
+  };
 }
 
 /**
@@ -123,12 +139,10 @@ export async function connect(url?: string): Promise<Rpc> {
 // timeouts, balancers). The SDK auto-reconnects, but calls in flight at the
 // moment of the drop throw "WebSocket disconnected". Reads are idempotent, so
 // they retry transparently; transaction submission gets special handling in
-// send() because a lost *response* doesn't mean a lost *transaction*.
-
-const TRANSIENT = /websocket|disconnect|not connected|connection|timed? ?out/i;
+// submitSpec() because a lost *response* doesn't mean a lost *transaction*.
 
 export function isTransient(e: unknown): boolean {
-  return TRANSIENT.test(String((e as any)?.message ?? e));
+  return classifyFailure(e) === "transient";
 }
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -168,13 +182,59 @@ export function entryTxId(entry: UtxoEntryLike): string {
   return String(outpoint!.transactionId);
 }
 
+function entryDaaScore(entry: UtxoEntryLike): bigint {
+  return BigInt(
+    entry.blockDaaScore ?? entry.entry?.blockDaaScore ?? entry.utxoEntry?.blockDaaScore ?? 0n,
+  );
+}
+
+/** The consensus acceptance score of a UTXO entry, strictly: throws for a
+ * missing field or the unaccepted sentinel (u64::MAX for mempool outputs),
+ * since fourk2 derives successor addresses from it and a defaulted 0 would
+ * verify locally and die at the node. */
+export function entryAcceptedDaa(entry: UtxoEntryLike): number {
+  const raw = entry.blockDaaScore ?? entry.entry?.blockDaaScore ?? entry.utxoEntry?.blockDaaScore;
+  if (raw === undefined) throw new Error("UTXO entry carries no acceptance score");
+  const daa = BigInt(raw);
+  if (daa < 0n || daa >= 500_000_000_000n) throw new Error("UTXO entry is not accepted yet");
+  return Number(daa);
+}
+
+/** A snapshot with the on-chain hit attached: txid, pot, and the acceptance
+ * score the chain recorded for it (the one place `acceptedDaa` is set). */
+export function withEntry(m: Match, entry: UtxoEntryLike): Match {
+  const raw = entry.blockDaaScore ?? entry.entry?.blockDaaScore ?? entry.utxoEntry?.blockDaaScore;
+  const daa = raw === undefined ? undefined : BigInt(raw);
+  const { acceptedDaa: _stale, ...rest } = m;
+  return {
+    ...rest,
+    txid: entryTxId(entry),
+    value: entryAmount(entry),
+    ...(daa !== undefined && daa >= 0n && daa < 500_000_000_000n && { acceptedDaa: Number(daa) }),
+  };
+}
+
+/** A snapshot whose txid changed without an observation: no stamp. */
+export function withoutEntry(m: Match): Match {
+  const { acceptedDaa: _stale, ...rest } = m;
+  return rest;
+}
+
+function entryIsCoinbase(entry: UtxoEntryLike): boolean {
+  return Boolean(
+    entry.isCoinbase ?? entry.entry?.isCoinbase ?? entry.utxoEntry?.isCoinbase ?? false,
+  );
+}
+
 export async function walletBalance(rpc: Rpc, address: string): Promise<bigint> {
   const entries = await utxosAt(rpc, address);
   return entries.reduce((sum, e) => sum + entryAmount(e), 0n);
 }
 
+/** The script public key locking a match snapshot under `mode`. */
 export function matchSpk(mode: ModeEngine, m: Match) {
-  return kaspa.payToScriptHashScript(mode.lockRedeem(m));
+  const script = fourk.actorScriptPublicKey(mode.actorOf(m), JSON.stringify(mode.stateOf(m)));
+  return new kaspa.ScriptPublicKey(0, script);
 }
 
 /** The game address of a match snapshot under `mode`. */
@@ -190,7 +250,16 @@ export async function fetchGameUtxo(
   match: Match,
 ): Promise<UtxoEntryLike | null> {
   const entries = await utxosAt(rpc, matchAddress(mode, match));
-  return entries.find((e) => entryTxId(e) === match.txid) ?? null;
+  // The covenant id too: anyone can pay a plain output to a game address,
+  // and a forged link naming that txid must not read as the live game.
+  return (
+    entries.find((e) => entryTxId(e) === match.txid && entryCovenantId(e) === match.covenantId) ??
+    null
+  );
+}
+
+export function entryCovenantId(entry: UtxoEntryLike): string {
+  return String(entry.entry?.covenantId ?? entry.covenantId ?? "");
 }
 
 /** Wait until the node's UTXO index reflects a freshly submitted game UTXO.
@@ -212,13 +281,205 @@ export async function untilIndexed(
   mode: ModeEngine,
   match: Match,
   spent?: Match,
+  lowHash?: string,
 ): Promise<Match> {
   for (let i = 0; i < 40; i++) {
-    if (await fetchGameUtxo(rpc, mode, match)) break;
-    if (spent && !(await fetchGameUtxo(rpc, mode, spent))) break;
+    const entry = await fetchGameUtxo(rpc, mode, match);
+    if (entry) return withEntry(match, entry);
+    if (spent && !(await fetchGameUtxo(rpc, mode, spent))) {
+      // The predecessor is gone: either our transaction was accepted (and its
+      // output may already be spent onward), or a conflicting one won — the
+      // opponent's, submitted through another node. Only the chain can tell
+      // them apart; returning our successor unasked would leave the player on
+      // a state that never existed, owing a move they think they made.
+      const late = await fetchGameUtxo(rpc, mode, match);
+      if (late) return withEntry(match, late);
+      if (!lowHash) throw new Error(LOST_RACE);
+      for (let look = 0; look < 6; look++) {
+        const winner = await acceptedSpendOf(rpc, spent.txid, lowHash);
+        if (winner === match.txid) return match; // ours, spent onward
+        if (winner) throw new Error(LOST_RACE);
+        await sleep(500); // the index moved before the acceptance data did
+      }
+      throw new Error(LOST_RACE);
+    }
     await sleep(500);
   }
   return match;
+}
+
+/** A continuation lost the race for the game UTXO. Classified "stale"
+ * (errors.ts), so callers resync and replay against the winner's state. */
+const LOST_RACE = "game UTXO not found: another transaction spent it first";
+
+// --- Chain tracing --------------------------------------------------------------
+//
+// What happened to a game UTXO is read off the chain itself: the blocks since
+// a checkpoint say which transactions spent it (a DAG can carry both sides of
+// a double spend), and the virtual chain says which one was accepted.
+
+/** A transaction found in a block spending output 0 of `prev`. */
+export interface RawSpend {
+  prev: string;
+  txid: string;
+  sigScript: string;
+  payload: string;
+  /** Output 0 as the node described it (verbose data), when it did. */
+  out0Address: string | null;
+  out0Value: bigint | null;
+}
+
+/** Each pass is one getBlocks page (~a mergeset-limited batch, about 25 s
+ * of a 10 BPS chain); 400 reach back roughly three hours. */
+const MAX_BLOCK_PAGES = 400;
+
+/**
+ * Every transaction in blocks after `lowHash` that spends output 0 of
+ * `startTxid`, or of a transaction found doing so: the covenant lineage,
+ * accepted or not. Block order is topological, so a spend is always seen
+ * after its parent. `complete` = the scan reached the tip. Throws if the
+ * node does not know `lowHash` (pruned).
+ */
+export async function lineageSpends(
+  rpc: Rpc,
+  startTxid: string,
+  lowHash: string,
+  maxPages = MAX_BLOCK_PAGES,
+): Promise<{ spends: RawSpend[]; complete: boolean }> {
+  const tracked = new Set([startTxid]);
+  const seen = new Set<string>();
+  const spends: RawSpend[] = [];
+  let low = lowHash;
+  for (let page = 0; page < maxPages; page++) {
+    const res: any = await withRetry(() =>
+      rpc.getBlocks({ lowHash: low, includeBlocks: true, includeTransactions: true }),
+    );
+    for (const block of res.blocks ?? []) {
+      for (const tx of block.transactions ?? []) {
+        const txid = String(tx.verboseData?.transactionId ?? tx.verbose_data?.transaction_id ?? "");
+        if (!txid || seen.has(txid)) continue;
+        for (const inp of tx.inputs ?? []) {
+          const outpoint = inp?.previousOutpoint ?? inp?.previous_outpoint;
+          const prev = outpoint ? String(outpoint.transactionId) : "";
+          if (!tracked.has(prev) || Number(outpoint.index ?? 0) !== 0) continue;
+          const out0 = tx.outputs?.[0];
+          const address = out0?.verboseData?.scriptPublicKeyAddress;
+          seen.add(txid);
+          tracked.add(txid);
+          spends.push({
+            prev,
+            txid,
+            sigScript: String(inp.signatureScript ?? inp.signature_script ?? ""),
+            payload: String(tx.payload ?? ""),
+            out0Address: address ? String(address) : null,
+            out0Value: out0?.value !== undefined ? BigInt(out0.value) : null,
+          });
+          break;
+        }
+      }
+    }
+    const hashes: unknown[] = res.blockHashes ?? res.block_hashes ?? [];
+    const next = hashes.length ? String(hashes[hashes.length - 1]) : "";
+    // The page ends where it started: we've reached the tip.
+    if (!next || next === low) return { spends, complete: true };
+    low = next;
+  }
+  return { spends, complete: false };
+}
+
+/** Which of `txids` the virtual chain accepted after `lowHash`, each with
+ * its accepting chain block. Paged to the tip; keeps only the ids asked
+ * about (a busy chain accepts thousands of others). */
+export async function acceptedAmong(
+  rpc: Rpc,
+  lowHash: string,
+  txids: Set<string>,
+  maxPages = 200,
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  if (!txids.size) return out;
+  let start = lowHash;
+  for (let page = 0; page < maxPages && out.size < txids.size; page++) {
+    const res: any = await withRetry(() =>
+      rpc.getVirtualChainFromBlock({ startHash: start, includeAcceptedTransactionIds: true }),
+    );
+    for (const group of res.acceptedTransactionIds ?? res.accepted_transaction_ids ?? []) {
+      const hash = String(group.acceptingBlockHash ?? group.accepting_block_hash ?? "");
+      for (const id of group.acceptedTransactionIds ?? group.accepted_transaction_ids ?? [])
+        if (txids.has(String(id))) out.set(String(id), hash);
+    }
+    const added: unknown[] = res.addedChainBlockHashes ?? res.added_chain_block_hashes ?? [];
+    const last = added.length ? String(added[added.length - 1]) : "";
+    if (!last || last === start) break;
+    start = last;
+  }
+  return out;
+}
+
+/** Which of `candidates` are accepted: by a chain block after `lowHash`
+ * (mapped to its hash), or by the virtual alone (mapped to null). A
+ * transaction in the newest block is accepted by the virtual: its outputs
+ * are already in the UTXO index, but the virtual chain lists it only once
+ * the next block lands, and waiting for that would leave the client a block
+ * behind what the node already serves. */
+export async function acceptedOrLive(
+  rpc: Rpc,
+  lowHash: string,
+  candidates: RawSpend[],
+): Promise<Map<string, string | null>> {
+  const out = new Map<string, string | null>(
+    await acceptedAmong(rpc, lowHash, new Set(candidates.map((c) => c.txid))),
+  );
+  for (const c of candidates) {
+    if (out.has(c.txid) || c.out0Address === null) continue;
+    const entries = await utxosAt(rpc, c.out0Address);
+    if (entries.some((e) => entryTxId(e) === c.txid)) out.set(c.txid, null);
+  }
+  return out;
+}
+
+const chainBlockScores = new Map<string, number>();
+
+/** A chain block's DAA score: the acceptance score of every transaction it
+ * accepted — what OpTxInputDaaScore reads for their outputs. */
+export async function chainBlockDaa(rpc: Rpc, hash: string): Promise<number | null> {
+  const known = chainBlockScores.get(hash);
+  if (known !== undefined) return known;
+  const block: any = await withRetry(() => rpc.getBlock({ hash, includeTransactions: false }));
+  const daa = block?.block?.header?.daaScore ?? block?.block?.header?.daa_score;
+  if (daa === undefined) return null;
+  const score = Number(BigInt(daa));
+  chainBlockScores.set(hash, score);
+  return score;
+}
+
+/** The accepted transaction spending output 0 of `prev` after `lowHash`,
+ * or null when none is accepted (yet). */
+export async function acceptedSpendOf(
+  rpc: Rpc,
+  prev: string,
+  lowHash: string,
+): Promise<string | null> {
+  const { spends } = await lineageSpends(rpc, prev, lowHash);
+  const direct = spends.filter((s) => s.prev === prev);
+  const accepted = await acceptedOrLive(rpc, lowHash, direct);
+  return direct.find((s) => accepted.has(s.txid))?.txid ?? null;
+}
+
+/**
+ * The acceptance score of a transaction the UTXO index no longer holds (its
+ * output was spent onward before this client observed it): walk the virtual
+ * chain forward from `lowHash` to the block that accepted `txid` and read
+ * that block's DAA score — the same score OpTxInputDaaScore saw when the
+ * spend was validated. Null when `txid` is not accepted after `lowHash`.
+ */
+export async function acceptedDaaOf(
+  rpc: Rpc,
+  txid: string,
+  lowHash: string,
+): Promise<number | null> {
+  const hash = (await acceptedAmong(rpc, lowHash, new Set([txid]))).get(txid);
+  return hash ? chainBlockDaa(rpc, hash) : null;
 }
 
 /** Select wallet UTXOs, largest first, until their sum covers `need`.
@@ -226,7 +487,7 @@ export async function untilIndexed(
  * of combining several small UTXOs into one spend. */
 async function pickFunding(rpc: Rpc, key: PrivateKey, need: bigint): Promise<UtxoEntryLike[]> {
   const entries = await utxosAt(rpc, walletAddress(key));
-  if (!entries.length) throw new Error("wallet has no UTXOs — fund it with testnet KAS first");
+  if (!entries.length) throw new Error("wallet has no UTXOs. Fund it with testnet KAS first");
   const sorted = entries.sort((a, b) => (entryAmount(b) > entryAmount(a) ? 1 : -1));
   const picked: UtxoEntryLike[] = [];
   let total = 0n;
@@ -242,51 +503,168 @@ function fundingTotal(entries: UtxoEntryLike[]): bigint {
   return entries.reduce((sum, e) => sum + entryAmount(e), 0n);
 }
 
-// --- Transaction assembly ----------------------------------------------------
+// --- Transaction specs ---------------------------------------------------------
+//
+// The JSON the wasm builder consumes (wasm/src/builder.rs documents it).
+// Sompi and DAA quantities travel as decimal strings; bytes as hex.
 
-function gameInput(
+/** One entry argument, in the contract's declared order. `sig` names a
+ * signer index into the keys handed to submitSpec. */
+export type EntryArg = { sig: number } | { bytes: string } | { int: number };
+
+interface UtxoSpec {
+  outpoint: { txid: string; index: number };
+  value: string;
+  daaScore: string;
+  coinbase: boolean;
+  sequence: string;
+}
+
+type InputSpec =
+  | ({
+      kind: "actor";
+      actor: string;
+      state: ActorState;
+      entry: string;
+      args: EntryArg[];
+      covenantId: string;
+    } & UtxoSpec)
+  | ({ kind: "p2pk"; signer: number; pubkey: string } & UtxoSpec)
+  | ({ kind: "script"; sigScript: string; scriptPublicKey: string } & UtxoSpec);
+
+type OutputSpec =
+  | {
+      kind: "actor";
+      actor: string;
+      state: ActorState;
+      authorizingInput: number;
+      covenantId: string;
+      value: string;
+    }
+  | { kind: "genesis"; actor: string; state: ActorState; authorizingInput: number; value: string }
+  | { kind: "script"; scriptPublicKey: string; value: string };
+
+export interface TxSpec {
+  network: string;
+  lockTime?: string;
+  payload?: string;
+  inputs: InputSpec[];
+  outputs: OutputSpec[];
+}
+
+/** What the builder hands back: the finished transaction plus its masses. */
+export interface BuiltTx {
+  id: string;
+  version: number;
+  lockTime: string;
+  subnetworkId: string;
+  gas: string;
+  payload: string;
+  inputs: Array<{
+    transactionId: string;
+    index: number;
+    signatureScript: string;
+    sequence: string;
+    sigOpCount: number;
+    computeBudget: number;
+  }>;
+  outputs: Array<{
+    value: string;
+    scriptVersion: number;
+    script: string;
+    covenant: { authorizingInput: number; covenantId: string } | null;
+  }>;
+  mass: { compute: string; transient: string; storage: string; fee: string };
+}
+
+function utxoSpec(entry: UtxoEntryLike, sequence = 0n): UtxoSpec {
+  const outpoint = (entry.outpoint ?? entry.entry?.outpoint)!;
+  return {
+    outpoint: { txid: String(outpoint.transactionId), index: Number(outpoint.index ?? 0) },
+    value: entryAmount(entry).toString(),
+    daaScore: entryDaaScore(entry).toString(),
+    coinbase: entryIsCoinbase(entry),
+    sequence: sequence.toString(),
+  };
+}
+
+/** The match's covenant UTXO as a spec input calling `entry`. */
+export function gameInput(
+  mode: ModeEngine,
   match: Match,
   gameUtxo: UtxoEntryLike,
-  sigScriptHex: string,
-  budget: number,
+  entry: string,
+  args: EntryArg[],
   sequence = 0n,
-) {
-  return new kaspa.TransactionInput({
-    previousOutpoint: { transactionId: match.txid, index: 0 },
-    signatureScript: sigScriptHex,
-    sequence,
-    sigOpCount: 0,
-    computeBudget: budget,
-    utxo: gameUtxo,
-  } as any);
+): InputSpec {
+  return {
+    kind: "actor",
+    actor: mode.actorOf(match),
+    state: mode.stateOf(match),
+    entry,
+    args,
+    covenantId: match.covenantId,
+    ...utxoSpec(gameUtxo, sequence),
+  };
 }
 
-function fundingInput(entry: UtxoEntryLike, sigScriptHex: string) {
-  const outpoint = (entry.outpoint ?? entry.entry?.outpoint)!;
-  return new kaspa.TransactionInput({
-    previousOutpoint: {
-      transactionId: String(outpoint.transactionId),
-      index: Number(outpoint.index),
-    },
-    signatureScript: sigScriptHex,
-    sequence: 0n,
-    sigOpCount: 0,
-    computeBudget: P2PK_BUDGET,
-    utxo: entry,
-  } as any);
+/** A wallet UTXO as a spec input signed by key `signer`. */
+export function fundingInput(entry: UtxoEntryLike, signer: number, pubkeyHex: string): InputSpec {
+  return { kind: "p2pk", signer, pubkey: pubkeyHex, ...utxoSpec(entry) };
 }
 
-function makeTx(inputs: any[], outputs: any[], payload = "", lockTime = 0n): Transaction {
-  return new kaspa.Transaction({
-    version: 1,
-    inputs,
-    outputs,
-    lockTime,
-    gas: 0n,
-    payload,
-    subnetworkId: SUBNETWORK_ID,
-  } as any);
+/** A UTXO spent with a ready-made signature script (the dispenser claim). */
+export function scriptInput(
+  entry: UtxoEntryLike,
+  sigScriptHex: string,
+  scriptPublicKeyHex: string,
+  sequence = 0n,
+): InputSpec {
+  return {
+    kind: "script",
+    sigScript: sigScriptHex,
+    scriptPublicKey: scriptPublicKeyHex,
+    ...utxoSpec(entry, sequence),
+  };
 }
+
+/** A plain output to `spk` (an SDK ScriptPublicKey). */
+export function scriptOutput(spk: { script: string }, value: bigint): OutputSpec {
+  return { kind: "script", scriptPublicKey: String(spk.script), value: value.toString() };
+}
+
+export function p2pkOutput(pkHex: string, value: bigint): OutputSpec {
+  return { kind: "script", scriptPublicKey: "20" + pkHex + "ac", value: value.toString() };
+}
+
+/** The successor covenant output, authorized by input `authorizingInput`. */
+function successorOutput(
+  mode: ModeEngine,
+  next: Match,
+  authorizingInput: number,
+  value: bigint,
+): OutputSpec {
+  return {
+    kind: "actor",
+    actor: mode.actorOf(next),
+    state: mode.stateOf(next),
+    authorizingInput,
+    covenantId: next.covenantId,
+    value: value.toString(),
+  };
+}
+
+function withChange(
+  outputs: OutputSpec[],
+  changeSpk: { script: string },
+  changeValue: bigint,
+): OutputSpec[] {
+  if (changeValue < 0n) throw new Error(`insufficient funds: short ${-changeValue} sompi`);
+  if (changeValue >= DUST) return [...outputs, scriptOutput(changeSpk, changeValue)];
+  return outputs;
+}
+
+// --- Build / submit ------------------------------------------------------------
 
 // The join transaction's payload is the only P2 -> P1 channel that exists
 // without a backend: it carries the joiner's profile (name + avatar code),
@@ -310,91 +688,138 @@ export function profileFromPayload(payloadHex: string): PlayerProfile | null {
   }
 }
 
-function p2pkOutput(pkHex: string, value: bigint) {
-  const script = fromHex("20" + pkHex + "ac");
-  return new kaspa.TransactionOutput(value, new kaspa.ScriptPublicKey(0, script));
+function secretsOf(keys: PrivateKey[]): Uint8Array {
+  const out = new Uint8Array(32 * keys.length);
+  keys.forEach((key, i) => out.set(fromHex(key.toString()), 32 * i));
+  return out;
 }
 
-function withChange(outputs: any[], changeSpk: any, changeValue: bigint): any[] {
-  if (changeValue < 0n) throw new Error(`insufficient funds: short ${-changeValue} sompi`);
-  if (changeValue >= DUST) return [...outputs, new kaspa.TransactionOutput(changeValue, changeSpk)];
-  return outputs;
-}
-
-/** Consensus transaction_estimated_serialized_size, for the transient fee floor. */
-function estimatedSize(tx: Transaction): number {
-  let size = 94 + String((tx as any).payload ?? "").length / 2;
-  for (const input of tx.inputs) size += 54 + String(input.signatureScript).length / 2;
-  for (const output of tx.outputs) {
-    size += 18 + String(output.scriptPublicKey.script).length / 2;
-    if (output.covenant) size += 34;
+/** Sign, assemble, and engine-verify `spec` (fourk-wasm). Throws with the
+ * builder's or the script engine's reason. */
+export function buildTx(spec: TxSpec, keys: PrivateKey[]): BuiltTx {
+  const secrets = secretsOf(keys);
+  try {
+    return JSON.parse(fourk.buildTransaction(JSON.stringify(spec), secrets)) as BuiltTx;
+  } finally {
+    secrets.fill(0); // the JS-side copy; the SDK's own key object keeps the secret
   }
-  return size;
 }
 
-/**
- * The mempool fee floor charges max(compute mass, normalized transient mass).
- * The SDK's calculateTransactionMass slightly undercounts consensus compute
- * mass (the +2 spk version bytes per output, at 10 grams/byte), so compute
- * the consensus formula directly and take the max of all three.
- */
-export function feeMassFloor(tx: Transaction, sdkMass: bigint): bigint {
-  const size = estimatedSize(tx);
-  let computeMass = size;
-  for (const output of tx.outputs)
-    computeMass += (String(output.scriptPublicKey.script).length / 2 + 2) * 10;
-  for (const input of tx.inputs) computeMass += Number((input as any).computeBudget ?? 0) * 100;
-  return bigMax(bigMax(sdkMass, BigInt(computeMass)), BigInt(size) * 2n);
+/** Rebuild the SDK transaction object the RPC submits, from the builder's
+ * JSON. CovenantBinding objects are constructed fresh because the SDK's
+ * TransactionOutput consumes them. */
+function toSdkTransaction(built: BuiltTx) {
+  return new kaspa.Transaction({
+    version: built.version,
+    inputs: built.inputs.map(
+      (i) =>
+        new kaspa.TransactionInput({
+          previousOutpoint: { transactionId: i.transactionId, index: i.index },
+          signatureScript: i.signatureScript,
+          sequence: BigInt(i.sequence),
+          sigOpCount: i.sigOpCount,
+          computeBudget: i.computeBudget,
+        } as any),
+    ),
+    outputs: built.outputs.map(
+      (o) =>
+        new kaspa.TransactionOutput(
+          BigInt(o.value),
+          new kaspa.ScriptPublicKey(o.scriptVersion, fromHex(o.script)),
+          o.covenant
+            ? new kaspa.CovenantBinding(
+                o.covenant.authorizingInput,
+                new kaspa.Hash(o.covenant.covenantId),
+              )
+            : undefined,
+        ),
+    ),
+    lockTime: BigInt(built.lockTime),
+    gas: BigInt(built.gas),
+    payload: built.payload,
+    subnetworkId: built.subnetworkId,
+  } as any);
 }
 
-type Build = (fee: bigint, sigs: Map<number, Uint8Array>) => Transaction;
-
-async function send(rpc: Rpc, build: Build, signers: Array<[number, PrivateKey]>): Promise<string> {
-  const placeholders = new Map(signers.map(([i]) => [i, PLACEHOLDER_SIG]));
-  const draft = build(0n, placeholders);
-  const mass = BigInt(kaspa.calculateTransactionMass(NETWORK_ID, draft as any));
-  const feeMass = feeMassFloor(draft, mass);
+/** The node's current priority feerate (sompi per gram), floored. */
+export async function currentFeerate(rpc: Rpc): Promise<bigint> {
   const estimate: any = await withRetry(() => rpc.getFeeEstimate({} as any));
-  const feerate = bigMax(
+  return bigMax(
     BigInt(Math.ceil(Number(estimate.estimate.priorityBucket.feerate))),
     MIN_RELAY_FEERATE,
   );
-  const fee = feeMass * feerate;
+}
 
-  const unsigned = build(fee, placeholders);
-  const sigs = new Map(
-    signers.map(([i, key]) => {
-      // createInputSignature returns hex of [push65, 64-byte sig, hashtype];
-      // strip the push opcode — the entry sigscript does its own pushing.
-      const hex = kaspa.createInputSignature(unsigned as any, i, key);
-      return [i, fromHex(hex.slice(2))] as const;
-    }),
-  );
-  const final = build(fee, sigs);
+/**
+ * Build `specOf(fee)` and submit it. The fee is sized from the transaction
+ * itself: a first build measures the fee mass (compute vs transient, as the
+ * mempool prices it), the second carries `feeMass * feerate`. Both builds run
+ * every input through the script engine, so what gets submitted has already
+ * verified locally.
+ */
+export async function submitSpec(
+  rpc: Rpc,
+  keys: PrivateKey[],
+  specOf: (fee: bigint) => TxSpec,
+  opts: { maxFee?: bigint; beforeSubmit?: (built: BuiltTx) => void } = {},
+): Promise<{ txid: string; built: BuiltTx }> {
+  const draft = buildTx(specOf(0n), keys);
+  const feerate = await currentFeerate(rpc);
+  const sized = BigInt(draft.mass.fee) * feerate;
+  const fee = opts.maxFee !== undefined && sized > opts.maxFee ? opts.maxFee : sized;
+  const built = buildTx(specOf(fee), keys);
+  const final = toSdkTransaction(built);
+  // Callers record what is about to exist (a new game) before it can: a
+  // reload mid-submit must not leave a stake on chain with no record of it.
+  opts.beforeSubmit?.(built);
+  const low = await chainCheckpoint(rpc);
   try {
     const res = await rpc.submitTransaction({ transaction: final as any, allowOrphan: false });
-    return String(res.transactionId);
+    return { txid: String(res.transactionId), built };
   } catch (e) {
     // A dropped websocket may have eaten the RESPONSE, not the transaction.
-    // Resubmit the identical tx once; "already known" then means success.
+    // Resubmit the identical tx once: the node already holding it means it
+    // went through. (Not any "already": "already spent by transaction" means
+    // another spend won the input.)
     if (!isTransient(e)) throw e;
     await sleep(2500);
     try {
       const res = await rpc.submitTransaction({ transaction: final as any, allowOrphan: false });
-      return String(res.transactionId);
-    } catch (e2: any) {
-      if (/already/i.test(String(e2?.message ?? e2))) return String((final as any).id);
+      return { txid: String(res.transactionId), built };
+    } catch (e2) {
+      if (classifyFailure(e2) === "known") return { txid: built.id, built };
+      // "Input already spent" after a lost response may mean the first copy
+      // went through and spent it: a cash-out that reported failure here
+      // would invite a second, real payment.
+      if (classifyFailure(e2) === "stale" && (await landed(rpc, built.id, low)))
+        return { txid: built.id, built };
       throw e2;
     }
   }
 }
 
-function bigMax(a: bigint, b: bigint): bigint {
-  return a > b ? a : b;
+/** Is `txid` in the mempool, or accepted after `lowHash`? */
+async function landed(rpc: Rpc, txid: string, lowHash: string): Promise<boolean> {
+  try {
+    await rpc.getMempoolEntry({
+      transactionId: txid,
+      includeOrphanPool: false,
+      filterTransactionPool: false,
+    } as any);
+    return true;
+  } catch {
+    /* not pending: maybe accepted already */
+  }
+  for (let i = 0; i < 3; i++) {
+    if ((await acceptedAmong(rpc, lowHash, new Set([txid])).catch(() => new Map())).has(txid))
+      return true;
+    await sleep(1000);
+  }
+  return false;
 }
 
-function fullP2pkSigScript(sig: Uint8Array): string {
-  return "41" + toHex(sig);
+function bigMax(a: bigint, b: bigint): bigint {
+  return a > b ? a : b;
 }
 
 /**
@@ -409,9 +834,18 @@ export async function sendTo(
   amount: bigint | "all",
 ): Promise<{ txid: string; amount: bigint }> {
   const myPrefix = walletAddress(key).split(":")[0]!;
-  if (!kaspa.Address.validate(dest) || new kaspa.Address(dest).prefix !== myPrefix)
+  // The SDK's address parser can trap the wasm on crafted input (an empty or
+  // wrong-length payload under a valid checksum) instead of returning false:
+  // anything it can't parse cleanly is just a bad address.
+  let destSpk: ReturnType<typeof kaspa.payToAddressScript>;
+  try {
+    if (!kaspa.Address.validate(dest)) throw new Error("invalid");
+    const address = new kaspa.Address(dest);
+    if (address.prefix !== myPrefix) throw new Error("wrong network");
+    destSpk = kaspa.payToAddressScript(address);
+  } catch {
     throw new Error("BAD_ADDRESS");
-  const destSpk = kaspa.payToAddressScript(new kaspa.Address(dest));
+  }
 
   const sweep = amount === "all";
   if (!sweep && amount < DUST) throw new Error("LOW_BALANCE");
@@ -421,27 +855,24 @@ export async function sendTo(
   const total = fundingTotal(funding);
   if (sweep && total < DUST) throw new Error("LOW_BALANCE");
   const changeSpk = kaspa.payToAddressScript(new kaspa.Address(walletAddress(key)));
+  const pk = walletPubkey(key);
 
   let sent = 0n;
-  const build: Build = (fee, sigs) => {
+  const { txid } = await submitSpec(rpc, [key], (fee) => {
     sent = sweep ? total - fee : (amount as bigint);
     if (sent < DUST) throw new Error("LOW_BALANCE"); // fee ate the sweep
-    const inputs = funding.map((f, i) => fundingInput(f, fullP2pkSigScript(sigs.get(i)!)));
-    const outputs = sweep
-      ? [new kaspa.TransactionOutput(sent, destSpk)]
-      : withChange([new kaspa.TransactionOutput(sent, destSpk)], changeSpk, total - sent - fee);
-    return makeTx(inputs, outputs);
-  };
-
-  const txid = await send(
-    rpc,
-    build,
-    funding.map((_, i): [number, PrivateKey] => [i, key]),
-  );
+    return {
+      network: NETWORK_ID,
+      inputs: funding.map((f) => fundingInput(f, 0, pk)),
+      outputs: sweep
+        ? [scriptOutput(destSpk, sent)]
+        : withChange([scriptOutput(destSpk, sent)], changeSpk, total - sent - fee),
+    };
+  });
   return { txid, amount: sent };
 }
 
-// --- The four door shapes -----------------------------------------------------
+// --- The door shapes -----------------------------------------------------------
 
 export interface MatchTiming {
   /** Per-move forfeit clock, DAA blocks (>= contract floor of 600). */
@@ -449,129 +880,137 @@ export interface MatchTiming {
   /** Total game duration, DAA blocks; 0 = uncapped. Converted to an
    * absolute sudden-death deadline off the chain's current DAA score. */
   totalCap: number;
+  /** fourk2's reveal grace and challenge window, DAA (600 <= R <= the
+   * picking window); defaults to the picking window. */
+  revealTimeout?: number;
 }
 
 /** Genesis: fund a fresh covenant output of `stake` at the mode-derived
- * address for `genesis`. Returns the covenant id and txid. */
+ * address for `genesis`. The covenant id is derived by the builder from the
+ * funding input. Returns the covenant id and txid. */
 export async function openCovenant(
   rpc: Rpc,
   key: PrivateKey,
   mode: ModeEngine,
   genesis: Match,
+  opts: { beforeSubmit?: (covenantId: string, txid: string) => void } = {},
 ): Promise<{ covenantId: string; txid: string }> {
   const stake = genesis.value;
-  const spk = matchSpk(mode, genesis);
   const funding = await pickFunding(rpc, key, stake + FEE_HEADROOM);
   const changeSpk = kaspa.payToAddressScript(new kaspa.Address(walletAddress(key)));
-  let covenantId = "";
+  const pk = walletPubkey(key);
 
-  const build: Build = (fee, sigs) => {
-    const inputs = funding.map((f, i) => fundingInput(f, fullP2pkSigScript(sigs.get(i)!)));
-    const outputs = withChange(
-      [new kaspa.TransactionOutput(stake, spk)],
-      changeSpk,
-      fundingTotal(funding) - stake - fee,
-    );
-    const tx = makeTx(inputs, outputs);
-    tx.populateGenesisCovenants([new kaspa.GenesisCovenantGroup(0, [0])]);
-    covenantId = String((tx.outputs[0] as any).covenant.covenantId);
-    return tx;
-  };
-
-  const txid = await send(
+  const { txid, built } = await submitSpec(
     rpc,
-    build,
-    funding.map((_, i): [number, PrivateKey] => [i, key]),
+    [key],
+    (fee) => ({
+      network: NETWORK_ID,
+      inputs: funding.map((f) => fundingInput(f, 0, pk)),
+      outputs: withChange(
+        [
+          {
+            kind: "genesis",
+            actor: mode.actorOf(genesis),
+            state: mode.stateOf(genesis),
+            authorizingInput: 0,
+            value: stake.toString(),
+          },
+        ],
+        changeSpk,
+        fundingTotal(funding) - stake - fee,
+      ),
+    }),
+    {
+      beforeSubmit: (b) => {
+        const id = b.outputs[0]?.covenant?.covenantId;
+        if (id) opts.beforeSubmit?.(id, b.id);
+      },
+    },
   );
+  const covenantId = built.outputs[0]?.covenant?.covenantId;
+  if (!covenantId) throw new Error("genesis output carries no covenant id");
   return { covenantId, txid };
 }
 
-/** Continuation spend (join / move / commit / reveal / resolve): game input
- * + funding, pot preserved (+delta on join). `next` is the successor
- * snapshot; mode-specific Match fields ride along. */
+/** Continuation spend (join / move / commit / reveal / resolve / claim_win):
+ * game input + funding, pot preserved (+delta on join). `args` are the
+ * entry's arguments in ABI order (`{ sig: 0 }` is the caller's signature);
+ * `next` is the successor snapshot; mode-specific Match fields ride along. */
 export async function continuation(
   rpc: Rpc,
   key: PrivateKey,
   mode: ModeEngine,
   match: Match,
-  fn: string,
-  callArgs: (sig: Uint8Array) => { pk?: Uint8Array; ints: number[]; blob?: Uint8Array },
+  entry: string,
+  args: EntryArg[],
   next: { state: State; simul?: SimulCore },
   potDelta: bigint,
   payload = "",
+  opts: { gameUtxo?: UtxoEntryLike; beforeSubmit?: (next: Match) => void } = {},
 ): Promise<Match> {
-  const gameUtxo = await fetchGameUtxo(rpc, mode, match);
-  if (!gameUtxo) throw new Error("game UTXO not found on chain — sync first");
+  // A caller that derived `next` from the input's acceptance score (fourk2)
+  // hands over the entry it read, so the successor and the spend agree.
+  const gameUtxo = opts.gameUtxo ?? (await fetchGameUtxo(rpc, mode, match));
+  if (!gameUtxo) throw new Error("game UTXO not found on chain. Sync first");
   const funding = await pickFunding(rpc, key, potDelta + FEE_HEADROOM);
   const changeSpk = kaspa.payToAddressScript(new kaspa.Address(walletAddress(key)));
+  const pk = walletPubkey(key);
   const nextValue = match.value + potDelta;
-  const nextMatch: Match = {
+  const nextMatch: Match = withoutEntry({
     ...match,
     state: next.state,
     ...(next.simul && { simul: next.simul }),
     value: nextValue,
-  };
+  });
 
-  const build: Build = (fee, sigs) => {
-    const { pk, ints, blob } = callArgs(sigs.get(0)!);
-    const inputs = [
-      gameInput(
-        match,
-        gameUtxo,
-        mode.sigScript(match, fn, sigs.get(0)!, pk, ints, blob),
-        mode.covenantBudget,
+  // From before the submit: if a conflicting transaction wins the game UTXO,
+  // untilIndexed reads which one the chain accepted from here.
+  const lowHash = await chainCheckpoint(rpc);
+  const { txid } = await submitSpec(
+    rpc,
+    [key],
+    (fee) => ({
+      network: NETWORK_ID,
+      payload,
+      inputs: [
+        gameInput(mode, match, gameUtxo, entry, args),
+        ...funding.map((f) => fundingInput(f, 0, pk)),
+      ],
+      outputs: withChange(
+        [successorOutput(mode, nextMatch, 0, nextValue)],
+        changeSpk,
+        fundingTotal(funding) - potDelta - fee,
       ),
-      ...funding.map((f, i) => fundingInput(f, fullP2pkSigScript(sigs.get(i + 1)!))),
-    ];
-    // The TransactionOutput constructor CONSUMES the CovenantBinding wasm
-    // object (passed by value into Rust) — it must be constructed fresh on
-    // every build, or the signed/submitted rebuilds silently lose the
-    // binding and the covenant's OpAuthOutputCount check fails on-chain.
-    const binding = new kaspa.CovenantBinding(0, new kaspa.Hash(match.covenantId));
-    const outputs = withChange(
-      [new kaspa.TransactionOutput(nextValue, matchSpk(mode, nextMatch), binding)],
-      changeSpk,
-      fundingTotal(funding) - potDelta - fee,
-    );
-    return makeTx(inputs, outputs, payload);
-  };
-
-  const txid = await send(rpc, build, [
-    [0, key],
-    ...funding.map((_, i): [number, PrivateKey] => [i + 1, key]),
-  ]);
-  return untilIndexed(rpc, mode, { ...nextMatch, txid }, match);
+    }),
+    { beforeSubmit: (b) => opts.beforeSubmit?.({ ...nextMatch, txid: b.id }) },
+  );
+  return untilIndexed(rpc, mode, { ...nextMatch, txid }, match, lowHash);
 }
 
-/** Signed terminal door (cancel / winning_move / claim_forfeit / claim_win /
- * claim_timeout): pot minus fee to the caller, who signs and directs freely. */
+/** Signed terminal door (cancel / winning_move / claim_forfeit / claim_timeout
+ * / sweep_win): pot minus fee to the caller, who signs and directs freely.
+ * `args` in ABI order, the caller's signature as `{ sig: 0 }`. */
 export async function signedTerminal(
   rpc: Rpc,
   key: PrivateKey,
   mode: ModeEngine,
   match: Match,
-  fn: string,
-  ints: number[],
+  entry: string,
+  args: EntryArg[],
   sequence = 0n,
+  opts: { lockTime?: bigint; gameUtxo?: UtxoEntryLike } = {},
 ): Promise<string> {
-  const gameUtxo = await fetchGameUtxo(rpc, mode, match);
-  if (!gameUtxo) throw new Error("game UTXO not found on chain — sync first");
+  const gameUtxo = opts.gameUtxo ?? (await fetchGameUtxo(rpc, mode, match));
+  if (!gameUtxo) throw new Error("game UTXO not found on chain. Sync first");
   const payoutSpk = kaspa.payToAddressScript(new kaspa.Address(walletAddress(key)));
 
-  const build: Build = (fee, sigs) => {
-    const inputs = [
-      gameInput(
-        match,
-        gameUtxo,
-        mode.sigScript(match, fn, sigs.get(0)!, undefined, ints),
-        mode.covenantBudget,
-        sequence,
-      ),
-    ];
-    return makeTx(inputs, [new kaspa.TransactionOutput(match.value - fee, payoutSpk)]);
-  };
-
-  return send(rpc, build, [[0, key]]);
+  const { txid } = await submitSpec(rpc, [key], (fee) => ({
+    network: NETWORK_ID,
+    lockTime: (opts.lockTime ?? 0n).toString(),
+    inputs: [gameInput(mode, match, gameUtxo, entry, args, sequence)],
+    outputs: [scriptOutput(payoutSpk, match.value - fee)],
+  }));
+  return txid;
 }
 
 /** Permissionless winner-take-all door: sudden_death fired on a PENDING win.
@@ -584,65 +1023,68 @@ export async function pinnedWinner(
   rpc: Rpc,
   mode: ModeEngine,
   match: Match,
-  fn: string,
+  entry: string,
   winnerPkHex: string,
-  opts: { lockTime?: bigint } = {},
+  opts: { lockTime?: bigint; sequence?: bigint; gameUtxo?: UtxoEntryLike } = {},
 ): Promise<string> {
-  const { lockTime = 0n } = opts;
-  const gameUtxo = await fetchGameUtxo(rpc, mode, match);
-  if (!gameUtxo) throw new Error("game UTXO not found on chain — sync first");
+  const { lockTime = 0n, sequence = 0n } = opts;
+  const gameUtxo = opts.gameUtxo ?? (await fetchGameUtxo(rpc, mode, match));
+  if (!gameUtxo) throw new Error("game UTXO not found on chain. Sync first");
 
-  const build: Build = (fee) => {
-    const inputs = [
-      gameInput(match, gameUtxo, mode.sigScript(match, fn, undefined, undefined, []), mode.covenantBudget, 0n),
-    ];
-    return makeTx(inputs, [p2pkOutput(winnerPkHex, match.value - fee)], "", lockTime);
-  };
-
-  return send(rpc, build, []);
+  const { txid } = await submitSpec(
+    rpc,
+    [],
+    (fee) => ({
+      network: NETWORK_ID,
+      lockTime: lockTime.toString(),
+      inputs: [gameInput(mode, match, gameUtxo, entry, [], sequence)],
+      outputs: [p2pkOutput(winnerPkHex, match.value - fee)],
+    }),
+    { maxFee: MAX_FEE },
+  );
+  return txid;
 }
 
 /** Pinned-split door (claim_draw / sudden_death / claim_split / split_timeout
- * / dissolve): outputs 0/1 pinned to the players at half the pot each, fees
- * on a funding input. `signerPk` makes it a signed door (dissolve);
- * `awaitRefund` waits until the caller's refund is indexed (a kick chains
- * straight into hosting a fresh game off the same UTXO set). */
+ * / dissolve): self-funded, single input — only the match UTXO is spent (the
+ * covenant rejects any second input: the anti-aggregation guard), the fee is
+ * shaved from the pot and the rest splits equally into outputs 0/1 pinned to
+ * the players. `signer` makes it a signed door (dissolve); `awaitRefund`
+ * waits until the caller's refund is indexed (a kick chains straight into
+ * hosting a fresh game off the same UTXO set). */
 export async function pinnedSplit(
   rpc: Rpc,
   key: PrivateKey,
   mode: ModeEngine,
   match: Match,
-  fn: string,
-  ints: number[],
-  opts: { sequence?: bigint; lockTime?: bigint; signerPk?: Uint8Array; awaitRefund?: boolean } = {},
+  entry: string,
+  args: EntryArg[],
+  opts: {
+    sequence?: bigint;
+    lockTime?: bigint;
+    signed?: boolean;
+    awaitRefund?: boolean;
+    gameUtxo?: UtxoEntryLike;
+  } = {},
 ): Promise<string> {
-  const { sequence = 0n, lockTime = 0n, signerPk, awaitRefund = false } = opts;
-  const gameUtxo = await fetchGameUtxo(rpc, mode, match);
-  if (!gameUtxo) throw new Error("game UTXO not found on chain — sync first");
+  const { sequence = 0n, lockTime = 0n, signed = false, awaitRefund = false } = opts;
+  const gameUtxo = opts.gameUtxo ?? (await fetchGameUtxo(rpc, mode, match));
+  if (!gameUtxo) throw new Error("game UTXO not found on chain. Sync first");
 
-  const build: Build = (fee, sigs) => {
-    // Self-funded, single input: only the match UTXO is spent, and the covenant
-    // rejects any second input (that is the anti-aggregation guard). The fee is
-    // shaved from the pot and the rest splits equally — the covenant enforces
-    // outputs[0] == outputs[1] and floors each at (value - MAX_FEE) / 2.
-    const inputs = [
-      gameInput(
-        match,
-        gameUtxo,
-        mode.sigScript(match, fn, signerPk ? sigs.get(0)! : undefined, signerPk, ints),
-        mode.covenantBudget,
-        sequence,
-      ),
-    ];
-    const each = (match.value - fee) / 2n;
-    const outputs = [p2pkOutput(match.state.p1, each), p2pkOutput(match.state.p2, each)];
-    return makeTx(inputs, outputs, "", lockTime);
-  };
-
-  const signers: Array<[number, PrivateKey]> = signerPk
-    ? ([[0, key]] as Array<[number, PrivateKey]>)
-    : [];
-  const txid = await send(rpc, build, signers);
+  const { txid } = await submitSpec(
+    rpc,
+    signed ? [key] : [],
+    (fee) => {
+      const each = (match.value - fee) / 2n;
+      return {
+        network: NETWORK_ID,
+        lockTime: lockTime.toString(),
+        inputs: [gameInput(mode, match, gameUtxo, entry, args, sequence)],
+        outputs: [p2pkOutput(match.state.p1, each), p2pkOutput(match.state.p2, each)],
+      };
+    },
+    { maxFee: MAX_FEE },
+  );
 
   if (awaitRefund) {
     // Wait until the index reflects this spend (our refund appearing means
@@ -670,7 +1112,7 @@ export async function chainCheckpoint(rpc: Rpc): Promise<string> {
 export interface SpendInfo {
   kind: string;
   txid: string;
-  /** Data pushes of the entry call (sig, pk — selector and redeem excluded). */
+  /** Data pushes of the entry call (sig, pk — dispatch tag and redeem excluded). */
   pushes: Uint8Array[];
   /** Small-integer arguments of the entry call, in declared order (e.g. the
    * played column leads winning_move's [col, wcol, wrow, wdir]). Data pushes
@@ -680,58 +1122,55 @@ export interface SpendInfo {
   payload: string;
 }
 
+const tagTables = new Map<string, Record<string, string>>();
+
+/** An actor's entry dispatch tags (hex) -> entry names, from the artifact. */
+export function entryTags(actor: string): Record<string, string> {
+  let table = tagTables.get(actor);
+  if (!table) {
+    table = JSON.parse(fourk.entryTags(actor)) as Record<string, string>;
+    tagTables.set(actor, table);
+  }
+  return table;
+}
+
+/** Classify a found spend by its entry dispatch tag: an entry call's
+ * signature script ends with the 4-byte tag push, then the pushed redeem
+ * script; `tags` is the spent actor's tag table. Null = not an entry call
+ * this actor knows. */
+export function spendInfo(raw: RawSpend, tags: Record<string, string>): SpendInfo | null {
+  const tokens = scriptTokens(raw.sigScript);
+  const tag = tokens.length >= 2 ? tokens[tokens.length - 2]!.data : null;
+  const kind = tag && tag.length === 4 ? tags[toHex(tag)] : undefined;
+  if (!kind) return null;
+  const call = tokens.slice(0, Math.max(0, tokens.length - 2));
+  return {
+    kind,
+    txid: raw.txid,
+    pushes: call.filter((t) => t.data !== null).map((t) => t.data!),
+    args: call.map(tokenToSmallInt).filter((v): v is number => v !== null),
+    payload: raw.payload,
+  };
+}
+
 /**
- * Find the transaction that spent the current game UTXO in blocks since
- * `lowHash` and classify which covenant entrypoint it called (the function
- * selector sits directly before the pushed redeem script; `table` is the
- * mode's ABI order for the match's phase). Pages through getBlocks up to the
- * tip — a backgrounded tab can wake hours past its checkpoint. Returns null
- * if the spend is outside the scanned window; throws if `lowHash` is unknown
- * to the node (e.g. pruned).
+ * The spend of the current game UTXO the chain ACCEPTED in blocks since
+ * `lowHash`, classified by entrypoint. A DAG can hold both sides of a double
+ * spend in blocks; only the accepted one says what happened. Null if no
+ * accepted spend is visible yet; throws if `lowHash` is unknown to the node
+ * (e.g. pruned).
  */
 export async function discoverSpend(
   rpc: Rpc,
   match: Match,
   lowHash: string,
-  table: readonly string[],
+  tags: Record<string, string>,
 ): Promise<SpendInfo | null> {
-  let low = lowHash;
-  for (let page = 0; page < 50; page++) {
-    const res: any = await withRetry(() =>
-      rpc.getBlocks({ lowHash: low, includeBlocks: true, includeTransactions: true }),
-    );
-    for (const block of res.blocks ?? []) {
-      for (const tx of block.transactions ?? []) {
-        for (const inp of tx.inputs ?? []) {
-          const outpoint = inp?.previousOutpoint ?? inp?.previous_outpoint;
-          if (
-            !outpoint ||
-            String(outpoint.transactionId) !== match.txid ||
-            Number(outpoint.index ?? 0) !== 0
-          )
-            continue;
-          const tokens = scriptTokens(String(inp.signatureScript ?? inp.signature_script ?? ""));
-          const selector = tokens.length >= 2 ? tokenToSmallInt(tokens[tokens.length - 2]!) : null;
-          const kind = selector !== null ? table[selector] : undefined;
-          if (!kind) return null;
-          const call = tokens.slice(0, Math.max(0, tokens.length - 2));
-          return {
-            kind,
-            txid: String(tx.verboseData?.transactionId ?? tx.verbose_data?.transaction_id ?? ""),
-            pushes: call.filter((t) => t.data !== null).map((t) => t.data!),
-            args: call.map(tokenToSmallInt).filter((v): v is number => v !== null),
-            payload: String(tx.payload ?? ""),
-          };
-        }
-      }
-    }
-    const hashes: unknown[] = res.blockHashes ?? res.block_hashes ?? [];
-    const next = hashes.length ? String(hashes[hashes.length - 1]) : "";
-    // The page ends where it started: we've reached the tip.
-    if (!next || next === low) return null;
-    low = next;
-  }
-  return null;
+  const { spends } = await lineageSpends(rpc, match.txid, lowHash);
+  const direct = spends.filter((sp) => sp.prev === match.txid);
+  const accepted = await acceptedOrLive(rpc, lowHash, direct);
+  const raw = direct.find((sp) => accepted.has(sp.txid));
+  return raw ? spendInfo(raw, tags) : null;
 }
 
 interface ScriptToken {
@@ -785,9 +1224,8 @@ export async function gameUtxoAge(
 ): Promise<number | null> {
   const entry = await fetchGameUtxo(rpc, mode, match);
   if (!entry) return null;
-  const daaScore = BigInt(entry.blockDaaScore ?? entry.utxoEntry?.blockDaaScore ?? 0n);
   const info: any = await withRetry(() => rpc.getBlockDagInfo());
-  return Number(BigInt(info.virtualDaaScore) - daaScore);
+  return Number(BigInt(info.virtualDaaScore) - entryDaaScore(entry));
 }
 
 export function myRole(match: Match, pkHex: string): "p1" | "p2" | "spectator" {

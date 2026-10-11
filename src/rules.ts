@@ -7,7 +7,7 @@
  *
  * Ctx models exactly what the covenant can observe about its spending
  * transaction: which pubkey authorized the spend (checkSig) and how old the
- * state UTXO is (`this.age`, in DAA blocks). Output values/scripts are modeled
+ * state UTXO is (`this.ageDaa`, in DAA blocks). Output values/scripts are modeled
  * by the return types: a `State` return means "one covenant successor output
  * carrying this state and the full pot"; a `Payout[]` return means the
  * covenant terminates and these outputs must appear.
@@ -36,10 +36,10 @@ import {
 export interface Ctx {
   /** The pubkey whose signature authorizes this spend (models checkSig). */
   signer: PubKey;
-  /** Age of the state UTXO in DAA blocks (models `this.age`). */
+  /** Age of the state UTXO in DAA blocks (models `this.ageDaa`). */
   utxoAge: number;
   /** Chain DAA score proven reached by the spend's locktime (models
-   * `tx.time`) — the claimant can understate it, never overstate. */
+   * `tx.daa`) — the claimant can understate it, never overstate. */
   txTime: number;
 }
 
@@ -213,17 +213,25 @@ export function claimForfeit(s: State, ctx: Ctx): Payout[] {
 }
 
 /**
- * Terminal door 4: the whole game outlived its creation-time cap — the pot
- * splits evenly, exactly like a draw. Neither player gains from engineering
- * this, so it is permissionless (payouts pinned, anyone may crank) and legal
- * even on an unmoved board: it doubles as cleanup for abandoned lobbies.
- * A per-move flat timeout alone leaves total game length unbounded (~T per
- * move, every move); the deadline is what bounds the game as a whole.
+ * Terminal door 4: the whole game outlived its creation-time cap — the
+ * permissionless exit that keeps a pot spendable when both players vanish.
+ * It must not let a losing player stall into a split, so it waits out the
+ * current move clock (the cap never shortens an owed window), and then the
+ * player to move is exactly the one claimForfeit would make lose: the
+ * waiting player is paid the whole pot. An unmoved board (no forfeit is owed
+ * there, see claimForfeit) and a full one (claimDraw's) split instead.
+ * Classic needs no "no moves after the cap" rule: 42 moves bound the game,
+ * each within one clock.
  */
 export function suddenDeath(s: State, ctx: Ctx): Payout[] {
   req(!isOpen(s), "match not started");
   req(s.deadline > 0, "no game deadline set");
   req(ctx.txTime >= s.deadline, "game deadline not reached");
+  req(ctx.utxoAge >= s.moveTimeout, "move clock still running");
+  if (s.moveCount > 0 && s.moveCount < CELLS) {
+    const waiting = (1 - playerToMove(s)) as 0 | 1;
+    return [{ to: pubkeyOf(s, waiting), amount: pot(s) }];
+  }
   return [
     { to: s.p1, amount: s.stake },
     { to: s.p2, amount: s.stake },
