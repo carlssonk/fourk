@@ -40,7 +40,7 @@ export const PlayerPanel = ({
     <div
       role="group"
       aria-label={open ? "Open seat" : `${isMe ? "Your player" : "Player"}: ${name}, ${color}`}
-      className={`card relative mb-6 flex w-40 max-w-full flex-col items-center gap-0.5 self-stretch px-2.5 pt-1 pb-2.5 ${align === "end" ? "justify-self-end" : "justify-self-start"} ${isMe && !open ? "border-accent" : "border-line"}`}
+      className={`card relative mb-6 flex w-40 max-w-full flex-col items-center gap-0.5 self-stretch px-1.5 pt-1 pb-2.5 ${align === "end" ? "justify-self-end" : "justify-self-start"} ${isMe && !open ? "border-accent" : "border-line"}`}
     >
       {/* Keep the priority badge clear of the avatar and name. */}
       {collisionPriority && (
