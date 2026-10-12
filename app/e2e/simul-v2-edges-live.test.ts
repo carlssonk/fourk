@@ -77,11 +77,29 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // --- The chain under control -------------------------------------------------
 
 let miner = "";
+let held = false;
 
-function hold() {
-  fs.writeFileSync(PAUSE_FILE, "");
+/** Pause the background miner and wait until it acknowledges, so none of
+ * its blocks is still in flight (see localnet/mine.mjs). */
+async function hold() {
+  if (held) return;
+  const token = `${process.pid}-${Date.now()}-${Math.random()}`;
+  fs.writeFileSync(PAUSE_FILE, token);
+  for (let i = 0; i < 200; i++) {
+    let ack = "";
+    try {
+      ack = fs.readFileSync(`${PAUSE_FILE}.ack`, "utf8");
+    } catch {}
+    if (ack === token) {
+      held = true;
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error("the background miner never acknowledged the pause");
 }
 function release() {
+  held = false;
   fs.rmSync(PAUSE_FILE, { force: true });
 }
 
@@ -109,7 +127,7 @@ async function mineBlock(rpc: cov.Rpc) {
 /** Hold the miner and mine until the virtual score is exactly `target`
  * (one block per DAA step on a single-miner chain). */
 async function mineTo(rpc: cov.Rpc, target: number) {
-  hold();
+  await hold();
   for (let i = 0; i < 100_000; i++) {
     const now = await daaNow(rpc);
     if (now >= target) {
@@ -123,7 +141,7 @@ async function mineTo(rpc: cov.Rpc, target: number) {
 
 /** Mine until the virtual score is at least `target`, as fast as possible. */
 async function fastForward(rpc: cov.Rpc, target: number) {
-  hold();
+  await hold();
   while ((await daaNow(rpc)) < target) await mineBlock(rpc);
 }
 
@@ -257,7 +275,7 @@ async function round(
         m = await round(rpc, p1, p2, m, 0, 1);
         // Calibrate: where does a transaction submitted at virtual score X
         // get accepted once one block is mined?
-        hold();
+        await hold();
         const x0 = await daaNow(rpc);
         const one = await as1(() => commitMatch(rpc, p1, m, 2));
         const oneSeen = await confirm(rpc, one);

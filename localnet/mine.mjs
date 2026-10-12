@@ -12,7 +12,9 @@
 // the key paid instead of faucet/faucet.key; MINE_DELAY_MS the pause between
 // blocks. While the file MINE_PAUSE_FILE names exists, the
 // miner holds still: tests that need the chain to stop at an exact DAA score
-// create it and mine their own blocks (localnet/live.sh sets it).
+// create it and mine their own blocks (localnet/live.sh sets it). Once held,
+// the miner copies the pause file's contents to MINE_PAUSE_FILE.ack, so a
+// test can tell that no block of the miner's is still in flight.
 
 import fs from "node:fs";
 import init, * as kaspa from "../vendor/kaspa-wasm/kaspa.js";
@@ -42,6 +44,9 @@ console.log(`mining ${target || "forever"} to ${payAddress} on ${NETWORK_ID} via
 
 for (let mined = 0; target === 0 || mined < target; ) {
   if (PAUSE_FILE && fs.existsSync(PAUSE_FILE)) {
+    try {
+      fs.writeFileSync(`${PAUSE_FILE}.ack`, fs.readFileSync(PAUSE_FILE));
+    } catch {}
     await new Promise((r) => setTimeout(r, 50));
     continue;
   }
