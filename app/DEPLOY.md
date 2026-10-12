@@ -36,6 +36,36 @@ pnpm build        # tsc + vite build → dist/
   `index.html` at `/` is enough. (Adding a 404 → `index.html` rewrite is
   harmless if your host defaults to it.)
 
+## Cloudflare (production)
+
+Production is a static-assets-only Cloudflare Worker, described by
+`wrangler.jsonc`. There is no Worker script, so every response is a static
+asset and `_headers` applies to all of them (Workers ignore `_headers` on
+responses a script generates; keep it that way, or set the headers in code).
+
+CI deploys on every push to `main`: the `deploy` job in
+`.github/workflows/ci.yml` runs once the `reference` and `app` jobs pass,
+ships the `dist/` artifact the `app` job built and smoke-tested (it does not
+rebuild), then checks that the live URL sends the CSP with
+`frame-ancestors 'none'` and `X-Frame-Options: DENY`.
+
+One-time setup:
+
+1. Create an API token (Cloudflare dashboard → My Profile → API Tokens)
+   from the "Edit Cloudflare Workers" template, scoped to your account.
+   Add Zone → DNS → Edit for the `fourk.io` zone.
+2. Add repo secrets `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`
+   (the account id is on the dashboard's Workers overview page).
+
+The Worker serves only `https://fourk.io` (`routes` in `wrangler.jsonc`;
+the workers.dev URL is off, so the app has exactly one origin). Wrangler
+creates the DNS record and certificate on deploy; the zone must be on the
+same Cloudflare account, with no other record at the apex.
+
+Manual deploy from a clean checkout: `pnpm build && pnpm deploy:cloudflare`
+(after `pnpm exec wrangler login`). `pnpm exec wrangler dev` serves `dist/`
+locally with `_headers` applied, the same way production does.
+
 ## Environment matrix
 
 All variables are optional and documented in `.env.example`. Set them at
@@ -60,14 +90,14 @@ before pointing a deploy at mainnet.
 
 ## Headers
 
-`public/_headers` ships in every build (Vite copies `public/` → `dist/`)
-and is consumed automatically by **Netlify** and **Cloudflare Pages**. It
-carries the CSP, `X-Frame-Options`, `X-Content-Type-Options`,
-`Referrer-Policy`, `Permissions-Policy`, and immutable caching for
-`/assets/*` — see the comments in that file for why each directive is
-shaped the way it is (short version: `'wasm-unsafe-eval'` for the in-browser
-kaspa wasm, broad `wss:`/`https:` in `connect-src` because node hostnames
-come from the resolver at runtime).
+`public/_headers` ships in every build (Vite copies `public/` → `dist/`) and
+is consumed automatically by **Cloudflare** (Workers static assets and
+Pages) and **Netlify**. It carries the CSP, `X-Frame-Options`,
+`X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, and
+immutable caching for `/assets/*` — see the comments in that file for why
+each directive is shaped the way it is (short version: `'wasm-unsafe-eval'`
+for the in-browser kaspa wasm, broad `wss:`/`https:` in `connect-src`
+because node hostnames come from the resolver at runtime).
 
 **`frame-ancestors` needs real headers.** Browsers ignore it in a `<meta>`
 CSP, and this app manages real keys — do not deploy to a host that cannot
@@ -119,6 +149,6 @@ The in-app version stamp (`__COMMIT_HASH__`) comes from
 when git can't answer. CI shallow checkouts usually still resolve HEAD, but
 tarball builds or exotic CI setups may not — either ensure the checkout has
 a `.git` (any depth), or set `VITE_COMMIT_SHA` in the build environment
-(most CIs expose it, e.g. `VITE_COMMIT_SHA=$COMMIT_REF` on Netlify,
-`$CF_PAGES_COMMIT_SHA` on Cloudflare Pages, `$VERCEL_GIT_COMMIT_SHA` on
-Vercel); it overrides the git lookup and is truncated to 8 chars.
+(CI sets it to `github.sha`; elsewhere, e.g. `VITE_COMMIT_SHA=$COMMIT_REF`
+on Netlify, `$VERCEL_GIT_COMMIT_SHA` on Vercel); it overrides the git
+lookup and is truncated to 8 chars.

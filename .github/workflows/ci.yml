@@ -66,6 +66,60 @@ jobs:
       # which is how a minified bundle that could not connect went unseen.
       - run: pnpm exec playwright install --with-deps chromium
       - run: node scripts/check-dist.mjs --timeout 90
+      # The deploy job ships this exact bundle rather than rebuilding it.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: app/dist
+          include-hidden-files: true
+          retention-days: 7
+
+  deploy:
+    name: deploy (Cloudflare)
+    # Rules and bundle checks gate a deploy; covenant and live do not (they
+    # cover the Rust side and simnet, and take up to an hour cold).
+    needs: [reference, app]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    environment:
+      name: production
+      url: https://fourk.io
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # For the pinned wrangler in app/package.json.
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: app/dist
+      - id: deploy
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: app
+          packageManager: pnpm
+          command: deploy
+      # frame-ancestors only works as a real header: fail loudly if the host
+      # stopped applying _headers rather than serve a frameable key store.
+      - name: check security headers
+        run: |
+          headers=$(curl -sfI --retry 5 --retry-all-errors https://fourk.io/)
+          echo "$headers"
+          echo "$headers" | grep -qi "^content-security-policy:.*frame-ancestors 'none'"
+          echo "$headers" | grep -qi '^x-frame-options: *DENY'
 
   covenant:
     name: covenant (harness + wasm + artifact)

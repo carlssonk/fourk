@@ -1,0 +1,19 @@
+// Cloudflare Workers, static assets only: no Worker script, so every
+// response is a static asset and public/_headers (copied into dist/) applies
+// to all of them — the CSP and frame-ancestors this app depends on.
+// See DEPLOY.md → Cloudflare.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "fourk",
+  "compatibility_date": "2026-09-01",
+  "assets": {
+    "directory": "./dist",
+  },
+  // Served only on fourk.io. Recovery phrases live in the origin's
+  // localStorage, so a second origin (the workers.dev URL) would be a second,
+  // separate set of accounts. Wrangler creates the DNS record and certificate
+  // on deploy. Version preview URLs stay off until there is a use for them.
+  "routes": [{ "pattern": "fourk.io", "custom_domain": true }],
+  "workers_dev": false,
+  "preview_urls": false,
+}

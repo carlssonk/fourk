@@ -1,7 +1,7 @@
-# Netlify / Cloudflare Pages headers file. Vite copies public/ into dist/
-# verbatim, so this ships with every build. Hosts that don't read _headers
-# (Vercel, nginx, S3+CloudFront, ...) need the same headers configured by
-# hand — DEPLOY.md carries the equivalents.
+# Cloudflare (Workers static assets) / Netlify headers file. Vite copies
+# public/ into dist/ verbatim, so this ships with every build. Hosts that
+# don't read _headers (Vercel, nginx, S3+CloudFront, ...) need the same
+# headers configured by hand — DEPLOY.md carries the equivalents.
 #
 # CSP rationale:
 #   script-src 'wasm-unsafe-eval'  - the kaspa/fourk wasm modules are
