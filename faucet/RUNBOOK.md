@@ -59,8 +59,14 @@ new lane. New lanes are claimable after one cooldown (~2 minutes).
 
 ## Monitoring
 
-`status` is cron-friendly (quiet success is not built in, so route stdout
-to a log and alert on the exit code):
+`.github/workflows/dispenser.yml` runs `status` every 30 minutes and fails
+when a refill is recommended; GitHub emails the failure to whoever last
+changed that workflow's schedule. Run it on demand from the Actions tab
+(workflow_dispatch). GitHub disables scheduled workflows after 60 days
+without repository activity; re-enable it there if that happens.
+
+`status` also suits any other cron (quiet success is not built in, so route
+stdout to a log and alert on the exit code):
 
 ```cron
 */30 * * * * cd /path/to/fourk && node faucet/fund-dispenser.mjs status >> /var/log/fourk-dispenser.log 2>&1 || <your-alert-command> "fourk dispenser needs a refill"

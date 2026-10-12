@@ -1,7 +1,7 @@
 import { atom, getDefaultStore } from "jotai";
 import { genesToCode, randomGenes } from "../lib/avatar";
 import type { MatchTiming } from "../lib/covenant";
-import { MAX_MOVE_TIMEOUT_DAA, MIN_MOVE_TIMEOUT_DAA, MOVE_TIMEOUT_DAA } from "../lib/game";
+import { MAX_MOVE_TIMEOUT_DAA, MIN_MOVE_TIMEOUT_DAA } from "../lib/game";
 import { trimName, type PlayerProfile } from "../lib/match";
 import { parseModeKey } from "../modes/registry";
 import type { GameModeKey } from "../modes/types";
@@ -126,9 +126,14 @@ function loadDaa(key: string, fallback: number, min = 0, max = Number.MAX_SAFE_I
   return Number.isInteger(n) && n >= min && n <= max ? n : fallback;
 }
 
+/** The move timer a host starts with until they pick another: 5 minutes.
+ * Deliberately not the rulebook's MOVE_TIMEOUT_DAA, which share codes treat
+ * as the implicit timing — a UI default must not change how codes decode. */
+export const DEFAULT_MOVE_TIMEOUT_DAA = 3_000;
+
 /** Per-move forfeit clock for hosted games, DAA blocks. */
 export const moveTimeoutAtom = atom<number>(
-  loadDaa(TIMEOUT_KEY, MOVE_TIMEOUT_DAA, MIN_MOVE_TIMEOUT_DAA, MAX_MOVE_TIMEOUT_DAA),
+  loadDaa(TIMEOUT_KEY, DEFAULT_MOVE_TIMEOUT_DAA, MIN_MOVE_TIMEOUT_DAA, MAX_MOVE_TIMEOUT_DAA),
 );
 
 export function saveMoveTimeout(daa: number): void {
@@ -164,7 +169,7 @@ export function wireProfileCrossTab(): void {
     else if (ev.key === TIMEOUT_KEY)
       store.set(
         moveTimeoutAtom,
-        loadDaa(TIMEOUT_KEY, MOVE_TIMEOUT_DAA, MIN_MOVE_TIMEOUT_DAA, MAX_MOVE_TIMEOUT_DAA),
+        loadDaa(TIMEOUT_KEY, DEFAULT_MOVE_TIMEOUT_DAA, MIN_MOVE_TIMEOUT_DAA, MAX_MOVE_TIMEOUT_DAA),
       );
     else if (ev.key === STAKE_KEY) store.set(stakeAtom, loadStake());
     else if (ev.key === MODE_KEY) store.set(gameModeAtom, parseModeKey(readItem(MODE_KEY)));

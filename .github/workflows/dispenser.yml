@@ -1,0 +1,33 @@
+# Free play stops working when the testnet dispenser runs dry. This checks
+# its float every 30 minutes (faucet/RUNBOOK.md → Monitoring); a failed run
+# is the alert: GitHub emails it to whoever last changed this schedule.
+name: dispenser
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  status:
+    name: dispenser float (testnet-10)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            faucet
+            vendor/kaspa-wasm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Exit 1 means refill recommended. One retry, so a resolver or node
+      # hiccup doesn't page anyone; a real shortfall fails both attempts.
+      - run: |
+          node faucet/fund-dispenser.mjs status | tee status.txt \
+            || { sleep 60; node faucet/fund-dispenser.mjs status | tee status.txt; }
+        shell: bash -o pipefail {0}
+      - if: always()
+        run: |
+          { echo '```'; cat status.txt 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
