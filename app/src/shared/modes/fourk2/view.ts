@@ -241,24 +241,17 @@ function status(m: Match, ctx: ViewCtx, r: RoundView): StatusDescriptor {
           tone: "danger",
         };
   }
+  // The rules live in How to play; the status only says what to do. The
+  // one exception is the opening pick, where "hidden" isn't obvious yet.
   if (r.obligation === "commit")
     return firstRound && commitCount(core) === 0
       ? {
           segments: [
             { text: "Pick a column", bold: true },
-            {
-              text: ". Both players pick in secret. The first pick to land starts the other player's timer.",
-            },
+            { text: ". Your pick stays hidden until both players have picked." },
           ],
         }
-      : {
-          segments: [
-            { text: "Pick a column", bold: true },
-            {
-              text: ". Both players pick in secret before the shared timer ends. A pick counts once the network confirms it.",
-            },
-          ],
-        };
+      : { segments: [{ text: "Pick a column", bold: true }] };
   if (r.obligation !== null)
     return { segments: [{ text: "Revealing your pick…" }], tone: "dim", spinner: true };
   if (iAmPlayer && r.phase === "commit" && firstRound && ctx.clockExpired)

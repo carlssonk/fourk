@@ -120,7 +120,7 @@ describe("fourk2 view", () => {
     for (const role of ["p1", "p2"] as const) {
       const v = fourk2Mode.view(lobby, ctx(role));
       expect(v.status.segments[0]!.text).toBe("Pick a column");
-      expect(v.status.segments[1]!.text).toMatch(/first pick to land starts/);
+      expect(v.status.segments[1]!.text).toMatch(/stays hidden/);
       expect(v.board.interactive).toBe(true);
       expect(v.seats.every((seat) => seat.active && !seat.showClock)).toBe(true);
     }
@@ -135,7 +135,10 @@ describe("fourk2 view", () => {
     expect(fourk2Mode.isActionable(picked, P1)).toBe(false);
     expect(fourk2Mode.isActionable(picked, P2)).toBe(true);
     expect(fourk2Mode.inLobby(started)).toBe(false);
-    expect(fourk2Mode.view(started, ctx("p1")).status.segments[1]!.text).toMatch(/shared timer/);
+    // Later rounds: just the instruction, the rules stay in How to play.
+    expect(fourk2Mode.view(started, ctx("p1")).status.segments).toEqual([
+      { text: "Pick a column", bold: true },
+    ]);
   });
 
   test("the first round never offers a timeout claim; a stall is called off", () => {
