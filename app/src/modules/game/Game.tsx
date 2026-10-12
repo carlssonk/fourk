@@ -66,9 +66,6 @@ export const Game = ({ match }: Props) => {
   const rpcReady = useAtomValue(rpcClientAtom) !== null;
   const [importVal, setImportVal] = useState("");
   const { copied, copyError, copy } = useCopy();
-  // Dismissing the verdict card reveals the final position;
-  // the banner and end-game buttons below take over.
-  const [overlayDismissed, setOverlayDismissed] = useState(false);
 
   const s = match.state;
   const mode = modeOf(match);
@@ -85,6 +82,11 @@ export const Game = ({ match }: Props) => {
   const staked = isStaked(match);
   const { result, finish, myTurn, needManualImport, importMatch } = useMatchWatcher(match);
   const ending = gameEnd(match, myPk, result);
+  // Dismissing the verdict card reveals the final position; the banner and
+  // end-game buttons below take over. A game that was already over when
+  // opened (e.g. from Your matches, which shows the outcome) starts that
+  // way: the card is for an ending that happens while you watch.
+  const [overlayDismissed, setOverlayDismissed] = useState(() => ending !== null);
   // Do not pass the visual ending to the watcher/autopilot: they must still
   // settle the match. Leaving early retains the record so collection can resume.
   const leaveEndedGame = () => exitMatch(!!result);

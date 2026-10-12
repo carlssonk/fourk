@@ -75,13 +75,15 @@ test("a Fourk winner and opponent both reach the settled result", async ({ page,
       .getByRole("dialog")
       .getByRole("button", { name: "Back to start", exact: true })
       .click();
+    // Reopened from the list, a finished game skips the result card (the
+    // list already said how it ended) and opens on the final board.
     await other.getByRole("button").filter({ hasText: "You lose" }).click();
-    await expect(other.getByRole("dialog", { name: "You lose", exact: true })).toBeVisible();
-    // An already-pending win must also resume after a refresh.
+    await expect(other.getByRole("button", { name: "Play again", exact: true })).toBeVisible();
+    await expect(other.getByRole("dialog")).toHaveCount(0);
+    // An already-pending win must also resume after a refresh — quietly.
     await page.reload();
-    await expect(page.getByRole("dialog", { name: "You win!", exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "View board", exact: true })).toHaveCount(0);
-    await page.keyboard.press("Escape");
+    await expect(page.getByRole("button", { name: "Play again", exact: true })).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
     // The visual result must not disable the real settlement automation.
     for (const player of [page, other]) {
       await expect
