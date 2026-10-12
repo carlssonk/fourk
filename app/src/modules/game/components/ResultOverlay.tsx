@@ -15,38 +15,12 @@ interface Props {
   onDismiss: () => void;
 }
 
-/** A shower of coins past a winning verdict — the game's own discs, falling
- * once and gone. The scatter is derived from the index rather than drawn at
- * random so a re-render never restarts it somewhere new. */
-const Coins = () => (
-  <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
-    {Array.from({ length: 18 }, (_, i) => {
-      const size = 9 + ((i * 5) % 4) * 3;
-      const spin = (360 + ((i * 11) % 5) * 90) * (i % 2 ? 1 : -1);
-      return (
-        <span
-          key={i}
-          className={`coin-fall absolute top-0 rounded-full ${i % 2 ? "disc-red" : "disc-blue"}`}
-          style={{
-            left: `${(i * 37 + 9) % 100}%`,
-            width: size,
-            height: size,
-            animationDelay: `${((i * 13) % 11) / 8}s`,
-            animationDuration: `${2.6 + ((i * 7) % 5) * 0.35}s`,
-            ["--spin" as string]: `${spin}deg`,
-          }}
-        />
-      );
-    })}
-  </div>
-);
-
 /**
  * The verdict, delivered over the finished board: the page dims away and a
- * card rises in the colour of the outcome — green for a win (with coins
- * raining past it), red for a loss, neutral for anything undecided. Held
- * back for a beat after the result lands so the final disc and the glowing
- * line get their moment first.
+ * card rises in the colour of the outcome — green for a win, red for a
+ * loss, neutral for anything undecided. Held back for a beat after the
+ * result lands so the final disc and the winning line get their moment
+ * first.
  */
 export const ResultOverlay = ({
   title,
@@ -74,7 +48,6 @@ export const ResultOverlay = ({
       className="text-center"
       // Escape and a click beside the card reveal the finished board.
       onDismiss={onDismiss}
-      {...(tone === "win" && { behind: <Coins /> })}
     >
       <p className={`text-dim ${pot ? "mb-3" : "mb-5"}`}>{result}</p>
       {pot && <p className="well mb-5 px-3 py-2 font-semibold text-accent">{pot}</p>}

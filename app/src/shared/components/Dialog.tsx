@@ -26,9 +26,6 @@ interface Props {
   width?: string;
   /** Extra classes for the body panel (alignment, padding overrides). */
   className?: string;
-  /** Rendered inside the top layer but behind the card — decoration that
-   * wants the whole screen, like the winner's coins. */
-  behind?: ReactNode;
   children: ReactNode;
 }
 
@@ -58,7 +55,6 @@ export const Dialog = ({
   shroud = false,
   width = "max-w-110",
   className = "",
-  behind,
   children,
 }: Props) => {
   const ref = useRef<HTMLDialogElement>(null);
@@ -135,7 +131,6 @@ export const Dialog = ({
         if (e.target === ref.current) dismiss.current?.();
       }}
     >
-      {behind}
       <div ref={card} tabIndex={-1} className={`overlay-pop dlg-card w-full outline-none ${width}`}>
         {/* The height-glide's measuring stick: never animated itself, so a
          * resize here is always a real content change. */}

@@ -153,7 +153,9 @@ export const Board = ({
           <div className="hole size-[calc(var(--cell)*0.88)]">
             {v !== 0 ? (
               <div
-                className={`size-full rounded-full ${DISC[v]}${winningCells?.has(idx) ? " disc-win" : ""}`}
+                className={`size-full rounded-full ${DISC[v]}${
+                  winningCells?.size ? (winningCells.has(idx) ? " disc-win" : " disc-rest") : ""
+                }`}
                 ref={
                   landedAt !== -1
                     ? (el) => {

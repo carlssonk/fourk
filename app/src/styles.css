@@ -76,41 +76,6 @@
     transform: translate(-2%, 2%) scale(0.97);
   }
 }
-/* A short shower of coins behind a winning verdict. */
-@keyframes coin-fall {
-  from {
-    transform: translateY(-15vh) rotate(0deg);
-    opacity: 0;
-  }
-  12% {
-    opacity: 1;
-  }
-  85% {
-    opacity: 1;
-  }
-  to {
-    transform: translateY(105vh) rotate(var(--spin));
-    opacity: 0;
-  }
-}
-/* The winning four glow in a slow pulse. */
-@keyframes win-pulse {
-  0%,
-  100% {
-    box-shadow:
-      0 0 0 3px rgba(255, 255, 255, 0.9),
-      0 0 10px 2px rgba(255, 255, 255, 0.3),
-      inset 0 1px 2px rgba(255, 255, 255, 0.18),
-      inset 0 -2px 3px rgba(0, 0, 0, 0.25);
-  }
-  50% {
-    box-shadow:
-      0 0 0 3px rgba(255, 255, 255, 0.9),
-      0 0 20px 6px rgba(255, 255, 255, 0.6),
-      inset 0 1px 2px rgba(255, 255, 255, 0.18),
-      inset 0 -2px 3px rgba(0, 0, 0, 0.25);
-  }
-}
 
 @layer components {
   /* Card surface: translucent over the page so the board backdrop shows
@@ -275,16 +240,20 @@
     background: var(--color-blue);
   }
 
+  /* A finished line is shown mostly by contrast: every disc outside it
+   * recedes once the final disc has landed, and the four keep full colour
+   * plus a thin, still ring. The ring is inset — the board face covers
+   * everything outside the disc's edge — and arrives with the fade. */
   .disc-win {
-    /* The glow spills outside the hole — lift it above the cell faceplates
-     * or they'd clip it to nothing. */
-    position: relative;
-    z-index: 2;
-    animation: win-pulse 1.6s ease-in-out infinite;
     box-shadow:
-      0 0 0 3px rgba(255, 255, 255, 0.9),
+      inset 0 0 0 2px rgba(255, 255, 255, 0.7),
       inset 0 1px 2px rgba(255, 255, 255, 0.18),
       inset 0 -2px 3px rgba(0, 0, 0, 0.25);
+    transition: box-shadow 0.7s ease 0.6s;
+  }
+  .disc-rest {
+    opacity: 0.3;
+    transition: opacity 0.7s ease 0.6s;
   }
 
   /* Fast out of the gate, gentle at rest. */
@@ -362,14 +331,9 @@
     background: rgba(255, 200, 120, 0.05);
   }
 
-  .coin-fall {
-    animation-name: coin-fall;
-    animation-timing-function: linear;
-    animation-fill-mode: both;
-  }
-
   @media (prefers-reduced-motion: reduce) {
     .disc-win,
+    .disc-rest,
     .overlay-pop,
     .dlg::backdrop,
     .btn {
@@ -378,9 +342,6 @@
     }
     .animate-pulse {
       animation: none;
-    }
-    .coin-fall {
-      display: none;
     }
   }
 }
