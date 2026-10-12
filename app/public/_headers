@@ -20,6 +20,12 @@
 #       is why hosts that drop _headers must recreate it (see DEPLOY.md).
 #   object-src 'none' / base-uri 'self' / form-action 'self' - standard
 #       lockdown; the app has no plugins, no <base>, no cross-site forms.
+#
+# Strict-Transport-Security: keys live in this origin's localStorage, and
+# http://fourk.io is a separate origin with its own (empty) storage served
+# over plaintext; after one visit, browsers never load the http origin.
+# Cross-Origin-Opener-Policy: no other window may keep a handle on this one
+# (the app opens no popups, so nothing here relies on that handle).
 
 /*
   Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss: https:; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self'
@@ -27,6 +33,8 @@
   X-Content-Type-Options: nosniff
   Referrer-Policy: no-referrer
   Permissions-Policy: camera=(), microphone=(), geolocation=()
+  Strict-Transport-Security: max-age=31536000; includeSubDomains
+  Cross-Origin-Opener-Policy: same-origin
 
 # Hashed build output is immutable — cache it forever. This includes the
 # ~11.7MB kaspa wasm; hosts brotli-compress it automatically on the wire

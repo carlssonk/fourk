@@ -62,6 +62,19 @@ the workers.dev URL is off, so the app has exactly one origin). Wrangler
 creates the DNS record and certificate on deploy; the zone must be on the
 same Cloudflare account, with no other record at the apex.
 
+Zone settings that live in the dashboard, not in the repo:
+
+- `www` → `fourk.io`: a proxied `www` CNAME to `fourk.io`, plus a redirect
+  rule (Rules → Overview → Create rule → Redirect Rule; wildcard
+  `http*://www.fourk.io/*` → `https://fourk.io/${2}`, 301, preserve query
+  string). Never attach `www` to the Worker: a second origin is a second,
+  empty set of accounts.
+- SSL/TLS → Edge Certificates → Always Use HTTPS: on. (HSTS itself is in
+  `_headers`; leave the dashboard's HSTS setting off so there is one source.)
+
+Roll back a bad deploy with `pnpm exec wrangler rollback` (lists recent
+versions; needs `wrangler login` or `CLOUDFLARE_API_TOKEN`).
+
 Manual deploy from a clean checkout: `pnpm build && pnpm deploy:cloudflare`
 (after `pnpm exec wrangler login`). `pnpm exec wrangler dev` serves `dist/`
 locally with `_headers` applied, the same way production does.
@@ -93,11 +106,12 @@ before pointing a deploy at mainnet.
 `public/_headers` ships in every build (Vite copies `public/` → `dist/`) and
 is consumed automatically by **Cloudflare** (Workers static assets and
 Pages) and **Netlify**. It carries the CSP, `X-Frame-Options`,
-`X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, and
-immutable caching for `/assets/*` — see the comments in that file for why
-each directive is shaped the way it is (short version: `'wasm-unsafe-eval'`
-for the in-browser kaspa wasm, broad `wss:`/`https:` in `connect-src`
-because node hostnames come from the resolver at runtime).
+`X-Content-Type-Options`, `Referrer-Policy`, `Permissions-Policy`, HSTS,
+`Cross-Origin-Opener-Policy`, and immutable caching for `/assets/*` — see
+the comments in that file for why each directive is shaped the way it is
+(short version: `'wasm-unsafe-eval'` for the in-browser kaspa wasm, broad
+`wss:`/`https:` in `connect-src` because node hostnames come from the
+resolver at runtime).
 
 **`frame-ancestors` needs real headers.** Browsers ignore it in a `<meta>`
 CSP, and this app manages real keys — do not deploy to a host that cannot
@@ -120,7 +134,9 @@ project root:
         { "key": "X-Frame-Options", "value": "DENY" },
         { "key": "X-Content-Type-Options", "value": "nosniff" },
         { "key": "Referrer-Policy", "value": "no-referrer" },
-        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" }
+        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=()" },
+        { "key": "Strict-Transport-Security", "value": "max-age=31536000; includeSubDomains" },
+        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" }
       ]
     },
     {
