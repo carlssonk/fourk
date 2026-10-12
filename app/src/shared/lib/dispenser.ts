@@ -62,10 +62,17 @@ export function dispenserAddress(): string {
   return addr.toString();
 }
 
+/** Lanes one claim tries before giving up. Each attempt is a fresh random
+ * lane, so a few cover a lost race or two; trying every lane would only
+ * stretch out a failure that isn't about lanes (a node refusing everything). */
+const MAX_LANE_ATTEMPTS = 8;
+
 /**
- * Claim one drip to `toAddress`. Tries every eligible lane (aged past the
- * cooldown, largest first) so a race lost on one lane falls through to the
- * next. Resolves to the claim txid.
+ * Claim one drip to `toAddress`. Tries eligible lanes (aged past the
+ * cooldown) in random order, so a race lost on one lane falls through to
+ * the next. Random rather than ranked: players arriving together would all
+ * pick the same "best" lane, and only one claim per lane can win.
+ * Resolves to the claim txid.
  */
 export async function claimDrip(rpc: Rpc, toAddress: string): Promise<string> {
   // The dispenser is test-network infrastructure: on mainnet anything sent
@@ -78,19 +85,19 @@ export async function claimDrip(rpc: Rpc, toAddress: string): Promise<string> {
   const entries = (utxoRes.entries ?? []) as unknown as UtxoEntryLike[];
   const virtualDaa = BigInt(dagInfo.virtualDaaScore);
 
-  const lanes = entries
-    .filter((e) => {
+  const lanes = shuffled(
+    entries.filter((e) => {
       const born = BigInt(e.blockDaaScore ?? e.utxoEntry?.blockDaaScore ?? 0n);
       return virtualDaa - born >= COOLDOWN_DAA && claimable(amountOf(e));
-    })
-    .sort((a, b) => (amountOf(b) > amountOf(a) ? 1 : -1));
+    }),
+  );
 
   if (!lanes.length) {
     throw new Error(entries.length ? "DISPENSER_COOLING" : "DISPENSER_EMPTY");
   }
 
   let lastError: unknown = null;
-  for (const lane of lanes.slice(0, 3)) {
+  for (const lane of lanes.slice(0, MAX_LANE_ATTEMPTS)) {
     try {
       return await claimFromLane(rpc, lane, toAddress);
     } catch (e) {
@@ -98,6 +105,16 @@ export async function claimDrip(rpc: Rpc, toAddress: string): Promise<string> {
     }
   }
   throw lastError ?? new Error("DISPENSER_COOLING");
+}
+
+/** Fisher-Yates; Math.random is fine — this spreads load, it guards nothing. */
+function shuffled<T>(items: T[]): T[] {
+  const out = [...items];
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [out[i], out[j]] = [out[j], out[i]];
+  }
+  return out;
 }
 
 async function claimFromLane(rpc: Rpc, lane: UtxoEntryLike, toAddress: string): Promise<string> {
@@ -147,21 +164,28 @@ export async function ensureFunds(
     if ((await walletBalance(rpc, address)) < need) throw new Error("LOW_BALANCE");
     return;
   }
-  for (let claims = 0; claims < 4; claims++) {
+  // A claim can be accepted and still never land: two players on different
+  // nodes can each spend the same lane, and the loser's transaction is
+  // silently dropped. One such loss is retried on another lane.
+  let lost = 0;
+  for (let claims = 0; claims < 4;) {
     const before = await walletBalance(rpc, address);
     if (before >= need) return;
     await claimDrip(rpc, address);
     let landed = false;
     for (let i = 0; i < 20 && !landed; i++) {
-      await new Promise((r) => setTimeout(r, 2000));
+      await sleep(2000);
       const balance = await walletBalance(rpc, address);
       if (balance >= need) return;
       landed = balance > before; // this claim arrived but we're still short
     }
-    if (!landed) throw new Error("SEAT_SETUP_FAILED");
+    if (landed) claims++;
+    else if (++lost > 1) throw new Error("SEAT_SETUP_FAILED");
   }
   throw new Error("SEAT_SETUP_FAILED");
 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function amountOf(entry: UtxoEntryLike): bigint {
   return BigInt((entry.amount ?? entry.utxoEntry?.amount)!);
