@@ -89,7 +89,7 @@ export const Home = () => {
           </p>
         ) : (
           <p className="mt-1 text-xs text-dim">
-            Free game · {fmtDaaDuration(pendingInvite.state.moveTimeout)} per {inviteMeta.moveNoun}
+            {fmtDaaDuration(pendingInvite.state.moveTimeout)} per {inviteMeta.moveNoun}
             {inviteCapLeft && <> · game ends in {inviteCapLeft}</>}
           </p>
         )}
