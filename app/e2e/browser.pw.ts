@@ -59,6 +59,9 @@ test("account validation, clipboard denial, and small-screen dialogs", async ({ 
   await page.getByRole("button", { name: "Back", exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Create an account" }).click();
   await expect(page.getByRole("button", { name: "Done", exact: true })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Copy", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("checkbox")).toBeDisabled();
+  await page.getByRole("button", { name: "Reveal", exact: true }).click();
   await page.evaluate(() => {
     Object.defineProperty(navigator.clipboard, "writeText", {
       configurable: true,
@@ -202,6 +205,7 @@ test("staked hosting, cancellation, cash-out validation and Max reset", async ({
   await page.goto("/");
   await page.getByRole("button", { name: "Account", exact: true }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Create an account" }).click();
+  await page.getByRole("button", { name: "Reveal", exact: true }).click();
   await page.getByRole("checkbox").check();
   await page.getByRole("button", { name: "Done", exact: true }).click();
   await page.getByRole("button", { name: "Your account", exact: true }).click();

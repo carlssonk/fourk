@@ -144,7 +144,7 @@ const GetStarted = ({ setView }: { setView: (v: AccountView) => void }) => (
  * what re-wires every consumer around the new account. */
 const NewPhrase = () => {
   const [phrase] = useState(generatePhrase);
-  const { copied, copyError, copy } = useCopy();
+  const [revealed, setRevealed] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -167,26 +167,17 @@ const NewPhrase = () => {
         somewhere safe. Anyone who has them controls your funds, and nobody can restore them for
         you.
       </p>
-      <ol className="mb-3 grid grid-cols-3 gap-1.5">
-        {phrase.split(" ").map((w, i) => (
-          <li key={i} className="rounded-lg border border-white/8 bg-white/5 px-2 py-1 text-sm">
-            <span className="mr-1.5 text-xs text-dim">{i + 1}</span>
-            {w}
-          </li>
-        ))}
-      </ol>
-      <button className="btn btn-ghost mb-3" onClick={() => copy(phrase)}>
-        {copied ? "Copied!" : "Copy"}
-      </button>
-      {copyError && (
-        <p role="status" className="mb-2 text-sm text-red">
-          {copyError}
-        </p>
-      )}
-      <label className="mb-3 flex cursor-pointer items-center gap-2 text-sm">
+      <div className="mb-3">
+        <PhraseWords phrase={phrase} revealed={revealed} onReveal={() => setRevealed(true)} />
+      </div>
+      {/* Nothing to have written down until the words have been shown. */}
+      <label
+        className={`mb-3 flex items-center gap-2 text-sm ${revealed ? "cursor-pointer" : "text-dim"}`}
+      >
         <input
           type="checkbox"
           checked={confirmed}
+          disabled={!revealed}
           onChange={(e) => setConfirmed(e.target.checked)}
         />
         I've written down my recovery phrase
@@ -382,7 +373,6 @@ const CashOut = () => {
 
 const Backup = () => {
   const [revealed, setRevealed] = useState(false);
-  const { copied, copyError, copy } = useCopy();
   const account = activeAccount();
   if (!account) return null; // guests have nothing to back up
   const { phrase } = account;
@@ -394,8 +384,31 @@ const Backup = () => {
         {phrase.split(" ").length} words down and keep them safe. Anyone who has them controls your
         balance.
       </p>
+      <PhraseWords phrase={phrase} revealed={revealed} onReveal={() => setRevealed(true)} />
+    </>
+  );
+};
+
+/** A recovery phrase as numbered words, blurred until the player asks to
+ * see it (someone may be looking at the screen); Copy only once shown.
+ * Shared by account creation and Back up so the two read the same. */
+const PhraseWords = ({
+  phrase,
+  revealed,
+  onReveal,
+}: {
+  phrase: string;
+  revealed: boolean;
+  onReveal: () => void;
+}) => {
+  const { copied, copyError, copy } = useCopy();
+  return (
+    <>
       <div className="relative">
-        <ol className={`mb-2 grid grid-cols-3 gap-1.5 ${revealed ? "" : "blur-sm select-none"}`}>
+        <ol
+          aria-hidden={!revealed}
+          className={`mb-2 grid grid-cols-3 gap-1.5 ${revealed ? "" : "blur-sm select-none"}`}
+        >
           {phrase.split(" ").map((w, i) => (
             <li key={i} className="rounded-lg border border-white/8 bg-white/5 px-2 py-1 text-sm">
               <span className="mr-1.5 text-xs text-dim">{i + 1}</span>
@@ -406,7 +419,7 @@ const Backup = () => {
         {!revealed && (
           <button
             className="btn absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"
-            onClick={() => setRevealed(true)}
+            onClick={onReveal}
           >
             Reveal
           </button>
