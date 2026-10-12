@@ -119,12 +119,15 @@ export function isStaked(m: Match): boolean {
  * that it never contains FREE_STAKE — a test holds the line. */
 export const STAKE_PRESETS = [0n, 1n, 5n, 25n].map((k) => k * SOMPI_PER_KAS);
 
-/** Nonnegative estimated countdown, including seconds and hours beyond one day. */
+/** Nonnegative estimated countdown, HH:MM:SS up to one day and a day count
+ * in front beyond it (long move clocks give multi-day game limits). */
 export function fmtCountdown(seconds: number): string {
   const remaining = Number.isFinite(seconds) ? Math.max(0, Math.ceil(seconds)) : 0;
-  const hours = Math.floor(remaining / 3600);
+  const days = remaining > 86400 ? Math.floor(remaining / 86400) : 0;
+  const hours = Math.floor((remaining - days * 86400) / 3600);
   const minutes = Math.floor((remaining % 3600) / 60);
-  return [hours, minutes, remaining % 60].map((value) => String(value).padStart(2, "0")).join(":");
+  const clock = [hours, minutes, remaining % 60].map((value) => String(value).padStart(2, "0")).join(":");
+  return days ? `${days}d ${clock}` : clock;
 }
 
 /** Human duration for a DAA block count (~10 blocks/s). */

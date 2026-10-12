@@ -12,7 +12,9 @@ test.each([
   [-10, "00:00:00"],
   [NaN, "00:00:00"],
   [Infinity, "00:00:00"],
-  [360000, "100:00:00"],
+  [86401, "1d 00:00:01"],
+  [360000, "4d 04:00:00"],
+  [460687, "5d 07:58:07"],
 ])("countdown formats %s seconds as %s", (seconds, expected) => {
   expect(fmtCountdown(seconds)).toBe(expected);
 });
