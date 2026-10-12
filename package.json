@@ -4,6 +4,9 @@
   "description": "Connect Four as a Kaspa covenant — TypeScript reference implementation of the transition system",
   "type": "module",
   "scripts": {
+    "dev": "./localnet/dev.sh",
+    "dev:testnet": "VITE_NETWORK_ID=testnet-10 VITE_NODE_URL= VITE_RESET_MARGIN= pnpm --dir app start",
+    "chain:reset": "./localnet/reset.sh",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",

@@ -19,9 +19,12 @@ simnet | devnet) ;;
   ;;
 esac
 
+# kaspad comes from $KASPAD, else PATH, else the rusty-kaspa checkout (built
+# on first use) — the same lookup as live.sh.
 RUSTY="${RUSTY_KASPA_DIR:-$HOME/dev/rusty-kaspa}"
-KASPAD="$RUSTY/target/release/kaspad"
+KASPAD="${KASPAD:-$(command -v kaspad || echo "$RUSTY/target/release/kaspad")}"
 if [[ ! -x "$KASPAD" ]]; then
+  KASPAD="$RUSTY/target/release/kaspad"
   echo "kaspad not built yet — building from $RUSTY (one-time, takes a while)…"
   cargo build --release --bin kaspad --manifest-path "$RUSTY/Cargo.toml"
 fi

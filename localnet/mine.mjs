@@ -8,8 +8,9 @@
 //     node mine.mjs [blocks=3000] [payAddress]
 //
 // A count of 0 mines forever. KASPA_NETWORK_ID / KASPA_RPC_URL override
-// the network and node (defaults match localnet/run-node.sh); MINE_DELAY_MS
-// the pause between blocks. While the file MINE_PAUSE_FILE names exists, the
+// the network and node (defaults match localnet/run-node.sh); MINE_KEY_FILE
+// the key paid instead of faucet/faucet.key; MINE_DELAY_MS the pause between
+// blocks. While the file MINE_PAUSE_FILE names exists, the
 // miner holds still: tests that need the chain to stop at an exact DAA score
 // create it and mine their own blocks (localnet/live.sh sets it).
 
@@ -30,7 +31,7 @@ const target = Number(countArg ?? 3000);
 const payAddress =
   addressArg ??
   new kaspa.PrivateKey(
-    fs.readFileSync(new URL("../faucet/faucet.key", import.meta.url), "utf8").trim(),
+    fs.readFileSync(process.env.MINE_KEY_FILE ?? new URL("../faucet/faucet.key", import.meta.url), "utf8").trim(),
   )
     .toAddress(NETWORK_ID.split("-")[0])
     .toString();

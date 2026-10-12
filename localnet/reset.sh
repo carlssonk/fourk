@@ -14,4 +14,4 @@ if pgrep -f "kaspad.*--$NETWORK" >/dev/null; then
 fi
 
 rm -rf ".kaspad-$NETWORK"
-echo "$NETWORK chain wiped — restart ./run-node.sh, mine a few blocks, reload the app"
+echo "$NETWORK chain wiped — run pnpm dev again and reload the app"
