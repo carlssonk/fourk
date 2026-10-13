@@ -27,6 +27,11 @@ async function connectPreferred(): Promise<RpcClient> {
   return connect();
 }
 
+/** Proxies in front of a node (our own sits behind a Cloudflare Tunnel)
+ * close a websocket after ~100 s of silence, and a player waiting on an
+ * opponent sends nothing. A cheap ping keeps the socket from going quiet. */
+const KEEPALIVE_MS = 30_000;
+
 let promise: Promise<RpcClient> | undefined;
 /** Consecutive failed connects — drives the backoff and the offline banner. */
 export const rpcFailuresAtom = atom(0);
@@ -59,6 +64,9 @@ export function getRpc(): Promise<RpcClient> {
     store.set(rpcClientAtom, client);
     store.set(rpcFailuresAtom, 0);
     checkNetworkReset(client);
+    setInterval(() => {
+      if (client.isConnected) client.ping().catch(() => {});
+    }, KEEPALIVE_MS);
     return client;
   });
   promise.catch(() => {

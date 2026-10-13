@@ -53,10 +53,10 @@ Once `check.mjs` says `healthy`, set the GitHub repository variable
 The next deploy pins the node, and `.github/workflows/node.yml` starts
 checking it every 15 minutes; a failed run is the alert.
 
-Then check what `check.mjs` cannot: open fourk.io, leave a board idle for
-five minutes and watch for the reconnecting indicator. If it flaps every
-~100 s, Cloudflare is closing idle websockets; that needs a client
-keepalive or a non-proxied TLS path (Caddy on the server), not a node fix.
+Cloudflare closes a websocket after about two minutes of silence, so the
+app pings the node every 30 s (`KEEPALIVE_MS` in
+`app/src/shared/state/rpc.ts`). Without it a player waiting on an opponent
+dropped and reconnected every ~125 s.
 
 ## Changes
 
