@@ -58,14 +58,20 @@ jobs:
       # `tsc --noEmit` a silent no-op (learned the hard way).
       - run: pnpm typecheck
       - run: pnpm lint
+      # VITE_NODE_URL (repository variable) pins our own node,
+      # infra/node; unset, the bundle uses the public resolver only.
       - run: pnpm build
         env:
           VITE_COMMIT_SHA: ${{ github.sha }}
+          VITE_NODE_URL: ${{ vars.VITE_NODE_URL }}
       # The built bundle must actually reach a node through the public
       # resolver: dev servers and pinned-node builds never take that path,
       # which is how a minified bundle that could not connect went unseen.
+      # The pin is refused during the check so the fallback is what runs.
       - run: pnpm exec playwright install --with-deps chromium
       - run: node scripts/check-dist.mjs --timeout 90
+        env:
+          VITE_NODE_URL: ${{ vars.VITE_NODE_URL }}
       # The deploy job ships this exact bundle rather than rebuilding it.
       - uses: actions/upload-artifact@v4
         with:

@@ -1,0 +1,31 @@
+# Our testnet-10 node (infra/node) behind wss://node.fourk.io. Checked every
+# 15 minutes; a failed run is the alert: GitHub emails it to whoever last
+# changed this schedule.
+name: node
+
+on:
+  schedule:
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+jobs:
+  health:
+    name: node health (testnet-10)
+    if: vars.VITE_NODE_URL != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            infra/node
+            vendor/kaspa-wasm
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # One retry, so a tunnel blip doesn't page anyone.
+      - run: |
+          node infra/node/check.mjs "$NODE_URL" \
+            || { sleep 60; node infra/node/check.mjs "$NODE_URL"; }
+        env:
+          NODE_URL: ${{ vars.VITE_NODE_URL }}

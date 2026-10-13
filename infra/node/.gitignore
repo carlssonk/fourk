@@ -1,0 +1,5 @@
+.terraform/
+# State holds the tunnel token and secret.
+*.tfstate
+*.tfstate.*
+terraform.tfvars

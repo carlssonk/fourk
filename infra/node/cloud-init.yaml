@@ -1,0 +1,11 @@
+#cloud-config
+# First boot only: Docker. What runs on top is pushed by Terraform
+# (terraform_data.stack), so this file never needs to change.
+package_update: true
+package_upgrade: true
+packages:
+  - docker.io
+  - docker-compose-v2
+  - unattended-upgrades
+runcmd:
+  - systemctl enable --now docker

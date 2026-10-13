@@ -23,9 +23,11 @@ pnpm build        # tsc + vite build → dist/
   carries `-dirty` when the tree had uncommitted changes.
 - **Smoke-test the bundle before deploying it:** `node scripts/check-dist.mjs`
   serves `dist/` and waits until the page opens a websocket to a node
-  through the public resolver (CI runs it). The kaspa SDK recognises its own
-  classes by name, so the build keeps class names (`esbuild.keepNames`); a
-  bundle minified without them never connects.
+  through the public resolver (CI runs it). With `VITE_NODE_URL` in its
+  environment it refuses that node, so a pinned bundle is still checked on
+  the fallback path. The kaspa SDK recognises its own classes by name, so
+  the build keeps class names (`esbuild.keepNames`); a bundle minified
+  without them never connects.
 - **Use a dedicated origin.** Recovery phrases and keys live in this origin's
   localStorage: a shared origin (a GitHub Pages project site, a subpath on a
   domain with other apps) hands them to every other page there.
@@ -72,6 +74,11 @@ Zone settings that live in the dashboard, not in the repo:
 - SSL/TLS → Edge Certificates → Always Use HTTPS: on. (HSTS itself is in
   `_headers`; leave the dashboard's HSTS setting off so there is one source.)
 
+The build pins our own node when the `VITE_NODE_URL` repository variable
+is set (Settings → Secrets and variables → Actions → Variables), currently
+`wss://node.fourk.io`. The node and its tunnel are in `infra/node`; delete
+the variable to go back to the public resolver alone.
+
 Roll back a bad deploy with `pnpm exec wrangler rollback` (lists recent
 versions; needs `wrangler login` or `CLOUDFLARE_API_TOKEN`).
 
@@ -84,12 +91,12 @@ locally with `_headers` applied, the same way production does.
 All variables are optional and documented in `.env.example`. Set them at
 build time (they are baked into the bundle).
 
-| Variable            | testnet-10 (today)                               | mainnet (future)                                                                                               |
-| ------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| `VITE_NETWORK_ID`   | unset (defaults to `testnet-10`) or `testnet-10` | `mainnet`                                                                                                      |
-| `VITE_NODE_URL`     | unset (public resolver)                          | unset, or a `wss://` node — the CSP and browser mixed-content rules block plaintext `ws://` from an https page |
-| `VITE_RESET_MARGIN` | unset                                            | unset (resets are a testnet concept)                                                                           |
-| `VITE_COMMIT_SHA`   | see “Commit provenance”                          | same                                                                                                           |
+| Variable            | testnet-10 (today)                                                                                 | mainnet (future)                                                                                               |
+| ------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `VITE_NETWORK_ID`   | unset (defaults to `testnet-10`) or `testnet-10`                                                   | `mainnet`                                                                                                      |
+| `VITE_NODE_URL`     | `wss://node.fourk.io` ([infra/node](../infra/node/README.md)), falling back to the public resolver | unset, or a `wss://` node — the CSP and browser mixed-content rules block plaintext `ws://` from an https page |
+| `VITE_RESET_MARGIN` | unset                                                                                              | unset (resets are a testnet concept)                                                                           |
+| `VITE_COMMIT_SHA`   | see “Commit provenance”                                                                            | same                                                                                                           |
 
 Build-time validation (`vite.config.ts`): an unknown `VITE_NETWORK_ID`
 (e.g. the `mainet` typo) fails the build; a production build on a test

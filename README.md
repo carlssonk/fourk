@@ -79,7 +79,7 @@ cargo install --git https://github.com/argent-lang/argent \
 - [Design](docs/design.md): covenant doors, the reference mapping, accounts and staked play
 - [Fourk shared deadlines](docs/fourk-shared-deadlines.md): the simultaneous-play protocol
 - [Architecture decisions](docs/adr/)
-- [Deploying the app](app/DEPLOY.md) and [running the dispenser](faucet/RUNBOOK.md)
+- [Deploying the app](app/DEPLOY.md), [running the dispenser](faucet/RUNBOOK.md) and [our node](infra/node/README.md)
 - [Glossary](CONTEXT.md)
 
 ## Status

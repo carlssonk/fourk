@@ -6,7 +6,10 @@
 //
 //     pnpm build && node scripts/check-dist.mjs [--timeout 60]
 //
-// Needs network access to the public resolver for the built network.
+// Needs network access to the public resolver for the built network. A build
+// pinned to a node (VITE_NODE_URL in the environment, as in CI) has that node
+// refused here, so the check still proves the resolver fallback; the node
+// itself is watched by .github/workflows/node.yml.
 
 import { spawn } from "node:child_process";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -14,6 +17,7 @@ import { chromium } from "@playwright/test";
 
 const timeoutArg = process.argv.indexOf("--timeout");
 const timeoutMs = 1000 * Number(timeoutArg > 0 ? process.argv[timeoutArg + 1] : 60);
+const pinned = process.env.VITE_NODE_URL || null;
 const port = 4199;
 const url = `http://localhost:${port}/`;
 
@@ -37,9 +41,11 @@ try {
     const page = await browser.newPage();
     const errors = [];
     page.on("pageerror", (e) => errors.push(String(e)));
+    const isPin = (u) => pinned !== null && String(u).startsWith(pinned);
+    if (pinned) await page.routeWebSocket(isPin, (ws) => ws.close());
     const connected = new Promise((resolve) =>
       page.on("websocket", (ws) => {
-        if (/^wss?:\/\//.test(ws.url())) resolve(ws.url());
+        if (/^wss?:\/\//.test(ws.url()) && !isPin(ws.url())) resolve(ws.url());
       }),
     );
     await page.goto(url);

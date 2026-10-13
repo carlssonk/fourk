@@ -1,0 +1,44 @@
+# Rendered by Terraform (infra/node/main.tf); edits on the server are
+# overwritten by the next apply.
+services:
+  kaspad:
+    image: kaspanet/rusty-kaspad:${kaspad_version}
+    restart: unless-stopped
+    command:
+      - /app/kaspad
+      - --testnet
+      - --netsuffix=10
+      - --appdir=/app/data
+      - --utxoindex
+      - --yes
+      - --nologfiles
+      - --disable-upnp
+      - --externalip=${external_ip}:${p2p_port}
+      # Reachable only on the compose network (cloudflared), never published.
+      - --rpclisten-borsh=0.0.0.0:${borsh_port}
+      - --rpcmaxclients=${rpc_max_clients}
+    ports:
+      - "${p2p_port}:${p2p_port}"
+    volumes:
+      # The image's RUSTY_HOME: its entrypoint chowns this to the kaspa
+      # user on every start, then drops to that user.
+      - kaspad-data:/app/data
+    # A hard kill mid-write can corrupt RocksDB and force a full resync.
+    stop_grace_period: 3m
+    logging:
+      driver: local
+      options:
+        max-size: 50m
+
+  cloudflared:
+    image: cloudflare/cloudflared:${cloudflared_version}
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    env_file: .env
+    depends_on:
+      - kaspad
+    logging:
+      driver: local
+
+volumes:
+  kaspad-data:
