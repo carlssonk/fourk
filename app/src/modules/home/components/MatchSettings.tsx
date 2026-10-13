@@ -1,5 +1,5 @@
 import { useAtomValue, useSetAtom } from "jotai";
-import { useEffect, useId, useRef, useState } from "react";
+import { InfoTip } from "@shared/components/InfoTip";
 import { STAKE_PRESETS, fmtDaaDuration, fmtKas } from "@shared/lib/match";
 import { MODES, MODE_LIST } from "@shared/modes/registry";
 import {
@@ -48,85 +48,6 @@ export const Chip = ({
   </button>
 );
 
-const SettingHelp = ({ label, help }: { label: string; help: string }) => {
-  const id = useId();
-  const [open, setOpen] = useState(false);
-  const pinned = useRef(false);
-  const button = useRef<HTMLButtonElement>(null);
-  const tooltip = useRef<HTMLDivElement>(null);
-  const close = () => {
-    pinned.current = false;
-    setOpen(false);
-  };
-  const leaveHelp = (target: EventTarget | null) => {
-    if (pinned.current || document.activeElement === button.current) return;
-    if (
-      target instanceof Node &&
-      (button.current?.contains(target) || tooltip.current?.contains(target))
-    )
-      return;
-    setOpen(false);
-  };
-
-  useEffect(() => {
-    if (!open) return;
-    const outside = (event: PointerEvent) => {
-      const target = event.target as Node;
-      if (!button.current?.contains(target) && !tooltip.current?.contains(target)) close();
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") close();
-    };
-    document.addEventListener("pointerdown", outside);
-    document.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("pointerdown", outside);
-      document.removeEventListener("keydown", escape);
-    };
-  }, [open]);
-
-  return (
-    <div className="relative flex items-center text-dim">
-      {label}
-      <button
-        ref={button}
-        type="button"
-        aria-label={`About ${label}`}
-        aria-expanded={open}
-        aria-controls={open ? id : undefined}
-        aria-describedby={open ? id : undefined}
-        className="ml-0.5 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md text-dim hover:text-ink"
-        onFocus={() => setOpen(true)}
-        onBlur={close}
-        onMouseEnter={() => setOpen(true)}
-        onMouseLeave={(event) => leaveHelp(event.relatedTarget)}
-        onClick={() => {
-          pinned.current = !pinned.current;
-          setOpen(pinned.current);
-        }}
-      >
-        <span
-          aria-hidden="true"
-          className="inline-flex size-3.5 items-center justify-center rounded-full border border-current font-serif text-[10px]"
-        >
-          i
-        </span>
-      </button>
-      {open && (
-        <div
-          ref={tooltip}
-          id={id}
-          role="tooltip"
-          onMouseLeave={(event) => leaveHelp(event.relatedTarget)}
-          className="absolute bottom-full left-0 z-20 w-80 max-w-full rounded-lg border border-line bg-panel px-3 py-2 text-xs leading-relaxed text-ink shadow-lg"
-        >
-          {help}
-        </div>
-      )}
-    </div>
-  );
-};
-
 const Group = ({
   label,
   help,
@@ -137,7 +58,7 @@ const Group = ({
   children: React.ReactNode;
 }) => (
   <div className="mt-3 first:mt-0">
-    <div className="mb-1 text-dim">{help ? <SettingHelp label={label} help={help} /> : label}</div>
+    <div className="mb-1 text-dim">{help ? <InfoTip label={label} help={help} /> : label}</div>
     <div className="flex flex-wrap gap-1.5">{children}</div>
   </div>
 );

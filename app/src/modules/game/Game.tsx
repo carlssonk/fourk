@@ -448,9 +448,9 @@ export const Game = ({ match }: Props) => {
               className="text-sm text-accent"
               title="Both stakes sit in the pot until the game decides who takes it."
             >
-              {open
-                ? `${fmtKas(match.value * 2n)} KAS pot once your opponent joins`
-                : `Pot: ${fmtKas(match.value)} KAS. Winner takes it`}
+              <span className="text-dim">Pot</span>{" "}
+              <b className="font-semibold">{fmtKas(open ? match.value * 2n : match.value)} KAS</b>
+              {open && <span className="text-dim"> once your opponent joins</span>}
             </div>
           )}
         </div>

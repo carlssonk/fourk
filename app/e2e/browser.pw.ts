@@ -235,7 +235,7 @@ test("staked hosting, cancellation, cash-out validation and Max reset", async ({
   await page.getByRole("button", { name: "About Move timer", exact: true }).press("Escape");
   await page.getByRole("button", { name: "1 KAS", exact: true }).click();
   await page.getByRole("button", { name: "Private Game", exact: true }).click();
-  await expect(page.getByText("2 KAS pot once your opponent joins")).toBeVisible();
+  await expect(page.getByText("Pot 2 KAS once your opponent joins")).toBeVisible();
   await expect(page.getByRole("button", { name: "Your account", exact: true })).toHaveCount(0);
   // Account management remains available at home while the match is saved.
   await page.goto("/");

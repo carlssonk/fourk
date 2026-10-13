@@ -2,10 +2,12 @@ import { useAtomValue, useSetAtom } from "jotai";
 import { useState } from "react";
 import { Avatar } from "@shared/components/Avatar";
 import { HowToPlayDialog } from "@shared/components/HowToPlayDialog";
+import { InfoTip } from "@shared/components/InfoTip";
 import { isOpen } from "@shared/lib/game";
 import { fmtDaaDuration, fmtKas, isStaked } from "@shared/lib/match";
 import { modeOf } from "@shared/modes/registry";
 import {
+  FEE_MARGIN,
   ownedFeeReserve,
   accountPanelAtom,
   balanceAtom,
@@ -95,6 +97,16 @@ export const Home = () => {
             <div>
               <dt className="text-xs text-dim">Your stake</dt>
               <dd className="text-lg font-semibold">{fmtKas(joinStake)} KAS</dd>
+              {/* Held back, not charged: what's left after the game's
+               * transaction fees stays in the balance. */}
+              <dd>
+                <InfoTip
+                  label={`+ ${fmtKas(FEE_MARGIN)} KAS fees`}
+                  help="Network fees: every move is a Kaspa transaction, and the network charges a small fee for each. This amount stays in your balance to pay them, and whatever isn't used stays yours. None of it goes to fourk.io."
+                  align="center"
+                  className="justify-center text-[11px]"
+                />
+              </dd>
             </div>
             <div>
               <dt className="text-xs text-dim">Winner gets</dt>
@@ -104,7 +116,7 @@ export const Home = () => {
         )}
         {short && (
           <p className="mt-2 text-sm text-red">
-            You need {fmtKas(need)} KAS to join and have {fmtKas(balance)}.{" "}
+            You need {fmtKas(need)} KAS and have {fmtKas(balance)}.{" "}
             <button className="cursor-pointer underline" onClick={() => openAccount("add-funds")}>
               Add funds
             </button>
