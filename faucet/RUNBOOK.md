@@ -57,13 +57,25 @@ new lanes, then re-run for only the missing remainder. Alternatively, any
 plain wallet send to the printed dispenser address works: each send is one
 new lane. New lanes are claimable after one cooldown (~2 minutes).
 
-## Monitoring
+## Monitoring and automatic refills
 
-`.github/workflows/dispenser.yml` runs `status` every 30 minutes and fails
-when a refill is recommended; GitHub emails the failure to whoever last
-changed that workflow's schedule. Run it on demand from the Actions tab
-(workflow_dispatch). GitHub disables scheduled workflows after 60 days
-without repository activity; re-enable it there if that happens.
+`.github/workflows/dispenser.yml` runs every 30 minutes. When fewer than 10
+lanes are eligible (`status --min-lanes 10`) it refills 10 lanes x 100 TKAS
+from the funding key in the repo secret `FAUCET_KEY`, then checks that key's
+balance (`balance <keyfile> 2000`). The run fails when the refill fails or
+the key holds under 2,000 TKAS, and GitHub emails the failure to whoever last
+changed that workflow's schedule. The one manual job left is topping up the
+funding key's address from a public testnet faucet when that email comes.
+The thresholds are the `env` block at the top of the workflow.
+
+- Set or rotate the secret without the key passing through anything else:
+  `gh secret set FAUCET_KEY < faucet/faucet.key`.
+- Funding key address: `node faucet/fund-dispenser.mjs balance faucet/faucet.key`.
+- Run it on demand from the Actions tab (workflow_dispatch). GitHub disables
+  scheduled workflows after 60 days without repository activity; re-enable
+  it there if that happens.
+- A deliberate drain (see Abuse) now pulls from the funding key too, at most
+  one refill per run; the low-balance alert is the signal.
 
 `status` also suits any other cron (quiet success is not built in, so route
 stdout to a log and alert on the exit code):

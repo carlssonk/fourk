@@ -1,12 +1,27 @@
-# Free play stops working when the testnet dispenser runs dry. This checks
-# its float every 30 minutes (faucet/RUNBOOK.md → Monitoring); a failed run
-# is the alert: GitHub emails it to whoever last changed this schedule.
+# Free play stops working when the testnet dispenser runs dry. Every 30
+# minutes this checks its lanes and, when fewer than MIN_LANES are eligible,
+# refills from the funding key (secret FAUCET_KEY, hex, testnet only). The
+# run fails — and GitHub emails whoever last changed this schedule — when a
+# refill fails or the funding key falls below MIN_KEY_TKAS: topping the key
+# up from a public faucet is the one manual step left (faucet/RUNBOOK.md).
 name: dispenser
 
 on:
   schedule:
     - cron: "*/30 * * * *"
   workflow_dispatch:
+
+# Never two refills at once: an overlapping run would see the same short
+# lane count and send a second batch.
+concurrency:
+  group: dispenser
+  cancel-in-progress: false
+
+env:
+  MIN_LANES: 10
+  REFILL_LANES: 10
+  REFILL_TKAS_PER_LANE: 100
+  MIN_KEY_TKAS: 2000
 
 jobs:
   status:
@@ -22,12 +37,43 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      # Exit 1 means refill recommended. One retry, so a resolver or node
-      # hiccup doesn't page anyone; a real shortfall fails both attempts.
-      - run: |
-          node faucet/fund-dispenser.mjs status | tee status.txt \
-            || { sleep 60; node faucet/fund-dispenser.mjs status | tee status.txt; }
+      - name: key
+        env:
+          FAUCET_KEY: ${{ secrets.FAUCET_KEY }}
+        run: |
+          test -n "$FAUCET_KEY" || { echo "secret FAUCET_KEY is not set"; exit 1; }
+          umask 077
+          printf '%s\n' "$FAUCET_KEY" > "$RUNNER_TEMP/faucet.key"
+      # status exits 1 both for "refill recommended" and for a failure to
+      # reach a node, so the output decides which. A node hiccup gets one
+      # retry before it fails the run.
+      - name: status
+        id: status
+        run: |
+          for attempt in 1 2; do
+            if node faucet/fund-dispenser.mjs status --min-lanes "$MIN_LANES" | tee status.txt; then
+              echo "refill=false" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            if grep -q "refill recommended" status.txt; then
+              echo "refill=true" >> "$GITHUB_OUTPUT"; exit 0
+            fi
+            [ "$attempt" = 1 ] && sleep 60
+          done
+          exit 1
+        shell: bash -o pipefail {0}
+      - name: refill
+        if: steps.status.outputs.refill == 'true'
+        run: |
+          node faucet/fund-dispenser.mjs "$RUNNER_TEMP/faucet.key" "$REFILL_LANES" "$REFILL_TKAS_PER_LANE" \
+            | tee refill.txt
+          sleep 15 # let the change output land before the balance check reads it
+        shell: bash -o pipefail {0}
+      - name: funding key balance
+        run: node faucet/fund-dispenser.mjs balance "$RUNNER_TEMP/faucet.key" "$MIN_KEY_TKAS" | tee balance.txt
         shell: bash -o pipefail {0}
       - if: always()
         run: |
-          { echo '```'; cat status.txt 2>/dev/null; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          rm -f "$RUNNER_TEMP/faucet.key"
+          for f in status refill balance; do
+            [ -f "$f.txt" ] && { echo "### $f"; echo '```'; cat "$f.txt"; echo '```'; }
+          done >> "$GITHUB_STEP_SUMMARY"

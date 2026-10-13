@@ -3,11 +3,15 @@
 // or send TKAS lanes to its fixed address from a funded key. Each output
 // becomes an independent drip lane on its own cooldown.
 //
-//     node fund-dispenser.mjs status
+//     node fund-dispenser.mjs status [--min-lanes N]
+//     node fund-dispenser.mjs balance <keyfile> [min-tkas]
 //     node fund-dispenser.mjs <keyfile> [lanes=3] [tkas-per-lane=100] [--dry-run] [--force]
 //
 // `status` exits 0 when the dispenser looks healthy and 1 when a refill is
 // recommended, so a cron job can alert on the exit code (see RUNBOOK.md).
+// `--min-lanes` raises the eligible-lane threshold (the auto-refill uses 10).
+// `balance` prints the funding key's address and balance, exiting 1 when it
+// is below min-tkas.
 // `--dry-run` prints what a refill would send without submitting anything.
 
 import fs from "node:fs";
@@ -55,15 +59,25 @@ const MAX_REFILL_TKAS = 10_000n;
 const argv = process.argv.slice(2);
 const dryRun = argv.includes("--dry-run");
 const force = argv.includes("--force");
-const [command, ...rest] = argv.filter((a) => a !== "--dry-run" && a !== "--force");
-if (!command) {
+const minLanesAt = argv.indexOf("--min-lanes");
+const minLanes = minLanesAt >= 0 ? Number(argv[minLanesAt + 1]) : MIN_ELIGIBLE_LANES;
+const [command, ...rest] = argv.filter(
+  (a, i) =>
+    a !== "--dry-run" &&
+    a !== "--force" &&
+    !(minLanesAt >= 0 && (i === minLanesAt || i === minLanesAt + 1)),
+);
+if (!command || (command === "balance" && !rest[0]) || !Number.isInteger(minLanes) || minLanes < 1) {
   console.error(
     [
-      "usage: node fund-dispenser.mjs status",
+      "usage: node fund-dispenser.mjs status [--min-lanes N]",
+      "       node fund-dispenser.mjs balance <keyfile> [min-tkas]",
       "       node fund-dispenser.mjs <keyfile> [lanes=3] [tkas-per-lane=100] [--dry-run]",
       "",
-      "status    print lane balances/ages; exit 0 healthy, 1 refill recommended",
-      "--dry-run print what a refill would send without submitting anything",
+      "status      print lane balances/ages; exit 0 healthy, 1 refill recommended",
+      "--min-lanes eligible lanes below which status recommends a refill (default 2)",
+      "balance     print the funding key's balance; exit 1 when below min-tkas",
+      "--dry-run   print what a refill would send without submitting anything",
     ].join("\n"),
   );
   process.exit(1);
@@ -88,6 +102,8 @@ console.log(`network: ${NETWORK_ID}, node: ${rpc.url ?? process.env.KASPA_RPC_UR
 
 if (command === "status") {
   await status();
+} else if (command === "balance") {
+  await keyBalance(rest[0], rest[1]);
 } else {
   await refill(command, rest[0], rest[1]);
 }
@@ -134,19 +150,36 @@ async function status() {
     console.log(`  lane ${i + 1}: ${tkas(l.value)}, age ${l.age} DAA — ${state}`);
   });
 
-  const healthy = eligible >= MIN_ELIGIBLE_LANES && total >= MIN_TOTAL_DRIPS * DRIP_SOMPI;
+  const healthy = eligible >= minLanes && total >= MIN_TOTAL_DRIPS * DRIP_SOMPI;
   if (healthy) {
     console.log(`${eligible} lane(s) eligible, ${total / DRIP_SOMPI} drips of float — healthy`);
     return;
   }
   const why =
-    eligible < MIN_ELIGIBLE_LANES
-      ? `${eligible} lane(s) eligible (< ${MIN_ELIGIBLE_LANES})`
+    eligible < minLanes
+      ? `${eligible} lane(s) eligible (< ${minLanes})`
       : `balance below ${MIN_TOTAL_DRIPS} drips`;
   console.log(`${why} — refill recommended`);
   console.log(`  node fund-dispenser.mjs <keyfile>  # or plain-send TKAS to the address above`);
   await rpc.disconnect();
   process.exit(1);
+}
+
+function loadKey(keyFile) {
+  return new kaspa.PrivateKey(fs.readFileSync(keyFile, "utf8").trim());
+}
+
+async function keyBalance(keyFile, minArg) {
+  const from = loadKey(keyFile).toAddress(NETWORK_TYPE).toString();
+  const min = BigInt(Math.round(Number(minArg ?? 0) * 1e8));
+  const { entries } = await rpc.getUtxosByAddresses([from]);
+  const total = entries.reduce((sum, e) => sum + amountOf(e), 0n);
+  console.log(`funding key ${from}: ${tkas(total)}`);
+  if (total < min) {
+    console.log(`below ${tkas(min)} — top it up from a testnet faucet`);
+    await rpc.disconnect();
+    process.exit(1);
+  }
 }
 
 async function refill(keyFile, lanesArg, tkasArg) {
@@ -163,7 +196,7 @@ async function refill(keyFile, lanesArg, tkasArg) {
     process.exit(1);
   }
 
-  const key = new kaspa.PrivateKey(fs.readFileSync(keyFile, "utf8").trim());
+  const key = loadKey(keyFile);
   const from = key.toAddress(NETWORK_TYPE);
 
   const { entries } = await rpc.getUtxosByAddresses([from.toString()]);
