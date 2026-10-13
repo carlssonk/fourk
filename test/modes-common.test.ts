@@ -28,6 +28,7 @@ function ctx(over: Partial<ViewCtx> = {}): ViewCtx {
     myPk: P1,
     role: "p1",
     clockExpired: false,
+    clockSecondsLeft: null,
     busy: false,
     pendingCol: null,
     result: null,
