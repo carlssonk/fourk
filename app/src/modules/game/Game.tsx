@@ -137,6 +137,7 @@ export const Game = ({ match }: Props) => {
     myPk,
     role,
     clockExpired: clock.expired,
+    clockSecondsLeft: clock.secondsLeft,
     busy,
     pendingCol,
     result: ending?.message ?? result,

@@ -82,13 +82,15 @@ export const PlayerSetup = ({
   };
 
   return (
-    <div className="relative mx-auto my-5 w-fit max-w-full">
+    <div className="relative mx-auto my-3 w-fit max-w-full sm:my-5">
       <div className="card w-115 max-w-full p-4 text-left">
-        <div className="flex flex-wrap items-stretch gap-4">
-          <div className="rounded-xl bg-field p-2">
-            <Avatar code={code} size={88} />
+        {/* Preview beside the controls at every width: stacked on a phone,
+         * it took a row of its own and pushed the action below the fold. */}
+        <div className="flex items-stretch gap-3 sm:gap-4">
+          <div className="w-20 shrink-0 self-start rounded-xl bg-field p-1.5 sm:w-26 sm:p-2">
+            <Avatar code={code} size={88} fluid className="block" />
           </div>
-          <div className="flex min-w-56 flex-1 flex-col justify-between gap-2">
+          <div className="flex min-w-0 flex-1 flex-col justify-between gap-2">
             {/* wrapper keeps the input out of the flex column: .input's
              * flex-1 would otherwise stretch it vertically */}
             <div className="flex items-center gap-2">
@@ -162,7 +164,10 @@ export const PlayerSetup = ({
               type="button"
               title="use this one"
               onClick={() => adopt(g)}
-              className="cursor-pointer rounded-md border border-line bg-field p-1 hover:border-accent"
+              // One row on a phone: three candidates and the reroll.
+              className={`cursor-pointer rounded-md border border-line bg-field p-1 hover:border-accent ${
+                i >= 3 ? "max-sm:hidden" : ""
+              }`}
             >
               <Avatar code={genesToCode(g)} size={44} animate={false} fluid className="block" />
             </button>
@@ -178,7 +183,7 @@ export const PlayerSetup = ({
         </div>
         {settings}
       </div>
-      <div className="mt-4 flex flex-wrap justify-center gap-2.5">
+      <div className="mt-3 flex flex-wrap justify-center gap-2.5 sm:mt-4">
         {headlineLabel && (
           <button type="button" disabled className="btn cursor-default px-8 py-2.5 text-lg">
             {headlineLabel}

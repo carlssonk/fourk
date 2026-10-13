@@ -55,6 +55,7 @@ const ctx = (role: ViewCtx["role"], clockExpired = false): ViewCtx => ({
   myPk: role === "p1" ? P1 : role === "p2" ? P2 : "",
   role,
   clockExpired,
+  clockSecondsLeft: null,
   busy: false,
   pendingCol: null,
   result: null,
@@ -184,6 +185,16 @@ describe("fourk2 view", () => {
     // Timely: both owe a reveal, nobody can claim yet.
     const timely = later(two, { acceptedDaa: 6200 });
     expect(fourk2Mode.view(timely, ctx("p1")).canClaimTimeout).toBe(false);
+    // The reveals run on their own, so their clocks only show once one is late.
+    const revealS = fourk2Mode.clock(timely)!.daa / 10;
+    const seatClocks = (secondsLeft: number | null) =>
+      fourk2Mode
+        .view(timely, { ...ctx("p1"), clockSecondsLeft: secondsLeft })
+        .seats.map((seat) => seat.showClock);
+    expect(seatClocks(null)).toEqual([false, false]);
+    expect(seatClocks(revealS - 5)).toEqual([false, false]);
+    expect(seatClocks(revealS - 20)).toEqual([true, true]);
+    expect(fourk2Mode.view(timely, ctx("p1", true)).seats.every((s) => s.showClock)).toBe(true);
     expect(
       fourk2Mode.describeEnd(
         { kind: "claim_timeout", txid: "", pushes: [], args: [], payload: "" },

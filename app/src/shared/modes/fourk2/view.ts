@@ -142,6 +142,10 @@ function roundView(m: Match, ctx: ViewCtx, f: ViewFlags): RoundView {
   };
 }
 
+/** How long a reveal step may wait before its clock is shown: the autopilot
+ * reveals at once (the second player after 2 s), so this is a stall. */
+const REVEAL_STALL_S = 20;
+
 /** The first round's refund, said without money in a free game. */
 const calledOff = (m: Match) =>
   isStaked(m) ? ". The game is called off and both stakes return." : ". The game is called off.";
@@ -317,17 +321,27 @@ export const fourk2View = {
     const showPriority = playing && !full && !pending;
     const decided = lateSecondCommit(m) || lateFirstCommit(m);
     const live = playing && !full && !pending && !decided;
+    // Once both picks are sealed, the reveals run on their own within a few
+    // seconds, one player after the other. Their clocks would flash on, drop
+    // to one seat and reset for the next round, so they stay hidden unless a
+    // reveal is actually late (the reveal clock runs revealTimeout DAA,
+    // ~10 per second).
+    const revealStalled =
+      ctx.clockExpired ||
+      (ctx.clockSecondsLeft !== null &&
+        core.revealTimeout / 10 - ctx.clockSecondsLeft >= REVEAL_STALL_S);
+    const clockShown = live && started && (r.phase === "commit" || revealStalled);
     return {
       status: status(m, ctx, r),
       seats: [
         {
           active: live && !r.acted[0],
-          showClock: live && started && !r.acted[0],
+          showClock: clockShown && !r.acted[0],
           collisionPriority: showPriority && priority === 0,
         },
         {
           active: live && !r.acted[1],
-          showClock: live && started && !r.acted[1],
+          showClock: clockShown && !r.acted[1],
           collisionPriority: showPriority && priority === 1,
         },
       ],

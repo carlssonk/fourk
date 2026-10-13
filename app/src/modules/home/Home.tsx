@@ -1,6 +1,7 @@
 import { useAtomValue, useSetAtom } from "jotai";
 import { useState } from "react";
 import { Avatar } from "@shared/components/Avatar";
+import { HowToPlayDialog } from "@shared/components/HowToPlayDialog";
 import { isOpen } from "@shared/lib/game";
 import { fmtDaaDuration, fmtKas, isStaked } from "@shared/lib/match";
 import { modeOf } from "@shared/modes/registry";
@@ -35,6 +36,7 @@ export const Home = () => {
   // sudden-death the pot into an even split mid-game.
   const inviteCapLeft = useCapClock(pendingInvite, !!pendingInvite);
   const [about, setAbout] = useState(false);
+  const [rules, setRules] = useState(false);
 
   if (pendingInvite) {
     // Chat apps open links in their own browser, with storage apart from
@@ -58,65 +60,51 @@ export const Home = () => {
     // before they can stake anything; an account holder just needs funds.
     const needsAccount = need > 0n && !owned;
     const short = need > 0n && owned && balance !== null && balance < need;
+    const colorClass = myColor === "red" ? "text-red" : "text-blue";
+    const perMove = `${fmtDaaDuration(pendingInvite.state.moveTimeout)} per ${inviteMeta.moveNoun}.`;
     return (
-      <div className="pt-8 pb-8 text-center">
+      // Sized to fit a phone screen without scrolling (staked invite on a
+      // 390x664 viewport): the host's avatar sits beside the headline there,
+      // and the spacing tightens below sm.
+      <div className="pt-1 pb-4 text-center sm:pt-8 sm:pb-8">
         <BoardBackdrop />
-        {host && <Avatar code={host.avatar} size={72} className="mx-auto mb-1" />}
-        <h2 className="mb-1.5 text-2xl font-bold">
-          {!seatOpen
-            ? "Watch this game"
-            : host?.name
-              ? `${host.name} invited you to a game!`
-              : "You've been invited to a game!"}
-        </h2>
-        <p className="text-sm text-dim">
-          {seatOpen ? (
-            <>
-              {inviteMeta.inviteBlurb}
-              <b className={myColor === "red" ? "text-red" : "text-blue"}>{myColor} ●</b>.
-            </>
-          ) : (
-            "Both seats are taken. You can follow along as a spectator."
+        <div className="mb-1.5 flex items-center justify-center gap-3 sm:flex-col sm:gap-1">
+          {host && (
+            <div className="w-11 shrink-0 sm:w-18">
+              <Avatar code={host.avatar} size={72} fluid className="block" />
+            </div>
           )}
-        </p>
-        {staked ? (
-          <p className="mt-1 text-sm">
-            <b className="text-accent">Winner takes the {fmtKas(joinStake * 2n)} KAS pot.</b>{" "}
-            <span className="text-dim">
-              {seatOpen && <>Joining puts in {fmtKas(joinStake)} KAS from your balance · </>}
-              {fmtDaaDuration(pendingInvite.state.moveTimeout)} per {inviteMeta.moveNoun}
-              {inviteCapLeft &&
-                (inviteCapLeft === "any moment" ? (
-                  <> · time cap already spent</>
-                ) : (
-                  <> · game ends in {inviteCapLeft}</>
-                ))}
-            </span>
+          <h2 className="text-xl font-bold text-balance sm:text-2xl">
+            {!seatOpen
+              ? "Watch this game"
+              : `${host?.name ? `${host.name} invited you` : "You're invited"} to play ${inviteMeta.label}`}
+          </h2>
+        </div>
+        {!seatOpen ? (
+          <p className="text-dim">Both seats are taken. You can follow along.</p>
+        ) : !staked ? (
+          <p className="text-dim">
+            You play <b className={colorClass}>{myColor}</b>.
           </p>
         ) : (
-          <p className="mt-1 text-xs text-dim">
-            {fmtDaaDuration(pendingInvite.state.moveTimeout)} per {inviteMeta.moveNoun}
-            {inviteCapLeft && <> · game ends in {inviteCapLeft}</>}
-          </p>
-        )}
-        {seatOpen && onPhone && (
-          <p className="mt-2 text-xs text-dim">
-            Your game is saved in this browser only. If this page opened inside an app like Discord,
-            open it in your browser before joining.
-          </p>
-        )}
-        {needsAccount && (
-          <p className="mt-2 text-sm">
-            An account is required for staked games.{" "}
-            <button className="cursor-pointer underline" onClick={() => openAccount("get-started")}>
-              Create one
-            </button>{" "}
-            to join.
-          </p>
+          <dl className="mx-auto mt-2 flex w-fit gap-6 rounded-lg border border-line bg-panel/60 px-5 py-2 sm:gap-8">
+            <div>
+              <dt className="text-xs text-dim">You play</dt>
+              <dd className={`text-lg font-semibold capitalize ${colorClass}`}>{myColor}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-dim">Your stake</dt>
+              <dd className="text-lg font-semibold">{fmtKas(joinStake)} KAS</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-dim">Winner gets</dt>
+              <dd className="text-lg font-semibold text-accent">{fmtKas(joinStake * 2n)} KAS</dd>
+            </div>
+          </dl>
         )}
         {short && (
           <p className="mt-2 text-sm text-red">
-            You need {fmtKas(need)} KAS to join. Your balance is {fmtKas(balance)} KAS.{" "}
+            You need {fmtKas(need)} KAS to join and have {fmtKas(balance)}.{" "}
             <button className="cursor-pointer underline" onClick={() => openAccount("add-funds")}>
               Add funds
             </button>
@@ -124,9 +112,9 @@ export const Home = () => {
         )}
         {seatOpen ? (
           <PlayerSetup
-            actionLabel="Join"
-            busy={busy || short || needsAccount}
-            onSubmit={() => takeSeat(pendingInvite)}
+            actionLabel={needsAccount ? "Create an account to join" : "Join"}
+            busy={busy || short}
+            onSubmit={() => (needsAccount ? openAccount("get-started") : takeSeat(pendingInvite))}
           />
         ) : (
           <div className="my-5">
@@ -135,9 +123,44 @@ export const Home = () => {
             </button>
           </div>
         )}
-        <button className="btn btn-muted" disabled={busy} onClick={clearInvite}>
-          Not now
-        </button>
+        <p className="text-sm text-dim">
+          {perMove}
+          {inviteCapLeft &&
+            (inviteCapLeft === "any moment"
+              ? " The game's time limit is almost up."
+              : ` The game ends in ${inviteCapLeft}.`)}
+        </p>
+        <div className="mt-1 flex justify-center gap-5 text-sm text-dim">
+          <button
+            type="button"
+            className="cursor-pointer underline hover:text-ink"
+            onClick={() => setRules(true)}
+          >
+            How {inviteMeta.label} works
+          </button>
+          <button
+            type="button"
+            className="cursor-pointer underline hover:text-ink disabled:cursor-default"
+            disabled={busy}
+            onClick={clearInvite}
+          >
+            Not now
+          </button>
+        </div>
+        {seatOpen && onPhone && (
+          <p className="mt-3 text-sm text-dim">
+            Opened from Discord or another app? Open this link in your browser first.
+          </p>
+        )}
+        {rules && (
+          <HowToPlayDialog
+            mode={inviteMeta}
+            moveTimeout={pendingInvite.state.moveTimeout}
+            staked={staked}
+            showCap={inviteCapLeft !== null}
+            onDismiss={() => setRules(false)}
+          />
+        )}
       </div>
     );
   }

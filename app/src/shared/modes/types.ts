@@ -20,8 +20,6 @@ export interface ModeMeta {
   label: string;
   /** Picker description under the chips. */
   blurb: string;
-  /** Invite-screen sentence prefix, ending where the colour phrase starts. */
-  inviteBlurb: string;
   /** "{duration} per {noun}" on the invite screen. */
   moveNoun: string;
 }
@@ -44,6 +42,8 @@ export interface ViewCtx {
   role: "p1" | "p2" | "spectator";
   /** The local move/round-clock estimate has lapsed. */
   clockExpired: boolean;
+  /** Whole seconds left on that clock, or null before its anchor arrives. */
+  clockSecondsLeft: number | null;
   busy: boolean;
   /** The optimistic column keyed to the current game UTXO, or null. Classic
    * recomputes the optimistic board from it; fourk shows the sealed pick. */

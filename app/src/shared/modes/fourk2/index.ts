@@ -9,7 +9,6 @@ export const fourk2Mode: GameMode = {
     key: "fourk2",
     label: "Fourk",
     blurb: "Both players pick a column in secret before one shared timer, the discs drop together.",
-    inviteBlurb: "Fourk mode: you both pick a column in secret, then the discs drop together. You play ",
     moveNoun: "pick",
   },
   ...fourk2Engine,
