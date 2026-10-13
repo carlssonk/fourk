@@ -302,8 +302,10 @@ export const BoardBackdrop = () => {
 
     const resize = () => {
       const dpr = window.devicePixelRatio || 1;
-      w = window.innerWidth;
-      h = window.innerHeight;
+      // The canvas's own box, not window.inner*: on phones the two disagree
+      // while the browser toolbars slide in and out.
+      w = canvas.clientWidth;
+      h = canvas.clientHeight;
       cols = Math.ceil(w / CELL);
       rows = Math.ceil(h / CELL);
       canvas.width = Math.round(w * dpr);
@@ -314,10 +316,11 @@ export const BoardBackdrop = () => {
       blueDisc = renderDisc(color("--color-blue"), color("--color-bg"), dpr);
       if (draw(performance.now())) kick();
     };
-    resize();
-    window.addEventListener("resize", resize);
+    // Fires once on observe, so this also does the first paint.
+    const observer = new ResizeObserver(resize);
+    observer.observe(canvas);
     return () => {
-      window.removeEventListener("resize", resize);
+      observer.disconnect();
       cancelAnimationFrame(raf);
       spawn.current = () => {};
     };
@@ -334,7 +337,11 @@ export const BoardBackdrop = () => {
       <canvas
         ref={canvasRef}
         aria-hidden
-        className="pointer-events-none fixed inset-0 -z-10 h-full w-full"
+        // h-dvh, not h-full: a percentage height on a fixed element resolves
+        // against the small viewport (toolbars shown), so the board stopped
+        // short of the screen bottom on phones. A canvas needs the explicit
+        // size; inset alone doesn't stretch a replaced element.
+        className="pointer-events-none fixed top-0 left-0 -z-10 h-dvh w-full"
         style={{ maskImage: mask, WebkitMaskImage: mask }}
       />
       {/* The backdrop's one control, tucked where the backdrop lives: cycle
