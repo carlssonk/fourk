@@ -37,6 +37,12 @@ export const Home = () => {
   const [about, setAbout] = useState(false);
 
   if (pendingInvite) {
+    // Chat apps open links in their own browser, with storage apart from
+    // the phone's browser, and iOS gives it the plain Safari user agent, so
+    // it can't be detected. Seat keys and sealed picks live in that storage,
+    // so a game joined there can't be finished anywhere else. Desktop chat
+    // apps open the system browser, so the note is for phones only.
+    const onPhone = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
     const host = pendingInvite.profiles?.p1;
     const myColor = pendingInvite.p1Color === "blue" ? "red" : "blue";
     const inviteMeta = modeOf(pendingInvite).meta;
@@ -91,6 +97,12 @@ export const Home = () => {
           <p className="mt-1 text-xs text-dim">
             {fmtDaaDuration(pendingInvite.state.moveTimeout)} per {inviteMeta.moveNoun}
             {inviteCapLeft && <> · game ends in {inviteCapLeft}</>}
+          </p>
+        )}
+        {seatOpen && onPhone && (
+          <p className="mt-2 text-xs text-dim">
+            Your game is saved in this browser only. If this page opened inside an app like Discord,
+            open it in your browser before joining.
           </p>
         )}
         {needsAccount && (
