@@ -9,6 +9,7 @@ import {
   type State,
 } from "@shared/lib/game";
 import { KaspaStamp } from "@shared/components/KaspaStamp";
+import { playDiscLand } from "@shared/lib/sound";
 
 interface Props {
   state: State;
@@ -60,7 +61,10 @@ const QUAD_OUT = "cubic-bezier(0.33, 0.67, 0.67, 1)";
  * scatter so same-height landings don't look cloned. `delayMs` staggers the
  * second disc of a fourk-mode double drop (it hides at -drop until then). */
 function dropIn(el: HTMLElement, fell: number, row: number, delayMs = 0) {
-  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    playDiscLand(delayMs / 1000);
+    return;
+  }
   // The pitch is the cell wrapper's height (gap included) — the hole and
   // the disc in it are deliberately smaller than the cell.
   const cell = el.closest<HTMLElement>("[data-cell]");
@@ -81,6 +85,10 @@ function dropIn(el: HTMLElement, fell: number, row: number, delayMs = 0) {
     ],
     { duration: t1 * (1 + 2 * e) * 1000, delay: delayMs, fill: "backwards" },
   );
+  // The clack on impact, then a quieter one as the rebound settles — its
+  // volume follows the rebound speed (e·v).
+  playDiscLand(delayMs / 1000 + t1);
+  playDiscLand(delayMs / 1000 + t1 * (1 + 2 * e), e);
 }
 
 /** The cells fresh discs just landed in — one per classic move, up to two
