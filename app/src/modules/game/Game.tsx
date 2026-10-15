@@ -318,7 +318,20 @@ export const Game = ({ match }: Props) => {
       if (!ok) return;
       runAction(async () => {
         const rpc = await getRpc();
-        await cov.cancelMatch(rpc, seatKey(), match);
+        try {
+          await cov.cancelMatch(rpc, seatKey(), match);
+        } catch (e) {
+          // An open game has no other way out, so a missing UTXO is either a
+          // join landing mid-click or a game opened under an older contract
+          // build: its address derives from the old bytecode, and retrying
+          // from this build can never find it.
+          if (/game UTXO not found/.test(String((e as any)?.message ?? e)))
+            throw new Error(
+              "This game can't be found on the network. It may have been created with an older version of the app, or someone just took the seat.",
+              { cause: e },
+            );
+          throw e;
+        }
         exitMatch(true);
       });
     }
