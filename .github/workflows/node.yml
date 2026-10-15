@@ -1,6 +1,6 @@
-# Our testnet-10 node (infra/node) behind wss://node.fourk.io. Checked every
-# 15 minutes; a failed run is the alert: GitHub emails it to whoever last
-# changed this schedule.
+# Our testnet-10 node (infra/node) behind wss://node.fourk.io, and its payout
+# sweeper at /sweep. Checked every 15 minutes; a failed run is the alert:
+# GitHub emails it to whoever last changed this schedule.
 name: node
 
 on:
@@ -29,3 +29,12 @@ jobs:
             || { sleep 60; node infra/node/check.mjs "$NODE_URL"; }
         env:
           NODE_URL: ${{ vars.VITE_NODE_URL }}
+      # The payout sweeper (app/sweeper): a junk POST must be refused as
+      # "not a match" (400). 503 = not connected to kaspad, 502/404 = the
+      # container or the tunnel route is gone.
+      - if: vars.VITE_SWEEPER_URL != ''
+        run: |
+          check() { [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d x "$SWEEPER_URL")" = 400 ]; }
+          check || { sleep 60; check; } || { echo "sweeper did not answer 400"; exit 1; }
+        env:
+          SWEEPER_URL: ${{ vars.VITE_SWEEPER_URL }}
