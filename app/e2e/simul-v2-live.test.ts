@@ -56,7 +56,8 @@ import { core2Of, type SimulCore2 } from "../src/shared/modes/fourk2/core";
 import { fourk2Mode } from "../src/shared/modes/fourk2";
 import { REBASE_GRACE_DAA } from "../../src/simul-v2/rules";
 import type { Match } from "../src/shared/lib/match";
-import { decodeShareCode, encodeShareCode } from "../src/shared/lib/match";
+import { decodeShareCode, encodeShareCode, matchToJson } from "../src/shared/lib/match";
+import { createSweeper } from "../sweeper/sweeper";
 import { cellIndex } from "../src/shared/lib/game";
 import { roundPhase, toSimulState } from "../src/shared/modes/fourk/core";
 
@@ -280,13 +281,17 @@ async function playFirstRound(
     for (const c of [3, 4, 5, 6]) expect(m.state.board[cellIndex(c, 0)]).toBe(1);
 
     // The line is claimed on the current board; the claim opens the
-    // challenge window (the reveal grace), then the winner sweeps.
+    // challenge window (the reveal grace), then anyone sweeps: here the
+    // payout service (app/sweeper), keyless, as if both players had left.
     const before = await cov.walletBalance(rpc, cov.walletAddress(p1));
     m = await as1(() => claimWinMatch(rpc, p1, m, { col: 3, row: 0, dir: 0 }));
     expect(core(m).pendingWin).toBe(1);
-    await expect(sweepWinMatch(rpc, p1, m)).rejects.toThrow();
+    await expect(sweepWinMatch(rpc, m)).rejects.toThrow();
+    const sweeper = createSweeper(rpc);
+    expect(await sweeper.intake(matchToJson(m), "test")).toEqual({ status: 202, body: "queued" });
     await untilAge(rpc, m, 600);
-    await sweepWinMatch(rpc, p1, m);
+    await sweeper.tick();
+    expect(sweeper.size()).toBe(0);
     await waitGone(rpc, m);
     const after = await balanceAbove(rpc, p1, before);
     expect(after).toBeGreaterThan(before + 2n * KAS - KAS / 10n);

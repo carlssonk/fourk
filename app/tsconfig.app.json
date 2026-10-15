@@ -31,5 +31,5 @@
       "@modules/*": ["./src/modules/*"]
     }
   },
-  "include": ["src"]
+  "include": ["src", "sweeper/main.ts", "sweeper/sweeper.ts"]
 }

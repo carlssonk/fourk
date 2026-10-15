@@ -95,6 +95,7 @@ build time (they are baked into the bundle).
 | ------------------- | -------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | `VITE_NETWORK_ID`   | unset (defaults to `testnet-10`) or `testnet-10`                                                   | `mainnet`                                                                                                      |
 | `VITE_NODE_URL`     | `wss://node.fourk.io` ([infra/node](../infra/node/README.md)), falling back to the public resolver | unset, or a `wss://` node — the CSP and browser mixed-content rules block plaintext `ws://` from an https page |
+| `VITE_SWEEPER_URL`  | `https://node.fourk.io/sweep` ([infra/node](../infra/node/README.md#payout-sweeper)); unset, players' clients and the Collect button still pay wins | same, on the mainnet node                                                                                     |
 | `VITE_RESET_MARGIN` | unset                                                                                              | unset (resets are a testnet concept)                                                                           |
 | `VITE_COMMIT_SHA`   | see “Commit provenance”                                                                            | same                                                                                                           |
 

@@ -259,16 +259,16 @@ describe("claim_win", () => {
     expect(pending.round).toBe(s.round);
   });
 
-  test("the sweep pays the winner after the window — and only then, and only them", () => {
+  test("the sweep pays the winner after the window — and only then, whoever sends it", () => {
     const pending = claimWin(p1WinGame(), ctx(P1), { col: 0, row: 0, dir: 0 });
-    expect(sweepWin(pending, ctx(P1, pending.moveTimeout))).toEqual([
-      { to: P1, amount: 2n * STAKE },
-    ]);
+    const paid = [{ to: P1, amount: 2n * STAKE }];
+    expect(sweepWin(pending, ctx(P1, pending.moveTimeout))).toEqual(paid);
     expect(() => sweepWin(pending, ctx(P1, pending.moveTimeout - 1))).toThrow(
       "challenge window still open",
     );
-    expect(() => sweepWin(pending, ctx(P2, pending.moveTimeout))).toThrow("pending winner");
-    expect(() => sweepWin(pending, ctx(STRANGER, pending.moveTimeout))).toThrow("pending winner");
+    // Permissionless: the loser or a stranger can only pay the winner.
+    expect(sweepWin(pending, ctx(P2, pending.moveTimeout))).toEqual(paid);
+    expect(sweepWin(pending, ctx(STRANGER, pending.moveTimeout))).toEqual(paid);
     expect(() => sweepWin(p1WinGame(), ctx(P1, 1e9))).toThrow("no win claim pending");
   });
 

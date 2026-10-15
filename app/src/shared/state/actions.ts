@@ -12,7 +12,9 @@ import {
   unfinishedGamesOn,
   updateMatch,
 } from "./matches";
-import { ownedWallet } from "./wallet";
+import { modeOf } from "../modes/registry";
+import { getRpc } from "./rpc";
+import { matchWallet, ownedWallet } from "./wallet";
 import { getDiscColor, getGameMode, getMatchTiming, getProfile, getStake } from "./profile";
 
 /** Fee buffer reserved per unfinished staked game. A Fourk player pays for
@@ -213,4 +215,15 @@ export const takeSeat = (invite: Match, deps: Deps = realDeps): Promise<void> =>
       openMatch(invite); // a game in progress or spectating
       clearInvite();
     }
+  });
+
+/** Send a decided pot from the match list without opening the game (see
+ * `ModeActions.collect`), and record the ending on the stored match. */
+export const collectMatch = (m: Match): Promise<void> =>
+  runAction(async () => {
+    const collect = modeOf(m).actions.collect;
+    const myPk = matchWallet(m)?.myPk;
+    if (!collect || !myPk) return;
+    const result = await collect(await getRpc(), m);
+    updateMatch({ ...m, result });
   });

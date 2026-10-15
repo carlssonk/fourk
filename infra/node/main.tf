@@ -14,8 +14,13 @@ locals {
     p2p_port            = local.p2p_port
     borsh_port          = local.borsh_port
     rpc_max_clients     = var.rpc_max_clients
+    node_version        = var.node_version
   })
-  env = "TUNNEL_TOKEN=${data.cloudflare_zero_trust_tunnel_cloudflared_token.node.token}\n"
+  # The sweeper bundle (pnpm --dir app build:sweeper). Its hash re-runs the
+  # stack provisioner when the bundle changes.
+  sweeper_dir  = "${path.module}/../../app/sweeper/dist"
+  sweeper_hash = sha256(join("", [for f in sort(fileset(local.sweeper_dir, "*")) : filesha256("${local.sweeper_dir}/${f}")]))
+  env          = "TUNNEL_TOKEN=${data.cloudflare_zero_trust_tunnel_cloudflared_token.node.token}\n"
 }
 
 # --- Hetzner ------------------------------------------------------------------
@@ -89,7 +94,15 @@ resource "terraform_data" "stack" {
     hcloud_server.node.id,
     sha256(local.compose),
     sha256(local.env),
+    local.sweeper_hash,
   ]
+
+  lifecycle {
+    precondition {
+      condition     = fileexists("${local.sweeper_dir}/sweeper.mjs")
+      error_message = "No sweeper bundle: run `pnpm --dir app build:sweeper` first."
+    }
+  }
 
   connection {
     type = "ssh"
@@ -102,7 +115,15 @@ resource "terraform_data" "stack" {
       "cloud-init status --wait >/dev/null || true",
       "command -v docker >/dev/null || { echo 'docker missing: cloud-init failed, see /var/log/cloud-init-output.log' >&2; exit 1; }",
       "install -d -m 700 /opt/kaspa",
+      # Emptied in place: the running container's bind mount keeps the dir.
+      "install -d -m 755 /opt/kaspa/sweeper && find /opt/kaspa/sweeper -mindepth 1 -delete",
     ]
+  }
+
+  # Contents of dist/ into /opt/kaspa/sweeper (the trailing slash).
+  provisioner "file" {
+    source      = "${local.sweeper_dir}/"
+    destination = "/opt/kaspa/sweeper"
   }
 
   provisioner "file" {
@@ -121,6 +142,8 @@ resource "terraform_data" "stack" {
       # Docker Hub has transient 5xx; one of them should not fail an apply.
       "cd /opt/kaspa && for i in 1 2 3 4 5; do docker compose pull -q && break; [ $i = 5 ] && exit 1; sleep 15; done",
       "cd /opt/kaspa && docker compose up -d --remove-orphans",
+      # A new bundle leaves the compose file unchanged; load it explicitly.
+      "cd /opt/kaspa && docker compose up -d --force-recreate --no-deps sweeper",
     ]
   }
 }
@@ -149,6 +172,12 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "node" {
 
   config = {
     ingress = [
+      {
+        # The payout service's one route; everything else is the node.
+        hostname = var.hostname
+        path     = "^/sweep$"
+        service  = "http://sweeper:8080"
+      },
       {
         hostname = var.hostname
         # cloudflared resolves "kaspad" on the compose network.

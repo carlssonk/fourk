@@ -13,6 +13,7 @@ import {
   balanceAtom,
   busyAtom,
   clearInvite,
+  collectMatch,
   hasOwnedAccount,
   matchesAtom,
   newGame,
@@ -22,7 +23,7 @@ import {
 } from "@shared/state";
 import { useCapClock } from "../game/hooks/useCapClock";
 import { AboutDialog, BoardBackdrop, MatchList, MatchSettings, PlayerSetup } from "./components";
-import { useMatchGlances } from "./hooks";
+import { useCollectable, useMatchGlances } from "./hooks";
 
 export const Home = () => {
   const pendingInvite = useAtomValue(pendingInviteAtom);
@@ -33,6 +34,7 @@ export const Home = () => {
   const owned = hasOwnedAccount();
   const openAccount = useSetAtom(accountPanelAtom);
   const glances = useMatchGlances();
+  const collectable = useCollectable();
   // The whole-game cap is a term of the deal — show the actual time left,
   // not just that a cap exists: an invite whose cap is nearly spent would
   // sudden-death the pot into an even split mid-game.
@@ -210,7 +212,14 @@ export const Home = () => {
          * otherwise. */}
         {matches.length > 0 && (
           <aside className="mx-auto mt-10 w-full max-w-115 xl:absolute xl:top-5 xl:right-full xl:mt-0 xl:mr-6 xl:w-64">
-            <MatchList matches={matches} glances={glances} busy={busy} onOpen={showMatch} />
+            <MatchList
+              matches={matches}
+              glances={glances}
+              collectable={collectable}
+              busy={busy}
+              onOpen={showMatch}
+              onCollect={collectMatch}
+            />
           </aside>
         )}
       </div>

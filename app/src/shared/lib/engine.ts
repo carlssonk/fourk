@@ -987,8 +987,8 @@ export async function continuation(
   return untilIndexed(rpc, mode, { ...nextMatch, txid }, match, lowHash);
 }
 
-/** Signed terminal door (cancel / winning_move / claim_forfeit / claim_timeout
- * / sweep_win): pot minus fee to the caller, who signs and directs freely.
+/** Signed terminal door (cancel / winning_move / claim_forfeit /
+ * claim_timeout): pot minus fee to the caller, who signs and directs freely.
  * `args` in ABI order, the caller's signature as `{ sig: 0 }`. */
 export async function signedTerminal(
   rpc: Rpc,
@@ -1013,12 +1013,13 @@ export async function signedTerminal(
   return txid;
 }
 
-/** Permissionless winner-take-all door: sudden_death fired on a PENDING win.
- * Unlike the even split, the covenant pays the whole pot (minus a self-funded
- * fee) to the pending winner in a single pinned output — so a vanished winner's
- * pot is pushed to them by anyone at the deadline instead of being halved by a
- * stalling loser. No signature: the payout address is fixed by the state, and
- * the covenant enforces both the single output and its destination. */
+/** Permissionless winner-take-all door: sweep_win, or sudden_death fired on
+ * a PENDING win. The covenant pays the whole pot (minus a self-funded fee) to
+ * the pending winner in a single pinned output — so a vanished winner's pot
+ * is pushed to them by anyone instead of waiting on their return (or being
+ * halved by a stalling loser at the deadline). No signature: the payout
+ * address is fixed by the state, and the covenant enforces both the single
+ * output and its destination. */
 export async function pinnedWinner(
   rpc: Rpc,
   mode: ModeEngine,

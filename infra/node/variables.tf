@@ -47,6 +47,12 @@ variable "cloudflared_version" {
   default     = "2026.10.0"
 }
 
+variable "node_version" {
+  description = "node image tag the sweeper runs on"
+  type        = string
+  default     = "24.7.0-alpine"
+}
+
 variable "rpc_max_clients" {
   description = "kaspad --rpcmaxclients: every open fourk tab holds one wRPC socket"
   type        = number

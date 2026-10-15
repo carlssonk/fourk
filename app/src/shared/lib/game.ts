@@ -57,6 +57,10 @@ export function applyMove(s: State, col: number): State {
 }
 
 /** First four-in-a-row witness for `disc`, or null. */
+/** Both players hold a line: in Fourk's simultaneous rounds, a split. */
+export const isDoubleWin = (board: Uint8Array): boolean =>
+  !!findWin(board, 1) && !!findWin(board, 2);
+
 export function findWin(board: Uint8Array, disc: number): LineWitness | null {
   for (let col = 0; col < COLS; col++)
     for (let row = 0; row < ROWS; row++)

@@ -5,6 +5,7 @@ export {
   ownedFeeReserve,
   busyAtom,
   clearError,
+  collectMatch,
   connectingAtom,
   createGame,
   errorAtom,

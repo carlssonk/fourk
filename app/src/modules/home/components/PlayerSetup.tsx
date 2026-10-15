@@ -157,16 +157,16 @@ export const PlayerSetup = ({
             </div>
           </div>
         </div>
-        <div className="mt-3 grid grid-cols-8 gap-1.5 max-sm:grid-cols-4">
+        <div className="mt-3 grid grid-cols-8 gap-1.5 max-sm:grid-cols-6">
           {batch.map((g, i) => (
             <button
               key={i}
               type="button"
               title="use this one"
               onClick={() => adopt(g)}
-              // One row on a phone: three candidates and the reroll.
+              // One row on a phone: five candidates and the reroll.
               className={`cursor-pointer rounded-md border border-line bg-field p-1 hover:border-accent ${
-                i >= 3 ? "max-sm:hidden" : ""
+                i >= 5 ? "max-sm:hidden" : ""
               }`}
             >
               <Avatar code={genesToCode(g)} size={44} animate={false} fluid className="block" />

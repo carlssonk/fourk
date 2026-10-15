@@ -137,6 +137,12 @@ export interface ModeActions {
    * shared crank (modes/common.ts) does not know — fourk2 pays a decided
    * timeout winner in full. */
   settleCap?(rpc: Rpc, key: PrivateKey, m: Match): Promise<string>;
+  /** A decided pot `myPk` can send to themselves from the match list, without
+   * opening the game (fourk2: the pending-win sweep). DAA blocks until it can
+   * be sent (0 = now), or null when there is nothing for them to collect. */
+  collectWait?(rpc: Rpc, m: Match, myPk: string): Promise<number | null>;
+  /** Send that payout; resolves with the ending to record on the match. */
+  collect?(rpc: Rpc, m: Match): Promise<string>;
 }
 
 export interface GameMode extends ModeEngine {

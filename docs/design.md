@@ -117,7 +117,9 @@ Design notes, mirroring the classic decisions:
   witnesses, permissionless, computable from the public board by anyone —
   stays legal on pending states and converts a hidden double win into the
   fair split at leisure; `sweep_win` pays the pending winner once the
-  window lapses, its sequence lock enforced by consensus itself. The old
+  window lapses, its sequence lock enforced by consensus itself. The sweep
+  is permissionless (single output pinned to the winner), so the
+  opponent's client pays a winner who has closed the game. The old
   edge (greedy one-line `claim_win` racing honest `claim_split` in the
   mempool — a race a bot always wins) is gone; the round doors, the draw,
   and both timeout doors gate on `pending_win == 0` (`split_timeout`
@@ -168,11 +170,11 @@ check):
   unjoinable.
 
 Payout enforcement is asymmetric on purpose: the permissionless doors
-(`claim_draw`, `sudden_death`, and in Fourk `claim_split` and
-`split_timeout`) and `dissolve`, whose signer refunds the other player too,
+(`claim_draw`, `sudden_death`, and in Fourk `claim_split`, `split_timeout`
+and `sweep_win`) and `dissolve`, whose signer refunds the other player too,
 pin their outputs to the players' keys and pay the fee out of the pot,
-capped by `MAX_FEE`; `cancel`, `winning_move`, `claim_forfeit`,
-`claim_timeout` and `sweep_win` are signed by the party the whole pot
+capped by `MAX_FEE`; `cancel`, `winning_move`, `claim_forfeit` and
+`claim_timeout` are signed by the party the whole pot
 belongs to, so they direct funds freely like any wallet spend (no forced
 address reuse). Every terminal door requires zero authorized covenant
 outputs, ending the KIP-20 lineage cleanly.

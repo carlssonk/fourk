@@ -36,10 +36,11 @@ const int MAX_MOVE_TIMEOUT = 8640000;
 // strictly in DAA-score territory.
 const int DEADLINE_LIMIT = 500000000000;
 // Fee ceiling for the self-funded terminal doors. The pinned-payout doors
-// (dissolve, claim_draw, sudden_death, claim_split, split_timeout) take a
-// SINGLE input — the match UTXO — and pay the fee out of the pot, instead of
-// riding on a separate funding input. That is what makes require(tx.inputs.
-// length == 1) safe to demand, and demanding it is what stops pot aggregation:
+// (dissolve, claim_draw, sudden_death, claim_split, split_timeout, sweep_win)
+// take a SINGLE input — the match UTXO — and pay the fee out of the pot,
+// instead of riding on a separate funding input. That is what makes
+// require(tx.inputs.length == 1) safe to demand, and demanding it is what
+// stops pot aggregation:
 // two same-stake matches can no longer be swept in one transaction so their
 // shared pinned split leaks the surplus pot as change. The pot pays the crank
 // fee (fairer for a permissionless door than charging a passing observer);
@@ -654,15 +655,21 @@ actor FourkSimulV2 owns SimulV2MatchState {
         require(tx.outputs[0].value >= half_floor);
     }
 
-    entry sweep_win(sig s) emits none {
+    // Permissionless: the single output is pinned to the pending winner, so
+    // anyone (the opponent's client, an observer) can pay a winner who left.
+    entry sweep_win() emits none {
         require(pending_win == 1 || pending_win == 2);
         require(this.ageDaa >= reveal_timeout);
 
+        require(tx.inputs.length == 1);
+        require(tx.outputs.length == 1);
         pubkey winner_pk = p1;
         if (pending_win == 2) {
             winner_pk = p2;
         }
-        require(checkSig(s, winner_pk));
+        byte[36] w_lock = new ScriptPubKeyP2PK(winner_pk);
+        require(tx.outputs[0].scriptPubKey == byte[](w_lock));
+        require(tx.outputs[0].value >= self.value - MAX_FEE);
     }
 
     // Permissionless cleanup retains a decided timeout or board winner.

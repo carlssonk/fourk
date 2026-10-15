@@ -299,16 +299,16 @@ export function applyClaimWin(s: SimulState, disc: number): SimulState {
 
 /**
  * Terminal door: sweep a pending win whose challenge window has lapsed.
- * Signed by the sole owner of the pot, so funds go wherever they direct.
- * The window is one move clock of UTXO age — consensus itself (the sequence
- * lock) rejects an early sweep, so there is nothing to race.
+ * Permissionless (payout pinned to the pending winner), so anyone — the
+ * opponent's client, an observer — can pay a winner who has left. The window
+ * is one move clock of UTXO age — consensus itself (the sequence lock)
+ * rejects an early sweep, so there is nothing to race.
  */
 export function sweepWin(s: SimulState, ctx: Ctx): Payout[] {
   req(!isSimulOpen(s), "match not started");
   const winner = pendingWinner(s);
   req(winner !== null, "no win claim pending");
   req(ctx.utxoAge >= s.moveTimeout, "challenge window still open");
-  req(ctx.signer === simulPubkeyOf(s, winner), "only the pending winner can sweep");
   return [{ to: simulPubkeyOf(s, winner), amount: simulPot(s) }];
 }
 

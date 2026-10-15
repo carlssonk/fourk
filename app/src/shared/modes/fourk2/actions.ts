@@ -6,7 +6,7 @@
  * built, and one it accepts carries exactly the gates the covenant checks.
  */
 
-import { CELLS, findWin, isOpen, type LineWitness } from "../../lib/game";
+import { CELLS, findWin, isDoubleWin, isOpen, type LineWitness } from "../../lib/game";
 import { fromHex, isStaked, toHex, type Match } from "../../lib/match";
 import * as engine from "../../lib/engine";
 import { ensureFunds } from "../../lib/dispenser";
@@ -133,21 +133,15 @@ export async function claimWinMatch(
   );
 }
 
-/** Sweep a pending win once the challenge window (the reveal grace) lapsed. */
-export async function sweepWinMatch(
-  rpc: engine.Rpc,
-  key: engine.PrivateKey,
-  match: Match,
-): Promise<string> {
-  return engine.signedTerminal(
-    rpc,
-    key,
-    fourk2Engine,
-    match,
-    "sweep_win",
-    [{ sig: 0 }],
-    BigInt(core2Of(match).revealTimeout),
-  );
+/** Sweep a pending win once the challenge window (the reveal grace) lapsed.
+ * Permissionless: the covenant pins the pot to the pending winner, so either
+ * player's client (or anyone) can send it — no key needed. */
+export async function sweepWinMatch(rpc: engine.Rpc, match: Match): Promise<string> {
+  const core = core2Of(match);
+  const winner = core.pendingWin === 1 ? match.state.p1 : match.state.p2;
+  return engine.pinnedWinner(rpc, fourk2Engine, match, "sweep_win", winner, {
+    sequence: BigInt(core.revealTimeout),
+  });
 }
 
 export async function claimSplitMatch(
@@ -320,10 +314,33 @@ export const fourk2Actions: ModeActions = {
   },
   claimTimeout: claimTimeoutMatch,
   settleCap: suddenDeathMatch,
+  async collectWait(rpc, m, myPk) {
+    const core = core2Of(m);
+    if (core.pendingWin === 0 || isOpen(m.state)) return null;
+    if ((core.pendingWin === 1 ? m.state.p1 : m.state.p2) !== myPk) return null;
+    // A double win is a split, not a sweep — the game's contest settles it.
+    if (isDoubleWin(m.state.board)) return null;
+    const age = await engine.gameUtxoAge(rpc, fourk2Engine, m);
+    if (age === null) return null;
+    return Math.max(0, core.revealTimeout - age);
+  },
+  async collect(rpc, m) {
+    if (isDoubleWin(m.state.board)) throw new Error("A double win splits; open the game to settle it.");
+    // Already gone: every door out of a single-line pending win pays the
+    // winner (sweep_win, or sudden_death to the pending owner; claim_split
+    // needs a second line on this same committed board), so it was paid.
+    if (await engine.fetchGameUtxo(rpc, fourk2Engine, m)) await sweepWinMatch(rpc, m);
+    return WIN_MESSAGE;
+  },
 };
+
+/** How much longer the loser's client waits before sweeping, so the winner's
+ * own client usually sends it first. */
+const LOSER_SWEEP_DELAY_DAA = 50;
 
 export const SPLIT_MESSAGE = "You both connected four in the same drop. The pot split evenly.";
 const WIN_MESSAGE = "You connected four. You win!";
+const LOSS_MESSAGE = "Your opponent connected four.";
 const NO_PICKS_MESSAGE = "Neither player picked before the timer ended. The pot split evenly.";
 const STALL_MESSAGE = "The game stalled on both sides. It timed out and the pot split evenly.";
 
@@ -354,19 +371,25 @@ export function fourk2AutoActions(m: Match, ctx: AutoCtx): AutoAction[] {
           return { kind: "finished", message: SPLIT_MESSAGE };
         },
       });
-    } else if (core.pendingWin === myDisc) {
+    } else {
+      // Either player sends the sweep — it can only pay the winner, so a
+      // winner who closed the game is still paid by the opponent's client.
+      // The loser waits a little longer so the winner's own client usually
+      // lands it first and the two do not race for the same UTXO.
+      const mine = core.pendingWin === myDisc;
       out.push({
         key: "sweep",
         oncePer: "match",
         scheduleMs: async (rpc) => {
           const age = await engine.gameUtxoAge(rpc, fourk2Engine, m);
           if (age === null) return 3000;
-          if (age >= core.revealTimeout) return 0;
-          return (core.revealTimeout - age) * 100 + 2000;
+          const slack = mine ? 0 : LOSER_SWEEP_DELAY_DAA;
+          if (age >= core.revealTimeout + slack) return 0;
+          return (core.revealTimeout + slack - age) * 100 + 2000;
         },
-        run: async (rpc, key, mm) => {
-          await sweepWinMatch(rpc, key, mm);
-          return { kind: "finished", message: WIN_MESSAGE };
+        run: async (rpc, _key, mm) => {
+          await sweepWinMatch(rpc, mm);
+          return { kind: "finished", message: mine ? WIN_MESSAGE : LOSS_MESSAGE };
         },
       });
     }

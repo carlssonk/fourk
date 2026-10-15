@@ -64,6 +64,7 @@ jobs:
         env:
           VITE_COMMIT_SHA: ${{ github.sha }}
           VITE_NODE_URL: ${{ vars.VITE_NODE_URL }}
+          VITE_SWEEPER_URL: ${{ vars.VITE_SWEEPER_URL }}
       # The built bundle must actually reach a node through the public
       # resolver: dev servers and pinned-node builds never take that path,
       # which is how a minified bundle that could not connect went unseen.

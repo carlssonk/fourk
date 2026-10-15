@@ -881,14 +881,6 @@ function simulAttempts<S extends SimulState>(
 
     for (const age of ages) {
       c.attempt(mode, s, {
-        entry: "sweep_win",
-        args: [{ sig: k }],
-        sequence: age,
-        run: (t) => rules.sweepWin(s, sctx(k, t.sequence)),
-        pinned: false,
-        signer: k,
-      });
-      c.attempt(mode, s, {
         entry: "dissolve",
         args: [{ sig: k }, { bytes: KEYS[k]! }],
         sequence: age,
@@ -926,6 +918,14 @@ function simulAttempts<S extends SimulState>(
       entry: "claim_split",
       args: [...witnessArgs(w1), ...witnessArgs(w2)],
       run: () => rules.claimSplit(s, sctx(2), w1, w2),
+      pinned: true,
+    });
+  for (const age of ages)
+    c.attempt(mode, s, {
+      entry: "sweep_win",
+      args: [],
+      sequence: age,
+      run: (t) => rules.sweepWin(s, sctx(2, t.sequence)),
       pinned: true,
     });
   for (const age of ages)

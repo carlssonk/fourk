@@ -7,7 +7,9 @@ import { isStaleMatchError } from "@shared/lib/errors";
 import { inviteLink } from "@shared/lib/invite";
 import { fmtDaaDuration, fmtKas, isStaked, loadCheckpoint, type Match } from "@shared/lib/match";
 import { gameEnd } from "@shared/lib/result";
+import { HAS_SWEEPER, registerSweep } from "@shared/lib/sweeper";
 import { modeOf } from "@shared/modes/registry";
+import { isCore2 } from "@shared/modes/fourk2/core";
 import type { StatusDescriptor } from "@shared/modes/types";
 import { playClaimReady, playClockExpired, playClockWarning } from "@shared/lib/sound";
 import { DiscLoader } from "@shared/components/DiscLoader";
@@ -82,6 +84,14 @@ export const Game = ({ match }: Props) => {
   const staked = isStaked(match);
   const { result, finish, myTurn, needManualImport, importMatch } = useMatchWatcher(match);
   const ending = gameEnd(match, myPk, result);
+  // Hand a pending win to the payout service, so the winner is paid even if
+  // both players leave before its challenge window ends.
+  const pendingWin = isCore2(match.simul) ? match.simul.pendingWin : 0;
+  useEffect(() => {
+    if (pendingWin && iAmPlayer && !result) void registerSweep(match);
+    // Once per pending game UTXO, not on every re-render of the same one.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [match.txid, pendingWin]);
   // Dismissing the verdict card reveals the final position; the banner and
   // end-game buttons below take over. A game that was already over when
   // opened (e.g. from Your matches, which shows the outcome) starts that
@@ -374,11 +384,16 @@ export const Game = ({ match }: Props) => {
   // into the ending sentences (resultTone classifies those by substring).
   // A testnet reset returns nothing, so it gets no money line.
   let potLine: string | undefined;
+  const challengeWindow = isCore2(match.simul) ? match.simul.revealTimeout : s.moveTimeout;
   const tone = ending?.tone ?? "neutral";
   if (staked && ending?.settling && iAmPlayer) {
     potLine =
       tone === "win"
-        ? `Winnings available about ${fmtDaaDuration(s.moveTimeout)} after the win. Keep this game open to collect, or reopen it from Your matches.`
+        ? `Winnings reach your balance about ${fmtDaaDuration(challengeWindow)} after the win. ${
+            HAS_SWEEPER
+              ? "If they don't arrive, collect them from Your matches."
+              : "If you both leave the game before then, collect them from Your matches."
+          }`
         : tone === "loss"
           ? "Your opponent's winnings are being processed."
           : "Your share is being returned. You can reopen this game from Your matches.";

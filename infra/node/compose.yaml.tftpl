@@ -30,11 +30,50 @@ services:
       options:
         max-size: 50m
 
+  # Pays pending Fourk wins once their challenge window ends (app/sweeper).
+  # Holds no keys; reachable only as https://<hostname>/sweep through the
+  # tunnel. Locked down anyway: it parses requests from the internet on the
+  # box that serves the app's chain data.
+  sweeper:
+    image: node:${node_version}
+    restart: unless-stopped
+    command: ["node", "/srv/sweeper.mjs"]
+    environment:
+      NODE_URL: ws://kaspad:${borsh_port}
+      PORT: "8080"
+    volumes:
+      - ./sweeper:/srv:ro
+    user: node
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    pids_limit: 64
+    init: true
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      # The node can take a long while to sync after a restart.
+      start_period: 10m
+    depends_on:
+      - kaspad
+    logging:
+      driver: local
+      options:
+        max-size: 10m
+
   cloudflared:
     image: cloudflare/cloudflared:${cloudflared_version}
     restart: unless-stopped
     command: tunnel --no-autoupdate run
     env_file: .env
+    # Not on the sweeper: a broken payout helper must never keep the node
+    # itself off the tunnel.
     depends_on:
       - kaspad
     logging:

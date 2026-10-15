@@ -27,3 +27,6 @@ docs/internal/
 
 # wrangler local state
 .wrangler/
+
+# the sweeper bundle (pnpm --dir app build:sweeper)
+app/sweeper/dist/

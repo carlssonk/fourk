@@ -1126,6 +1126,51 @@ fn cap_cleanup_pays_the_timeout_winner_and_cannot_shorten_response_windows() {
     ));
 }
 
+/// Now that anyone may sweep, the single-input rule is what keeps a stranger
+/// from batching two of a winner's pending pots into one transaction: each
+/// input alone would accept the one pinned output, and the second pot would
+/// go to the miner as fee.
+#[test]
+fn a_sweep_cannot_batch_two_pending_pots() {
+    let mut board = vec![0u8; 42];
+    board[0..4].fill(1);
+    let mut pending = started();
+    pending.insert("board".into(), ArtifactValue::Bytes(board));
+    number(&mut pending, "pending_win", 1);
+    let builder = TxBuilder::new(artifact()).unwrap();
+    let mut context = TxContext::new();
+    let mut utxos = vec![];
+    for i in 0..2u8 {
+        let id = Hash::from_bytes([0xc0 + i; 32]);
+        let utxo = builder
+            .covenant_utxo("FourkSimulV2", pending.clone(), POT, 1000, false, Some(id))
+            .unwrap();
+        context = context.actor_input(
+            "FourkSimulV2",
+            pending.clone(),
+            EntryCall::new("sweep_win"),
+            TransactionOutpoint {
+                transaction_id: TransactionId::from_bytes([0x30 + i; 32]),
+                index: 0,
+            },
+            utxo.clone(),
+            600,
+        );
+        utxos.push(utxo);
+    }
+    context = context.output(spk(1), None, POT - MAX_FEE);
+    rejected(
+        builder
+            .build(&context)
+            .map_err(|e| format!("build: {e}"))
+            .and_then(|mut tx| {
+                execute_transaction_with_covenants(&mut tx, utxos)
+                    .map_err(|e| format!("script: {e}"))?;
+                Ok(tx)
+            }),
+    );
+}
+
 #[test]
 fn board_wins_keep_their_challenge_window_and_double_win_contest() {
     let mut board = vec![0u8; 42];
@@ -1146,7 +1191,8 @@ fn board_wins_keep_their_challenge_window_and_double_win_contest() {
         0,
         vec![],
     ));
-    let sweep = || EntryCall::new("sweep_win").args_with(|tx, idx| args![sign(tx, idx, 1)]);
+    // Permissionless: no signature, so whoever sends it can only pay the winner.
+    let sweep = || EntryCall::new("sweep_win");
     rejected(run(
         pending.clone(),
         None,
@@ -1164,6 +1210,35 @@ fn board_wins_keep_their_challenge_window_and_double_win_contest() {
         0,
         600,
         vec![(spk(1), POT)],
+    ));
+    ok(run(
+        pending.clone(),
+        None,
+        sweep(),
+        1000,
+        0,
+        600,
+        vec![(spk(1), POT - MAX_FEE)],
+    ));
+    // The loser (or anyone) cannot redirect it, split it, or burn it as fee.
+    rejected(run(
+        pending.clone(),
+        None,
+        sweep(),
+        1000,
+        0,
+        600,
+        vec![(spk(2), POT)],
+    ));
+    rejected(run(pending.clone(), None, sweep(), 1000, 0, 600, split()));
+    rejected(run(
+        pending.clone(),
+        None,
+        sweep(),
+        1000,
+        0,
+        600,
+        vec![(spk(1), POT - MAX_FEE - 1)],
     ));
     ok(run(
         pending.clone(),

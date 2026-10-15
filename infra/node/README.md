@@ -7,6 +7,7 @@ answer at startup (`connect()` in `app/src/shared/lib/engine.ts`).
 
 ```
 browser ── wss://node.fourk.io ──▶ Cloudflare ──tunnel──▶ cloudflared ──▶ kaspad :17210 (borsh)
+browser ── https://node.fourk.io/sweep ──▶ (same tunnel) ──▶ sweeper :8080 ──▶ kaspad
                                                     Hetzner server, docker compose
 other kaspa nodes ◀──────────── p2p :16211 ───────────▶ kaspad
 ```
@@ -18,7 +19,8 @@ on `--testnet --netsuffix=10`.
 
 ## First deploy
 
-You need Terraform ≥ 1.6, an SSH key in your agent, and:
+You need Terraform ≥ 1.6, Node and pnpm (for the sweeper bundle), an SSH
+key in your agent, and:
 
 - A Hetzner Cloud project API token (read/write).
 - A Cloudflare API token with **Account → Cloudflare Tunnel → Edit** and
@@ -30,6 +32,7 @@ You need Terraform ≥ 1.6, an SSH key in your agent, and:
   that has never done this.
 
 ```sh
+pnpm --dir app build:sweeper                   # from the repo root; see "Payout sweeper"
 cd infra/node
 cp terraform.tfvars.example terraform.tfvars   # fill it in
 export HCLOUD_TOKEN=... CLOUDFLARE_API_TOKEN=...
@@ -57,6 +60,38 @@ Cloudflare closes a websocket after about two minutes of silence, so the
 app pings the node every 30 s (`KEEPALIVE_MS` in
 `app/src/shared/state/rpc.ts`). Without it a player waiting on an opponent
 dropped and reconnected every ~125 s.
+
+## Payout sweeper
+
+A Fourk win waits out a challenge window (about 5 minutes) before
+`sweep_win` can pay it. Anyone may send `sweep_win`, and the covenant pins
+its only output to the winner, so the `sweeper` service sends it for
+players who have left. Players' clients send it too, and the match list
+has a Collect button, so the sweeper is a convenience, never the only path.
+
+- **What it does:** the app posts a pending win to
+  `https://node.fourk.io/sweep` (`VITE_SWEEPER_URL`, see `app/DEPLOY.md`).
+  The sweeper queues it only if this node holds a live game UTXO at the
+  address its full state derives, then sends the sweep through the local
+  kaspad when the window ends. Code: `app/sweeper/`.
+- **What it holds:** no keys, no funds (the fee comes out of the pot,
+  capped by the covenant's `MAX_FEE`), no names, and nothing on disk. A
+  restart forgets the queue; the clients still cover those wins.
+- **Limits:** 8 KB per request, 20 requests a minute per client
+  (`CF-Connecting-IP`), 1,000 queued wins. These are in-process only; a
+  Cloudflare rate-limiting rule on `/sweep` would stop floods before they
+  reach the box, and needs a token with Zone → WAF → Edit.
+- **Lockdown:** the container runs as `node`, read-only, with no
+  capabilities, a memory and pid cap, and only the tunnel in front of it.
+  It shares the box with kaspad, which browsers trust for chain data, so
+  keep it that way.
+- **Deploy a change:** `pnpm --dir app build:sweeper`, then
+  `terraform apply`. The bundle's hash triggers the upload and restart; a
+  missing bundle fails the plan. Build without `VITE_NETWORK_ID` (or with
+  `testnet-10`): a simnet bundle refuses this node and only logs
+  `waiting for ws://kaspad:17210`.
+- **Logs:** `docker compose -f /opt/kaspa/compose.yaml logs -f sweeper`
+  shows each sweep and anything it gave up on.
 
 ## Changes
 

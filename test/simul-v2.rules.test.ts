@@ -163,6 +163,7 @@ test("the cap and reveal grace cannot turn a timeout winner into a refund", () =
   const won = v2.claimWin({ ...started(), board }, at(P1), { col: 0, row: 0, dir: 1 });
   expect(() => v2.sweepWin(won, at(P1, 5000, 0, 599))).toThrow();
   expect(v2.sweepWin(won, at(P1, 5000, 0, 600))).toEqual(win);
+  expect(v2.sweepWin(won, at(STRANGER, 5000, 0, 600))).toEqual(win);
   expect(v2.suddenDeath(won, at(STRANGER, 5000, 100_000, 600))).toEqual(win);
   // With nobody picked, the cap waits out the full picking window (or the
   // lobby clock) instead of the shorter reveal grace.
