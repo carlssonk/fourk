@@ -8,7 +8,7 @@ export const fourk2Mode: GameMode = {
   meta: {
     key: "fourk2",
     label: "Fourk",
-    blurb: "Both players pick a column in secret before one shared timer, the discs drop together.",
+    blurb: "Both players pick a column in secret, then the discs drop together.",
     moveNoun: "pick",
   },
   ...fourk2Engine,
