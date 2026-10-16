@@ -39,6 +39,8 @@ export interface ChainOps {
     onSubmit?: (m: Match) => void,
   ): Promise<Match>;
   assertJoinableDeadline(invite: Match): Promise<void>;
+  /** Close our own open lobby and take the stake back. */
+  cancelMatch(key: PrivateKey, match: Match): Promise<void>;
 }
 
 export interface AccountOps {
@@ -50,6 +52,23 @@ export interface AccountOps {
 export interface Deps {
   chain: ChainOps;
   account: AccountOps;
+}
+
+/** Where a Quick Match ticket stands (app/sweeper/match.ts). */
+export type PollState =
+  { state: "waiting" | "host" | "hosted" | "matched" | "gone" } | { state: "join"; code: string };
+
+/** The matchmaker route on our node (docs/adr/0003). */
+export interface MatchmakerOps {
+  /** Join the queue as `pk`; returns the ticket to poll. */
+  seek(pk: string): Promise<string>;
+  poll(ticket: string): Promise<PollState>;
+  /** Post the host's lobby: `retry` until the matchmaker's node has it. */
+  hosted(ticket: string, code: string): Promise<"ok" | "retry" | "refused">;
+}
+
+export interface QuickMatchDeps extends Deps {
+  matchmaker: MatchmakerOps;
 }
 
 export const realChain: ChainOps = {
@@ -70,6 +89,9 @@ export const realChain: ChainOps = {
   },
   async assertJoinableDeadline(invite) {
     await cov.assertJoinableDeadline(await getRpc(), invite);
+  },
+  async cancelMatch(key, match) {
+    await cov.cancelMatch(await getRpc(), key, match);
   },
 };
 

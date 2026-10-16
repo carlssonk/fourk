@@ -70,6 +70,7 @@ function fakeChain(over: Partial<ChainOps> = {}): ChainOps {
       value: invite.state.stake * 2n,
     })),
     assertJoinableDeadline: vi.fn(async () => {}),
+    cancelMatch: vi.fn(async () => {}),
     ...over,
   };
 }

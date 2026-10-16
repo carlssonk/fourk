@@ -10,7 +10,9 @@ import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const outDir = resolve(here, "dist");
+// Overridable so a local-chain build (localnet/browser.sh) never lands in the
+// dist that infra/node uploads.
+const outDir = process.env.SWEEPER_OUT_DIR ?? resolve(here, "dist");
 
 export default defineConfig({
   root: here,

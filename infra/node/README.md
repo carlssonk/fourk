@@ -8,6 +8,7 @@ answer at startup (`connect()` in `app/src/shared/lib/engine.ts`).
 ```
 browser ── wss://node.fourk.io ──▶ Cloudflare ──tunnel──▶ cloudflared ──▶ kaspad :17210 (borsh)
 browser ── https://node.fourk.io/sweep ──▶ (same tunnel) ──▶ sweeper :8080 ──▶ kaspad
+browser ── https://node.fourk.io/match/ ─▶ (same tunnel) ──▶ sweeper :8080 ──▶ kaspad
                                                     Hetzner server, docker compose
 other kaspa nodes ◀──────────── p2p :16211 ───────────▶ kaspad
 ```
@@ -92,6 +93,14 @@ has a Collect button, so the sweeper is a convenience, never the only path.
   `waiting for ws://kaspad:17210`.
 - **Logs:** `docker compose -f /opt/kaspa/compose.yaml logs -f sweeper`
   shows each sweep and anything it gave up on.
+
+The same process runs the Quick Match matchmaker under
+`https://node.fourk.io/match/` (`app/sweeper/match.ts`, docs/adr/0003). It
+pairs players and forwards the host's share code once this node holds that
+lobby on the Quick Match terms. It holds no keys and no funds, and keeps
+the queue in memory only: a restart drops everyone searching, and their
+clients say Quick Match is unavailable. Limits: 8 KB per request, 120
+requests and 6 seeks a minute per client, 1,000 tickets.
 
 ## Changes
 

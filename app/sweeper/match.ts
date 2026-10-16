@@ -41,7 +41,8 @@ interface Ticket {
   pk: string;
   /** When this ticket last seeked or polled. */
   seen: number;
-  /** The ticket this one is paired with, and whether this one hosts. */
+  /** The ticket this one is paired with, and whether this one hosts. A
+   * host keeps `hosts` and `pairedAt` (its grace) across partners. */
   partner?: string;
   hosts?: boolean;
   pairedAt?: number;
@@ -100,19 +101,25 @@ export function createMatchmaker(rpc: engine.Rpc, now: () => number = Date.now) 
       const late = t.hosts && !t.code && now() - t.pairedAt! > HOST_GRACE_MS;
       if (late || now() - t.seen > POLL_GRACE_MS) tickets.delete(id);
     }
-    // A host keeps a lobby the chain already holds: the next seeker takes it.
+    // A host stays host when its partner leaves: its lobby (open, or still
+    // opening) goes to the next seeker, and its grace keeps running.
     for (const t of tickets.values())
       if (t.partner && !t.taken && !tickets.has(t.partner))
-        Object.assign(t, { partner: undefined, hosts: t.code ? true : undefined, pairedAt: undefined });
+        Object.assign(
+          t,
+          t.hosts
+            ? { partner: undefined }
+            : { partner: undefined, hosts: undefined, pairedAt: undefined },
+        );
     const waiting = [...tickets].filter(([, t]) => !t.partner);
-    // Open lobbies first, then the longest wait: the older one hosts.
-    waiting.sort(([, x], [, y]) => Number(!!y.code) - Number(!!x.code));
+    // Hosts first, then the longest wait: the older one hosts.
+    waiting.sort(([, x], [, y]) => Number(!!y.hosts) - Number(!!x.hosts));
     while (waiting.length > 1) {
       const [hostId, host] = waiting.shift()!;
-      const i = waiting.findIndex(([, t]) => t.pk !== host.pk && !t.code);
+      const i = waiting.findIndex(([, t]) => t.pk !== host.pk && !t.hosts);
       if (i < 0) continue;
       const [id, t] = waiting.splice(i, 1)[0]!;
-      Object.assign(host, { partner: id, hosts: true, pairedAt: now() });
+      Object.assign(host, { partner: id, hosts: true, pairedAt: host.pairedAt ?? now() });
       Object.assign(t, { partner: hostId, hosts: false, pairedAt: now() });
     }
   }
@@ -168,6 +175,8 @@ export function createMatchmaker(rpc: engine.Rpc, now: () => number = Date.now) 
     const t = tickets.get(ticket);
     if (!t) return json(404, { error: "no such ticket" });
     if (!t.hosts || lobby.state.p1 !== t.pk) return json(403, { error: "not your lobby to host" });
+    // Posting is the host's poll while it waits for the node to index the lobby.
+    t.seen = now();
     if (!isQuickMatchTerms(lobby)) return json(400, { error: "not Quick Match terms" });
     const entry = await engine.fetchGameUtxo(rpc, fourk2Engine, lobby);
     // Value from the chain, as in the sweeper: a lobby holds the host's stake.

@@ -1,5 +1,5 @@
-# Our testnet-10 node (infra/node) behind wss://node.fourk.io, and its payout
-# sweeper at /sweep. Checked every 15 minutes; a failed run is the alert:
+# Our testnet-10 node (infra/node) behind wss://node.fourk.io, its payout
+# sweeper at /sweep, and the Quick Match matchmaker under /match/. Checked every 15 minutes; a failed run is the alert:
 # GitHub emails it to whoever last changed this schedule.
 name: node
 
@@ -36,5 +36,14 @@ jobs:
         run: |
           check() { [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d x "$SWEEPER_URL")" = 400 ]; }
           check || { sleep 60; check; } || { echo "sweeper did not answer 400"; exit 1; }
+        env:
+          SWEEPER_URL: ${{ vars.VITE_SWEEPER_URL }}
+      # The matchmaker, in the same process: a seek without a key must be
+      # refused (400). A 404 or 502 here with /sweep fine means the tunnel
+      # doesn't route /match/.
+      - if: vars.VITE_SWEEPER_URL != ''
+        run: |
+          check() { [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST -d x "${SWEEPER_URL%/sweep}/match/seek")" = 400 ]; }
+          check || { sleep 60; check; } || { echo "matchmaker did not answer 400"; exit 1; }
         env:
           SWEEPER_URL: ${{ vars.VITE_SWEEPER_URL }}

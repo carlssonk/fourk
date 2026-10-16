@@ -52,6 +52,12 @@ export { askConfirm, confirmAtom } from "./confirm";
 export { RESET_RESULT, clearNetworkReset, networkResetAtom } from "./network";
 export { getRpc, initRpc, reconnectingAtom, rpcClientAtom, rpcFailuresAtom } from "./rpc";
 export { initStateLayer } from "./init";
+export {
+  quickMatchAtom,
+  startQuickMatch,
+  stopQuickMatch,
+  type QuickMatchStatus,
+} from "./quickMatch";
 export { realDeps, type AccountOps, type ChainOps, type Deps } from "./deps";
 export {
   activeAccount,

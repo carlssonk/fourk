@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # The whole local stack in one command: the dev simnet node, a miner, a
-# funded dispenser, and the app pinned to that chain. Ctrl-C stops all of it;
+# funded dispenser, the sweeper (payouts and the Quick Match matchmaker),
+# and the app pinned to that chain. Ctrl-C stops all of it;
 # the chain itself (localnet/.kaspad-simnet) persists until reset.sh.
 #
 #     pnpm dev            # from the repo root
@@ -24,7 +25,9 @@ up() { nc -z 127.0.0.1 "$PORT" >/dev/null 2>&1; }
 
 NODE_PID=""
 MINER_PID=""
+SWEEPER_PID=""
 cleanup() {
+  [[ -n "$SWEEPER_PID" ]] && kill "$SWEEPER_PID" 2>/dev/null || true
   [[ -n "$MINER_PID" ]] && kill "$MINER_PID" 2>/dev/null || true
   [[ -n "$NODE_PID" ]] && kill "$NODE_PID" 2>/dev/null && wait "$NODE_PID" 2>/dev/null || true
 }
@@ -73,5 +76,18 @@ else
   MINER_PID=$!
 fi
 
+# Built for simnet into the chain's own directory, never sweeper/dist
+# (which infra/node deploys).
+SWEEPER_PORT=8791
+if curl -sf "http://127.0.0.1:$SWEEPER_PORT/healthz" >/dev/null 2>&1; then
+  echo "sweeper: reusing the one on :$SWEEPER_PORT"
+else
+  echo "sweeper: running on :$SWEEPER_PORT (log: $DATA/sweeper.log)"
+  VITE_NETWORK_ID=simnet SWEEPER_OUT_DIR="$PWD/$DATA/sweeper" pnpm --dir app build:sweeper >/dev/null
+  NODE_URL="$KASPA_RPC_URL" PORT="$SWEEPER_PORT" node "$DATA/sweeper/sweeper.mjs" >"$DATA/sweeper.log" 2>&1 &
+  SWEEPER_PID=$!
+fi
+
 VITE_NODE_URL="$KASPA_RPC_URL" VITE_NETWORK_ID=simnet VITE_RESET_MARGIN=500 \
+  VITE_SWEEPER_URL="http://127.0.0.1:$SWEEPER_PORT/sweep" \
   pnpm --dir app start

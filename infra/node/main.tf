@@ -173,9 +173,10 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "node" {
   config = {
     ingress = [
       {
-        # The payout service's one route; everything else is the node.
+        # The sweeper process: payouts at /sweep and the Quick Match
+        # matchmaker under /match/; everything else is the node.
         hostname = var.hostname
-        path     = "^/sweep$"
+        path     = "^/(sweep|match/.+)$"
         service  = "http://sweeper:8080"
       },
       {

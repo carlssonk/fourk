@@ -154,9 +154,16 @@ const TOTAL_CAP_CLOCKS = 128;
  * sudden-death out from under a player who answered an invite over lunch. */
 const MIN_TOTAL_CAP_DAA = 864_000;
 
+/** The timing a game on this per-move clock is hosted with. */
+export function timingFor(moveTimeout: number): MatchTiming {
+  return {
+    moveTimeout,
+    totalCap: Math.max(MIN_TOTAL_CAP_DAA, TOTAL_CAP_CLOCKS * moveTimeout),
+  };
+}
+
 export function getMatchTiming(): MatchTiming {
-  const moveTimeout = store.get(moveTimeoutAtom);
-  return { moveTimeout, totalCap: Math.max(MIN_TOTAL_CAP_DAA, TOTAL_CAP_CLOCKS * moveTimeout) };
+  return timingFor(store.get(moveTimeoutAtom));
 }
 
 /** Cross-tab (called once from initStateLayer): adopt identity/settings

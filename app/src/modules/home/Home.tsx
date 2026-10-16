@@ -18,11 +18,22 @@ import {
   matchesAtom,
   newGame,
   pendingInviteAtom,
+  quickMatchAtom,
   showMatch,
+  startQuickMatch,
+  stopQuickMatch,
   takeSeat,
 } from "@shared/state";
+import { HAS_QUICK_MATCH } from "@shared/lib/matchmaker";
 import { useCapClock } from "../game/hooks/useCapClock";
-import { AboutDialog, BoardBackdrop, MatchList, MatchSettings, PlayerSetup } from "./components";
+import {
+  AboutDialog,
+  BoardBackdrop,
+  MatchList,
+  MatchSettings,
+  PlayerSetup,
+  QuickMatchPanel,
+} from "./components";
 import { useCollectable, useMatchGlances } from "./hooks";
 
 export const Home = () => {
@@ -41,6 +52,7 @@ export const Home = () => {
   const inviteCapLeft = useCapClock(pendingInvite, !!pendingInvite);
   const [about, setAbout] = useState(false);
   const [rules, setRules] = useState(false);
+  const quick = useAtomValue(quickMatchAtom);
 
   if (pendingInvite) {
     // Chat apps open links in their own browser, with storage apart from
@@ -198,14 +210,27 @@ export const Home = () => {
       </p>
       <div className="relative mx-auto w-fit max-w-full">
         <div className="max-w-full">
-          <PlayerSetup
-            actionLabel="Private Game"
-            headlineLabel="Quick Match"
-            busy={busy}
-            onSubmit={newGame}
-            settings={<MatchSettings />}
-            pickDiscColor
-          />
+          {quick.phase === "idle" ? (
+            <PlayerSetup
+              actionLabel="Private Game"
+              headlineLabel="Quick Match"
+              onHeadline={HAS_QUICK_MATCH ? () => void startQuickMatch() : undefined}
+              busy={busy}
+              onSubmit={newGame}
+              settings={<MatchSettings />}
+              pickDiscColor
+            />
+          ) : (
+            <QuickMatchPanel
+              status={quick}
+              busy={busy}
+              onCancel={() => void stopQuickMatch()}
+              onPrivateGame={async () => {
+                await stopQuickMatch();
+                await newGame();
+              }}
+            />
+          )}
         </div>
         {/* Hung off the create column's left edge on wide screens so the
          * create flow stays on the page's center axis; stacked below it

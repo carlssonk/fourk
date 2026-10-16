@@ -12,8 +12,8 @@ reset. Defaults to simnet (~10 blocks/s); `KASPA_NETWORK=devnet` runs devnet ins
 pnpm dev            # from the repo root
 ```
 
-Starts the node, mines past coinbase maturity, funds the dispenser when it is low, and serves the
-app pinned to the chain; `app/.env.local` is not needed. A node or miner that is already running is
+Starts the node, mines past coinbase maturity, funds the dispenser when it is low, runs the sweeper
+(payouts and the Quick Match matchmaker, on :8791), and serves the app pinned to the chain; `app/.env.local` is not needed. A node or miner that is already running is
 reused. Ctrl-C stops what it started; the chain persists until `pnpm chain:reset`.
 
 Free games work once the dispenser lanes age past the drip cooldown (about 2 minutes of mining).

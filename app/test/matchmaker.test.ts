@@ -55,8 +55,7 @@ const lobby = (p1: string, moveTimeout = 3_000): Match => ({
   },
   simul: zeroCore2(moveTimeout),
 });
-const hosted = (ticket: string, m: Match) =>
-  JSON.stringify({ ticket, code: encodeShareCode(m) });
+const hosted = (ticket: string, m: Match) => JSON.stringify({ ticket, code: encodeShareCode(m) });
 
 /** The chain's view of the lobby UTXO. */
 const entry = { outpoint: { transactionId: "cd".repeat(32) }, amount: FREE_STAKE };
@@ -127,7 +126,10 @@ test("takes the lobby's value from the chain, not the code", async () => {
   const mm = matchmaker();
   const a = await seek(mm, alice);
   const b = await seek(mm, bob);
-  vi.mocked(engine.fetchGameUtxo).mockResolvedValueOnce({ ...entry, amount: FREE_STAKE * 2n } as never);
+  vi.mocked(engine.fetchGameUtxo).mockResolvedValueOnce({
+    ...entry,
+    amount: FREE_STAKE * 2n,
+  } as never);
   expect((await mm.hosted(hosted(a, lobby(alice)), "x")).status).toBe(404);
   expect(await poll(mm, b)).toMatchObject({ state: "waiting" });
 });
@@ -267,4 +269,44 @@ test("limits each client's seeks tightly and its requests loosely", async () => 
   expect((await mm.poll(t, "b")).status).toBe(200);
   clock += 60_000;
   expect((await mm.seek(JSON.stringify({ pk: alice }), "a")).status).toBe(200);
+});
+
+test("keeps a host who is still posting a lobby the node hasn't indexed", async () => {
+  const mm = matchmaker();
+  const a = await seek(mm, alice);
+  const b = await seek(mm, bob);
+  vi.mocked(engine.fetchGameUtxo).mockResolvedValue(null);
+  for (let i = 0; i < 6; i++) {
+    clock += 2_000;
+    expect((await mm.hosted(hosted(a, lobby(alice)), "x")).status).toBe(404);
+    await poll(mm, b);
+  }
+  vi.mocked(engine.fetchGameUtxo).mockResolvedValue(entry as never);
+  expect((await mm.hosted(hosted(a, lobby(alice)), "x")).status).toBe(202);
+  expect(await poll(mm, b)).toMatchObject({ state: "join" });
+});
+
+test("a host whose partner left mid-open keeps hosting for the next seeker", async () => {
+  const mm = matchmaker();
+  const a = await seek(mm, alice);
+  await seek(mm, bob);
+  clock += POLL_GRACE_MS - 1;
+  await poll(mm, a); // Alice's heartbeat while her lobby opens
+  clock += 2; // Bob has gone quiet
+  expect(await poll(mm, a)).toMatchObject({ state: "host" });
+  const c = await seek(mm, carol);
+  expect((await mm.hosted(hosted(a, lobby(alice)), "x")).status).toBe(202);
+  expect(await poll(mm, c)).toMatchObject({ state: "join", code: encodeShareCode(lobby(alice)) });
+});
+
+test("a host who keeps getting new partners still has to post within the grace", async () => {
+  const mm = matchmaker();
+  const a = await seek(mm, alice);
+  await seek(mm, bob);
+  for (let waited = 0; waited <= HOST_GRACE_MS; waited += 5_000) {
+    clock += 5_000;
+    await poll(mm, a);
+    await seek(mm, (waited / 5_000 + 0x40).toString(16).padStart(64, "0"));
+  }
+  expect(await poll(mm, a)).toMatchObject({ state: "gone" });
 });

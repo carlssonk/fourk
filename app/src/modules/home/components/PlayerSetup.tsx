@@ -18,10 +18,12 @@ interface Props {
   actionLabel: string;
   busy: boolean;
   onSubmit: () => void;
-  /** Placeholder headline action (e.g. matchmaking): rendered first but
-   * disabled. The submit button keeps primary styling — the live action
-   * stays the green one. */
+  /** Headline action (Quick Match), rendered first. Without
+   * `onHeadline` it's a disabled "soon" placeholder and the submit button
+   * keeps primary styling; with it, the headline is primary and the submit
+   * button steps down to secondary. */
   headlineLabel?: string;
+  onHeadline?: () => void;
   /** What kind of game to start (mode, clock, stake), rendered inside the
    * card below the identity section — create flow only; the join flow
    * inherits every setting from the invite. */
@@ -51,6 +53,7 @@ export const PlayerSetup = ({
   busy,
   onSubmit,
   headlineLabel,
+  onHeadline,
   settings,
   pickDiscColor = false,
 }: Props) => {
@@ -79,6 +82,14 @@ export const PlayerSetup = ({
 
   const adopt = (g: Genes) => {
     setGenes(g);
+  };
+
+  const submit = (action: () => void) => {
+    // An empty field is fine — the player gets a generated name rather
+    // than a nag; it's saved, so it shows up editable next time instead of
+    // being rerolled per game.
+    saveProfile({ name: name.trim() || anonName(), avatar: code });
+    action();
   };
 
   return (
@@ -184,7 +195,7 @@ export const PlayerSetup = ({
         {settings}
       </div>
       <div className="mt-3 flex flex-wrap justify-center gap-2.5 sm:mt-4">
-        {headlineLabel && (
+        {headlineLabel && !onHeadline && (
           <button type="button" disabled className="btn cursor-default px-8 py-2.5 text-lg">
             {headlineLabel}
             <span className="ml-2 rounded-sm bg-line px-1.5 py-0.5 align-middle text-[10px] font-bold uppercase text-dim">
@@ -192,16 +203,20 @@ export const PlayerSetup = ({
             </span>
           </button>
         )}
+        {headlineLabel && onHeadline && (
+          <button
+            type="button"
+            className="btn px-8 py-2.5 text-lg"
+            disabled={busy}
+            onClick={() => submit(onHeadline)}
+          >
+            {headlineLabel}
+          </button>
+        )}
         <button
-          className="btn px-8 py-2.5 text-lg"
+          className={`btn px-8 py-2.5 text-lg ${onHeadline ? "btn-ghost" : ""}`}
           disabled={busy}
-          onClick={() => {
-            // An empty field is fine — the player gets a generated name
-            // rather than a nag; it's saved, so it shows up editable next
-            // time instead of being rerolled per game.
-            saveProfile({ name: name.trim() || anonName(), avatar: code });
-            onSubmit();
-          }}
+          onClick={() => submit(onSubmit)}
         >
           {actionLabel}
         </button>

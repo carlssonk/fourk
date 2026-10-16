@@ -63,9 +63,10 @@ chain while they wait alone.
    does for an invite.
 6. **Fallback.** If either side stops polling, or the host posts no valid
    code within ~30 s of pairing, the other player goes back into the queue.
-   A host whose partner left before taking the code keeps its verified
-   lobby, and the next seeker is handed it directly, so no cancel
-   transaction is spent. Once the code has been handed over the pair is
+   A host whose partner left before taking the code stays host, so its
+   lobby (open or still opening) goes to the next seeker and no cancel
+   transaction is spent; its 30 s grace keeps running across partners. A
+   host polls through the open, so the 10 s presence check doesn't drop it. Once the code has been handed over the pair is
    done, and neither side leaving requeues the other. A lobby already
    opened by a host who then vanished is covered by the covenant's lobby
    exits and refunds; the matchmaker never serves it again. The poll
