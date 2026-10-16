@@ -30,9 +30,9 @@ export const AboutDialog = ({ onDismiss }: { onDismiss: () => void }) => (
       the chain itself enforces the rules: whose turn it is, where a disc can land, and who wins.
     </p>
     <p className="text-sm text-dim">
-      There's no server behind it. The site is just static files, your key is generated and stored
-      in your browser, and both players' browsers talk directly to the Kaspa network. To start a
-      game you send someone an invite link.
+      The site is static files, your key stays in your browser, and moves go straight to the Kaspa
+      network. A small service pairs players for Quick Match, but it holds no keys and can't move
+      funds or change a result. To play someone you know, send them an invite link.
     </p>
     <p className="text-sm text-dim">
       The code is open source at{" "}
