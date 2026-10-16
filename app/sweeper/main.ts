@@ -111,7 +111,12 @@ const node = await connect();
 const ready = createSweeper(node);
 rpc = node;
 sweeper = ready;
-matchmaker = createMatchmaker(node);
+// Local runs (localnet/dev.sh, browser.sh) put every client on 127.0.0.1.
+const limit = (name: string) => (process.env[name] ? Number(process.env[name]) : undefined);
+matchmaker = createMatchmaker(node, Date.now, {
+  seekLimit: limit("MATCH_SEEK_LIMIT"),
+  requestLimit: limit("MATCH_REQUEST_LIMIT"),
+});
 let lastOnline = Date.now();
 setInterval(() => {
   if (node.isConnected) {

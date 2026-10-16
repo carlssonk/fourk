@@ -10,8 +10,9 @@
  * A ticket's poll answers one of:
  * - `waiting`: in the queue, or paired and waiting for the host's lobby.
  * - `host`: paired as host; open the lobby and post its code to /hosted.
- * - `hosted`: the lobby is verified and waiting for a joiner. If the
- *   partner left first, the next seeker gets it, so keep the lobby open.
+ * - `hosted`: the lobby is verified and the partner is being handed it.
+ * - `open`: the lobby is verified but the partner left before taking it;
+ *   back in the queue, and the next seeker gets it, so keep it open.
  * - `join` (with `code`): check the terms and take the seat.
  * - `matched`: the joiner has the code; stop polling.
  * - `gone`: the ticket was dropped. Seek again (a host cancels its lobby
@@ -82,10 +83,20 @@ function limiter(limit: number, now: () => number) {
   };
 }
 
-export function createMatchmaker(rpc: engine.Rpc, now: () => number = Date.now) {
+/** Per-client limits; raised where every client shares one address. */
+export interface MatchmakerLimits {
+  seekLimit?: number;
+  requestLimit?: number;
+}
+
+export function createMatchmaker(
+  rpc: engine.Rpc,
+  now: () => number = Date.now,
+  { seekLimit = SEEK_LIMIT, requestLimit = REQUEST_LIMIT }: MatchmakerLimits = {},
+) {
   const tickets = new Map<string, Ticket>();
-  const requests = limiter(REQUEST_LIMIT, now);
-  const seeks = limiter(SEEK_LIMIT, now);
+  const requests = limiter(requestLimit, now);
+  const seeks = limiter(seekLimit, now);
 
   /** The reply that refuses this request before it is read, if any. */
   function gate(body: string, client: string): Reply | null {
@@ -147,7 +158,10 @@ export function createMatchmaker(rpc: engine.Rpc, now: () => number = Date.now) 
     const t = tickets.get(id);
     if (!t) return json(404, { state: "gone" });
     t.seen = now();
-    if (t.hosts) return json(200, { state: t.taken ? "matched" : t.code ? "hosted" : "host" });
+    if (t.hosts) {
+      const state = t.taken ? "matched" : !t.code ? "host" : t.partner ? "hosted" : "open";
+      return json(200, { state });
+    }
     // Repeated until the joiner stops polling: a lost reply must not lose the game.
     if (t.taken) return json(200, { state: "join", code: t.code });
     const host = t.partner ? tickets.get(t.partner) : undefined;

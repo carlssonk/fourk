@@ -84,7 +84,9 @@ if curl -sf "http://127.0.0.1:$SWEEPER_PORT/healthz" >/dev/null 2>&1; then
 else
   echo "sweeper: running on :$SWEEPER_PORT (log: $DATA/sweeper.log)"
   VITE_NETWORK_ID=simnet SWEEPER_OUT_DIR="$PWD/$DATA/sweeper" pnpm --dir app build:sweeper >/dev/null
-  NODE_URL="$KASPA_RPC_URL" PORT="$SWEEPER_PORT" node "$DATA/sweeper/sweeper.mjs" >"$DATA/sweeper.log" 2>&1 &
+  # Every local window shares 127.0.0.1, so lift the per-client limits.
+  MATCH_SEEK_LIMIT=1000 MATCH_REQUEST_LIMIT=100000 \
+    NODE_URL="$KASPA_RPC_URL" PORT="$SWEEPER_PORT" node "$DATA/sweeper/sweeper.mjs" >"$DATA/sweeper.log" 2>&1 &
   SWEEPER_PID=$!
 fi
 

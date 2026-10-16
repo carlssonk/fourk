@@ -59,7 +59,8 @@ export interface Deps {
 
 /** Where a Quick Match ticket stands (app/sweeper/match.ts). */
 export type PollState =
-  { state: "waiting" | "host" | "hosted" | "matched" | "gone" } | { state: "join"; code: string };
+  | { state: "waiting" | "host" | "hosted" | "open" | "matched" | "gone" }
+  | { state: "join"; code: string };
 
 /** The matchmaker route on our node (docs/adr/0003). */
 export interface MatchmakerOps {

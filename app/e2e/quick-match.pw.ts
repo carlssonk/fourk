@@ -73,6 +73,73 @@ test("either Quick Match player can leave at once", async ({ page, browser }) =>
   }
 });
 
+test("when the host leaves, the joiner sees a cancelled game", async ({ page, browser }) => {
+  test.setTimeout(150_000);
+  const otherContext = await browser.newContext();
+  const other = await otherContext.newPage();
+  try {
+    await quickMatch(page, "Ada");
+    await expect(page.getByText("Looking for an opponent", { exact: true })).toBeVisible();
+    await quickMatch(other, "Bo");
+    for (const player of [page, other])
+      await expect(
+        player.getByRole("button", { name: "drop a disc in column 1", exact: true }),
+      ).toBeEnabled({ timeout: 90_000 });
+    // Ada queued first, so she hosts; she leaves.
+    await page.getByRole("button", { name: "Leave game", exact: true }).click();
+    await page
+      .getByRole("dialog", { name: "Leave game?", exact: true })
+      .getByRole("button", { name: "Leave game", exact: true })
+      .click();
+    // What Bo's game recorded as its ending, not just what the dialog shows.
+    await expect
+      .poll(
+        () =>
+          other.evaluate(
+            () =>
+              JSON.parse(JSON.parse(localStorage.getItem("fourk.matches") ?? "[]")[0] ?? "{}")
+                .result ?? null,
+          ),
+        { timeout: 60_000 },
+      )
+      .toMatch(/called the game off/);
+    await expect(other.getByRole("dialog", { name: "Game cancelled" })).toContainText(
+      "This game ended before the first move.",
+    );
+  } finally {
+    await otherContext.close();
+  }
+});
+
+test("a host whose opponent cancels right after pairing goes back to looking", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(150_000);
+  const otherContext = await browser.newContext();
+  const other = await otherContext.newPage();
+  try {
+    await quickMatch(page, "Ada");
+    await expect(page.getByText("Looking for an opponent", { exact: true })).toBeVisible();
+    await quickMatch(other, "Bo");
+    // Paired: Ada hosts and starts opening; Bo changes his mind at once.
+    await expect(page.getByText(/Found an opponent/)).toBeVisible({ timeout: 30_000 });
+    await other.getByRole("button", { name: "Cancel", exact: true }).click();
+    // The matchmaker drops Bo; Ada's panel says so, her lobby kept.
+    await expect(page.getByText("Looking for an opponent", { exact: true })).toBeVisible({
+      timeout: 60_000,
+    });
+    // Bo tries again and lands straight in Ada's lobby.
+    await other.getByRole("button", { name: "Quick Match", exact: true }).click();
+    for (const player of [page, other])
+      await expect(
+        player.getByRole("button", { name: "drop a disc in column 1", exact: true }),
+      ).toBeEnabled({ timeout: 90_000 });
+  } finally {
+    await otherContext.close();
+  }
+});
+
 test("cancelling a search goes back to the setup card", async ({ page }) => {
   await quickMatch(page, "Ada");
   await expect(page.getByText("Looking for an opponent", { exact: true })).toBeVisible();

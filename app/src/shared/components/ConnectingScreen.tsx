@@ -18,7 +18,7 @@ const markOf = (state: "done" | "active" | "todo") =>
  * Full-page progress while a connect-to-game journey runs (creating a game,
  * taking a seat): the journey's steps tick off as the network work lands.
  */
-export const ConnectingScreen = ({ connecting: { title, steps, step } }: Props) => (
+export const ConnectingScreen = ({ connecting: { title, steps, step, cancel } }: Props) => (
   <div
     role="status"
     className="flex flex-1 flex-col items-center py-8 text-center before:flex-[2] after:flex-[3]"
@@ -39,6 +39,13 @@ export const ConnectingScreen = ({ connecting: { title, steps, step } }: Props) 
           </li>
         ))}
       </ol>
+      {cancel && (
+        <div className="mt-6">
+          <button className="btn btn-muted" onClick={cancel}>
+            Cancel
+          </button>
+        </div>
+      )}
     </div>
   </div>
 );

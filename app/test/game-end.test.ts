@@ -1,7 +1,9 @@
 import { expect, test } from "vitest";
 import { gameEnd } from "../src/shared/lib/result";
-import { FREE_STAKE, type Match } from "../src/shared/lib/match";
+import { FREE_STAKE, fromHex, type Match } from "../src/shared/lib/match";
 import { zeroCore2 } from "../src/shared/modes/fourk2/core";
+import { describeSharedEnd } from "../src/shared/modes/common";
+import type { SpendInfo } from "../src/shared/lib/engine";
 
 const match: Match = {
   network: "testnet-10",
@@ -158,4 +160,26 @@ test.each([
   expect(ending.title).toBe(title);
   expect(ending.message).toBe(message);
   expect(ending.message).not.toMatch(money);
+});
+
+test("every lobby-exit ending reads as a cancelled game, whoever left", () => {
+  const lobby: Match = {
+    ...match,
+    state: { ...match.state, board: new Uint8Array(42), moveCount: 0 },
+    simul: zeroCore2(600),
+  };
+  const [p1, p2] = [lobby.state.p1, lobby.state.p2];
+  for (const [by, me] of [
+    [p1, p2], // the host left: the joiner's view
+    [p2, p1], // the joiner left: the host's view
+    [p1, p1], // our own exit
+    [p2, ""], // a spectator
+  ] as const) {
+    const spend = { kind: "dissolve", pushes: [new Uint8Array(64), fromHex(by)] };
+    const told = describeSharedEnd(spend as SpendInfo, lobby, me)!;
+    expect(gameEnd({ ...lobby, result: told }, me), told).toMatchObject({
+      title: "Game cancelled",
+      message: "This game ended before the first move.",
+    });
+  }
 });

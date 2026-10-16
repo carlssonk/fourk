@@ -28,7 +28,9 @@ cd app
 # Built for simnet, outside sweeper/dist (which infra/node deploys).
 SWEEPER_DIR="$(mktemp -d)"
 VITE_NETWORK_ID=simnet SWEEPER_OUT_DIR="$SWEEPER_DIR" pnpm build:sweeper >/dev/null
-NODE_URL="$KASPA_RPC_URL" PORT="$SWEEPER_PORT" node "$SWEEPER_DIR/sweeper.mjs" >/dev/null 2>&1 &
+# Every local window shares 127.0.0.1, so lift the per-client limits.
+MATCH_SEEK_LIMIT=1000 MATCH_REQUEST_LIMIT=100000 \
+  NODE_URL="$KASPA_RPC_URL" PORT="$SWEEPER_PORT" node "$SWEEPER_DIR/sweeper.mjs" >/dev/null 2>&1 &
 SWEEPER_PID=$!
 VITE_NODE_URL="$KASPA_RPC_URL" VITE_NETWORK_ID=simnet VITE_RESET_MARGIN=500 \
   VITE_SWEEPER_URL="http://127.0.0.1:$SWEEPER_PORT/sweep" \

@@ -43,7 +43,9 @@ export const QuickMatchPanel = ({ status, busy, onCancel, onPrivateGame }: Props
           )}
         </>
       ) : (
-        <h3 className="text-lg font-semibold">Found an opponent. Setting up the game…</h3>
+        // Only for the instant before the Found an opponent connect screen,
+        // which carries the rest (state/quickMatch.ts).
+        <h3 className="text-lg font-semibold">Found an opponent</h3>
       )}
       <p className="mt-1 text-xs text-dim">
         Free game, {fmtDaaDuration(QUICK_MATCH_MOVE_TIMEOUT)} per pick.

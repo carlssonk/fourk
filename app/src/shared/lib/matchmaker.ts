@@ -9,6 +9,9 @@ export const HAS_QUICK_MATCH = !!BASE;
 
 const TIMEOUT_MS = 5_000;
 
+/** What seek throws when this connection has searched too often (429). */
+export const SEEK_LIMITED = "QUICK_MATCH_SEEK_LIMITED";
+
 async function call(path: string, body?: object): Promise<Response> {
   if (!BASE) throw new Error("no matchmaker configured");
   return fetch(new URL(path, BASE), {
@@ -25,6 +28,7 @@ async function call(path: string, body?: object): Promise<Response> {
 export const httpMatchmaker: MatchmakerOps = {
   async seek(pk) {
     const res = await call("seek", { pk });
+    if (res.status === 429) throw new Error(SEEK_LIMITED);
     if (res.status !== 200) throw new Error(`seek: ${res.status}`);
     return ((await res.json()) as { ticket: string }).ticket;
   },

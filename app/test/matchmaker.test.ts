@@ -38,7 +38,7 @@ const poll = async (mm: ReturnType<typeof matchmaker>, ticket: string) => {
 };
 
 /** The Quick Match lobby `p1` opened, as its share code. */
-const lobby = (p1: string, moveTimeout = 3_000): Match => ({
+const lobby = (p1: string, moveTimeout = 1_200): Match => ({
   network: NETWORK_ID,
   mode: "fourk2",
   covenantId: "ab".repeat(32),
@@ -238,9 +238,12 @@ test("hands a host's open lobby to the next seeker when the partner left first",
   clock += POLL_GRACE_MS - 1;
   await poll(mm, a);
   clock += 2;
-  // Bob never picked the code up; Alice's lobby stays up for someone else.
-  expect(await poll(mm, a)).toMatchObject({ state: "hosted" });
+  // Bob never picked the code up; Alice's lobby stays up for someone else,
+  // and her poll says she's back to waiting for one.
+  expect(await poll(mm, a)).toMatchObject({ state: "open" });
   const c = await seek(mm, carol);
+  // Paired again: Carol is on her way.
+  expect(await poll(mm, a)).toMatchObject({ state: "hosted" });
   expect(await poll(mm, c)).toMatchObject({ state: "join", code: encodeShareCode(lobby(alice)) });
   expect(engine.fetchGameUtxo).toHaveBeenCalledTimes(1);
 });
@@ -309,4 +312,10 @@ test("a host who keeps getting new partners still has to post within the grace",
     await seek(mm, (waited / 5_000 + 0x40).toString(16).padStart(64, "0"));
   }
   expect(await poll(mm, a)).toMatchObject({ state: "gone" });
+});
+
+test("takes looser limits where every client shares one address (local runs)", async () => {
+  const mm = createMatchmaker(rpc, () => clock, { seekLimit: 100, requestLimit: 1000 });
+  for (let i = 0; i < SEEK_LIMIT + 5; i++)
+    expect((await mm.seek(JSON.stringify({ pk: alice }), "127.0.0.1")).status).toBe(200);
 });

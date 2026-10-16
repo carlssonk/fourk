@@ -9,8 +9,10 @@ import { core2Of, isCore2 } from "../modes/fourk2/core";
 import { isOpen } from "./game";
 import { FREE_STAKE, NETWORK_ID, type Match } from "./match";
 
-/** Per-pick clock, DAA blocks: about 5 minutes on testnet-10. */
-export const QUICK_MATCH_MOVE_TIMEOUT = 3_000;
+/** Per-pick clock, DAA blocks: about 2 minutes on testnet-10. Twice the
+ * covenant's floor, leaving room for confirmation latency; Fourk picks are
+ * blind and simultaneous, so some thinking time is fair. */
+export const QUICK_MATCH_MOVE_TIMEOUT = 1_200;
 
 /** The cap isn't compared here: it's an absolute DAA score set at open, so
  * the joiner holds it to the preset at join (state/quickMatch.ts, through

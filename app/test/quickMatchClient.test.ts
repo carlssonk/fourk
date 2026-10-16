@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { getDefaultStore } from "jotai";
-import { busyAtom, errorAtom } from "../src/shared/state/actions";
+import { busyAtom, connectingAtom, errorAtom } from "../src/shared/state/actions";
 import {
   currentMatchAtom,
   matchesAtom,
@@ -14,6 +14,7 @@ import {
   updateMatch,
 } from "../src/shared/state/matches";
 import { quickMatchAtom, startQuickMatch, stopQuickMatch } from "../src/shared/state/quickMatch";
+import { SEEK_LIMITED } from "../src/shared/lib/matchmaker";
 import type {
   AccountOps,
   ChainOps,
@@ -79,7 +80,7 @@ function fakeMatchmaker(polls: PollState[]): MatchmakerOps {
 const HOST_PK = "44".repeat(32);
 
 /** The Quick Match lobby `p1` opened. */
-const lobby = (p1: string, moveTimeout = 3_000): Match => ({
+const lobby = (p1: string, moveTimeout = 1_200): Match => ({
   network: NETWORK_ID,
   mode: "fourk2",
   covenantId: "ab".repeat(32),
@@ -142,7 +143,7 @@ test("a host opens a lobby on the Quick Match terms and stays home until it's ta
   expect(chain.openMatch).toHaveBeenCalledWith(
     keyOf("guest"),
     FREE_STAKE,
-    expect.objectContaining({ moveTimeout: 3_000 }),
+    expect.objectContaining({ moveTimeout: 1_200 }),
     "fourk2",
     expect.any(Function),
     { quick: true },
@@ -155,10 +156,16 @@ test("a host opens a lobby on the Quick Match terms and stays home until it's ta
   // Posted again after the matchmaker's node hadn't seen it yet.
   expect(matchmaker.hosted).toHaveBeenCalledTimes(2);
   expect(vi.mocked(matchmaker.hosted).mock.calls[1]).toEqual(["t1", expect.any(String)]);
-  // No join on record within the wait: the game opens as it stands.
-  await vi.advanceTimersByTimeAsync(30_000);
-  expect(store.get(currentMatchAtom)?.covenantId).toBe(opened.covenantId);
-  expect(store.get(quickMatchAtom)).toEqual({ phase: "idle" });
+  // No join on record within the wait: the partner took the code and left.
+  // Close the empty lobby and look again, rather than opening it.
+  await vi.advanceTimersByTimeAsync(60_000);
+  expect(chain.cancelMatch).toHaveBeenCalledWith(
+    keyOf("guest"),
+    expect.objectContaining({ covenantId: opened.covenantId }),
+  );
+  expect(store.get(currentMatchAtom)).toBeNull();
+  expect(store.get(quickMatchAtom)).toMatchObject({ phase: "searching" });
+  expect(matchmaker.seek).toHaveBeenCalledTimes(2);
 });
 
 const joinedBy = (pk: string) =>
@@ -422,4 +429,151 @@ test("queues again, quietly, past a lobby whose game limit is cut short", async 
   expect(chain.joinMatch).not.toHaveBeenCalled();
   expect(store.get(errorAtom)).toBeNull();
   expect(matchmaker.poll).toHaveBeenLastCalledWith("t2");
+});
+
+test("a host whose partner left goes back to looking, keeping its lobby for the next one", async () => {
+  const opened = lobby(GUEST_PK);
+  const chain = fakeChain({ openMatch: vi.fn(async () => opened) });
+  const matchmaker = fakeMatchmaker([
+    { state: "host" },
+    { state: "hosted" },
+    { state: "open" },
+    { state: "open" },
+    { state: "hosted" },
+  ]);
+  deps = { chain, account: fakeAccount(), matchmaker };
+  void startQuickMatch(deps);
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(store.get(quickMatchAtom)).toMatchObject({ phase: "setting-up" });
+  await vi.advanceTimersByTimeAsync(4_000);
+  expect(store.get(quickMatchAtom)).toMatchObject({ phase: "searching" });
+  expect(chain.cancelMatch).not.toHaveBeenCalled();
+  expect(chain.openMatch).toHaveBeenCalledTimes(1);
+  await vi.advanceTimersByTimeAsync(4_000);
+  expect(store.get(quickMatchAtom)).toMatchObject({ phase: "setting-up" });
+});
+
+test("says to wait a moment, not that Quick Match is down, when searches are rate-limited", async () => {
+  const matchmaker = fakeMatchmaker([{ state: "waiting" }]);
+  vi.mocked(matchmaker.seek).mockRejectedValue(new Error(SEEK_LIMITED));
+  deps = { chain: fakeChain(), account: fakeAccount(), matchmaker };
+  await startQuickMatch(deps);
+  expect(store.get(errorAtom)).toMatch(/try again in a minute/i);
+  expect(store.get(errorAtom)).not.toMatch(/isn't available/);
+  expect(store.get(quickMatchAtom)).toEqual({ phase: "idle" });
+});
+
+test("the connecting journey says an opponent was found, and never mentions an invite link", async () => {
+  const seen: Array<{ title: string; steps: readonly string[] } | null> = [];
+  const opened = lobby(GUEST_PK);
+  const host = fakeChain({
+    openMatch: vi.fn(async () => {
+      seen.push(store.get(connectingAtom));
+      return opened;
+    }),
+  });
+  deps = { chain: host, account: fakeAccount(), matchmaker: fakeMatchmaker([{ state: "host" }]) };
+  void startQuickMatch(deps);
+  await vi.advanceTimersByTimeAsync(3_000);
+  await stopQuickMatch();
+
+  const code = encodeShareCode(lobby(HOST_PK));
+  const joiner = fakeChain({
+    joinMatch: vi.fn(async (_key: PrivateKey, invite: Match) => {
+      seen.push(store.get(connectingAtom));
+      return { ...invite, state: { ...invite.state, p2: GUEST_PK }, value: FREE_STAKE * 2n };
+    }),
+  });
+  deps = {
+    chain: joiner,
+    account: fakeAccount(),
+    matchmaker: fakeMatchmaker([{ state: "join", code }]),
+  };
+  void startQuickMatch(deps);
+  await vi.advanceTimersByTimeAsync(3_000);
+
+  expect(seen).toHaveLength(2);
+  for (const journey of seen) {
+    expect(journey?.title).toBe("Found an opponent");
+    expect(journey?.steps.join(" ")).not.toMatch(/invite|link/i);
+  }
+  expect(seen[0]?.steps[2]).toBe("Creating the game");
+  expect(seen[1]?.steps.at(-1)).toBe("Joining the game");
+});
+
+test("the host stays on one Found an opponent screen from creating the game to the board", async () => {
+  const opened = lobby(GUEST_PK);
+  const chain = fakeChain({ openMatch: vi.fn(async () => opened) });
+  const matchmaker = fakeMatchmaker([
+    { state: "host" },
+    { state: "hosted" },
+    { state: "open" },
+    { state: "hosted" },
+    { state: "matched" },
+  ]);
+  deps = { chain, account: fakeAccount(), matchmaker };
+  void startQuickMatch(deps);
+  await vi.advanceTimersByTimeAsync(1_000);
+  // Created: the same screen moves on to its last step, with a way out.
+  expect(store.get(connectingAtom)).toMatchObject({
+    title: "Found an opponent",
+    step: 3,
+    steps: [
+      "Connecting to the game",
+      "Preparing your seat",
+      "Creating the game",
+      "Waiting for your opponent to join",
+    ],
+  });
+  expect(store.get(connectingAtom)?.cancel).toBeTypeOf("function");
+  // The partner left: back to looking, the screen gone.
+  await vi.advanceTimersByTimeAsync(4_000);
+  expect(store.get(quickMatchAtom)).toMatchObject({ phase: "searching" });
+  expect(store.get(connectingAtom)).toBeNull();
+  // A new partner: the waiting screen again.
+  await vi.advanceTimersByTimeAsync(2_000);
+  expect(store.get(connectingAtom)).toMatchObject({ title: "Found an opponent", step: 3 });
+  // Their join lands: the board, and no screen left over.
+  updateMatch({ ...opened, state: { ...opened.state, p2: HOST_PK }, value: FREE_STAKE * 2n });
+  await vi.advanceTimersByTimeAsync(4_000);
+  expect(store.get(currentMatchAtom)?.state.p2).toBe(HOST_PK);
+  expect(store.get(connectingAtom)).toBeNull();
+});
+
+test("Cancel on the waiting screen leaves the queue and closes the lobby", async () => {
+  const opened = lobby(GUEST_PK);
+  const chain = fakeChain({ openMatch: vi.fn(async () => opened) });
+  deps = {
+    chain,
+    account: fakeAccount(),
+    matchmaker: fakeMatchmaker([{ state: "host" }, { state: "hosted" }]),
+  };
+  void startQuickMatch(deps);
+  await vi.advanceTimersByTimeAsync(3_000);
+  store.get(connectingAtom)!.cancel!();
+  await vi.advanceTimersByTimeAsync(1_000);
+  expect(chain.cancelMatch).toHaveBeenCalledTimes(1);
+  expect(store.get(connectingAtom)).toBeNull();
+  expect(store.get(quickMatchAtom)).toEqual({ phase: "idle" });
+});
+
+test("the host's Found an opponent screen never drops out between creating and waiting", async () => {
+  const opened = lobby(GUEST_PK);
+  const chain = fakeChain({ openMatch: vi.fn(async () => opened) });
+  const matchmaker = fakeMatchmaker([{ state: "host" }, { state: "hosted" }]);
+  // The matchmaker's node is a moment behind: the post needs a retry.
+  vi.mocked(matchmaker.hosted).mockResolvedValueOnce("retry");
+  const screens: Array<number | null> = [];
+  const unsub = store.sub(connectingAtom, () =>
+    screens.push(store.get(connectingAtom)?.step ?? null),
+  );
+  deps = { chain, account: fakeAccount(), matchmaker };
+  void startQuickMatch(deps);
+  await vi.advanceTimersByTimeAsync(6_000);
+  unsub();
+  const first = screens.indexOf(0);
+  const waiting = screens.indexOf(3);
+  expect(first).toBeGreaterThanOrEqual(0);
+  expect(waiting).toBeGreaterThan(first);
+  expect(screens.slice(first, waiting + 1)).not.toContain(null);
 });

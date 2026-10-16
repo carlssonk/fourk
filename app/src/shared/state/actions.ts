@@ -50,11 +50,21 @@ export interface Connecting {
   steps: readonly string[];
   /** Index of the step in progress; everything before it is done. */
   step: number;
+  /** A way out while a step waits on someone else (Quick Match's host
+   * waiting for the join); absent while network work runs. */
+  cancel?: () => void;
 }
 
 export const connectingAtom = atom<Connecting | null>(null);
 
 /** Begin a connect journey; `advanceConnecting` ticks steps off in order. */
+/** A connect journey's wording: a title and its steps, in order. The
+ * action ticks the first three; a caller may add steps after them. */
+export interface Journey {
+  title: string;
+  steps: readonly [string, string, string, ...string[]];
+}
+
 export function startConnecting(title: string, steps: readonly string[]): void {
   store.set(connectingAtom, { title, steps, step: 0 });
 }
@@ -84,7 +94,9 @@ export async function runAction(action: () => Promise<void>): Promise<void> {
     reportError(e);
   } finally {
     store.set(busyAtom, false);
-    store.set(connectingAtom, null);
+    // A screen with its own Cancel is a waiting step the action handed on
+    // (Quick Match's host waiting for the join): it outlives the action.
+    if (!store.get(connectingAtom)?.cancel) store.set(connectingAtom, null);
     // Money may have moved (stake out, pot in, cash-out) — show it now
     // rather than waiting for the subscription tick.
     void refreshBalance();
@@ -104,21 +116,24 @@ export interface HostTerms {
 /** The body of newGame, bare so other actions can chain into it (e.g. a
  * kick flows straight into hosting a fresh game). Call inside `runAction`.
  * `terms` replaces the player's settings (Quick Match); `show: false` puts
- * the game on record without opening it. */
+ * the game on record without opening it; `journey` rewords the connect
+ * screen. */
 export async function createGame(
   deps: Deps = realDeps,
-  { terms, show = true }: { terms?: HostTerms; show?: boolean } = {},
+  { terms, show = true, journey }: { terms?: HostTerms; show?: boolean; journey?: Journey } = {},
 ): Promise<Match> {
   // A remembered stake means nothing without an account to pay it from —
   // a guest always hosts free, whatever the setting says.
   const stakeSetting = terms ? terms.stake : deps.account.hasOwnedAccount() ? getStake() : 0n;
   const staked = stakeSetting > 0n;
   const stake = staked ? stakeSetting : FREE_STAKE;
-  startConnecting("Creating your game", [
-    staked ? "Connecting to the Kaspa network" : "Connecting to the game",
-    staked ? "Placing your stake" : "Preparing your seat",
-    staked ? "Opening the game on-chain" : "Creating your invite link",
-  ]);
+  if (journey) startConnecting(journey.title, journey.steps);
+  else
+    startConnecting("Creating your game", [
+      staked ? "Connecting to the Kaspa network" : "Connecting to the game",
+      staked ? "Placing your stake" : "Preparing your seat",
+      staked ? "Opening the game on-chain" : "Creating your invite link",
+    ]);
   // Free games are seated by the invisible guest key and paid for by the
   // dispenser; staked games are seated by the player's own account. The two
   // pots of money never meet.
@@ -180,11 +195,12 @@ export const takeSeat = (invite: Match, deps: Deps = realDeps): Promise<void> =>
   runAction(() => sitDown(invite, deps));
 
 /** The body of takeSeat, bare like createGame. Call inside `runAction`.
- * `minRemaining` raises the game-limit floor the seat is held to. */
+ * `minRemaining` raises the game-limit floor the seat is held to;
+ * `journey` rewords the connect screen. */
 export async function sitDown(
   invite: Match,
   deps: Deps = realDeps,
-  { minRemaining }: { minRemaining?: number } = {},
+  { minRemaining, journey }: { minRemaining?: number; journey?: Journey } = {},
 ): Promise<void> {
   const known = store.get(matchesAtom).find((m) => m.covenantId === invite.covenantId);
   if (known) {
@@ -206,11 +222,13 @@ export async function sitDown(
   if (seatOpen && !iAmHost) {
     const staked = isStaked(invite);
     const { key, myPk } = deps.account.signingWallet({ staked });
-    startConnecting("Joining the game", [
-      staked ? "Connecting to the Kaspa network" : "Connecting to the game",
-      staked ? "Placing your stake" : "Preparing your seat",
-      staked ? "Taking your seat on-chain" : "Joining your opponent",
-    ]);
+    if (journey) startConnecting(journey.title, journey.steps);
+    else
+      startConnecting("Joining the game", [
+        staked ? "Connecting to the Kaspa network" : "Connecting to the game",
+        staked ? "Placing your stake" : "Preparing your seat",
+        staked ? "Taking your seat on-chain" : "Joining your opponent",
+      ]);
     await deps.chain.connect();
     // A deadline the chain has already passed (or nearly so) is a trap —
     // the host could sudden-death the pot back out from under us — and the

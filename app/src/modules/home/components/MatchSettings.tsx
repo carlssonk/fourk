@@ -79,6 +79,8 @@ export const MatchSettings = () => {
 
   return (
     <div className="mt-4 border-t border-line pt-4 text-sm">
+      {/* Quick Match plays its own fixed terms; these are for invites. */}
+      <p className="mb-2 text-xs font-semibold tracking-wide text-dim uppercase">Private game</p>
       <Group label="Game mode">
         {MODE_LIST.map((m) => (
           <Chip

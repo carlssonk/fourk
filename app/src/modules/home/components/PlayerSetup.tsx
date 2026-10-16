@@ -24,6 +24,9 @@ interface Props {
    * button steps down to secondary. */
   headlineLabel?: string;
   onHeadline?: () => void;
+  /** One plain line under the live headline: its own terms (Quick Match
+   * ignores the settings, which are the private game's). */
+  headlineNote?: string;
   /** What kind of game to start (mode, clock, stake), rendered inside the
    * card below the identity section — create flow only; the join flow
    * inherits every setting from the invite. */
@@ -54,6 +57,7 @@ export const PlayerSetup = ({
   onSubmit,
   headlineLabel,
   onHeadline,
+  headlineNote,
   settings,
   pickDiscColor = false,
 }: Props) => {
@@ -194,7 +198,7 @@ export const PlayerSetup = ({
         </div>
         {settings}
       </div>
-      <div className="mt-3 flex flex-wrap justify-center gap-2.5 sm:mt-4">
+      <div className="mt-3 flex flex-wrap items-start justify-center gap-2.5 sm:mt-4">
         {headlineLabel && !onHeadline && (
           <button type="button" disabled className="btn cursor-default px-8 py-2.5 text-lg">
             {headlineLabel}
@@ -204,14 +208,17 @@ export const PlayerSetup = ({
           </button>
         )}
         {headlineLabel && onHeadline && (
-          <button
-            type="button"
-            className="btn px-8 py-2.5 text-lg"
-            disabled={busy}
-            onClick={() => submit(onHeadline)}
-          >
-            {headlineLabel}
-          </button>
+          <div className="flex flex-col items-center gap-1">
+            <button
+              type="button"
+              className="btn px-8 py-2.5 text-lg"
+              disabled={busy}
+              onClick={() => submit(onHeadline)}
+            >
+              {headlineLabel}
+            </button>
+            {headlineNote && <span className="text-xs text-dim">{headlineNote}</span>}
+          </div>
         )}
         <button
           className={`btn px-8 py-2.5 text-lg ${onHeadline ? "btn-ghost" : ""}`}

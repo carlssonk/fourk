@@ -62,7 +62,8 @@ export function gameEnd(m: Match, myPk: string, result = m.result ?? null): Game
   // more specific causes are read first.
   if (/both connected four/i.test(result))
     return draw("You both connected four in the same round.");
-  if (/dissolved|left before|before anyone joined/i.test(result))
+  // Every lobby exit, from either seat (modes/common.ts, "dissolve").
+  if (/dissolved|left before|called the game off|before anyone joined/i.test(result))
     return {
       title: "Game cancelled",
       message: "This game ended before the first move.",

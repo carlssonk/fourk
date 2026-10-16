@@ -25,6 +25,7 @@ import {
   takeSeat,
 } from "@shared/state";
 import { HAS_QUICK_MATCH } from "@shared/lib/matchmaker";
+import { QUICK_MATCH_MOVE_TIMEOUT } from "@shared/lib/quickMatch";
 import { useCapClock } from "../game/hooks/useCapClock";
 import {
   AboutDialog,
@@ -215,6 +216,7 @@ export const Home = () => {
               actionLabel="Private Game"
               headlineLabel="Quick Match"
               onHeadline={HAS_QUICK_MATCH ? () => void startQuickMatch() : undefined}
+              headlineNote={`Free · ${fmtDaaDuration(QUICK_MATCH_MOVE_TIMEOUT)} per pick`}
               busy={busy}
               onSubmit={newGame}
               settings={<MatchSettings />}

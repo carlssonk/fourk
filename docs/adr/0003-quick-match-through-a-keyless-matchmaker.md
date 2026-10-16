@@ -75,8 +75,8 @@ chain while they wait alone.
    states the client works from are listed in `app/sweeper/match.ts`.
 
 **Terms (v1).** One fixed preset so everyone lands in one queue: Fourk
-mode, free stake, 3,000 DAA per pick (about 5 minutes, the app's current
-default), and the overall cap `getMatchTiming()` gives that clock (about a
+mode, free stake, 1,200 DAA per pick (about 2 minutes; first 3,000, changed
+2026-10-16), and the overall cap `timingFor()` gives that clock (about a
 day). Free games are signed by the guest key and funded by the dispenser,
 for account holders too, the same split as private free games. The host's
 disc colour wins, as with invites. The preset is one shared constant read
@@ -122,10 +122,12 @@ requeueing.
 - One queue of free Fourk games is all v1 offers. Staked queues (an account
   and `STAKE_PRESETS` buckets), more clocks and classic mode are later
   decisions.
-- 5 minutes per pick means a stalled opponent can hold you up that long.
-  Once pick latency has been measured on testnet-10 (the open timing gate in
-  `fourk-shared-deadlines.md`, "Live-node verification"), move the preset to
-  600 DAA (about 1 minute).
+- 2 minutes per pick means a stalled opponent can hold you up that long per
+  round. It's twice the covenant's 600 DAA floor, which leaves room for
+  confirmation latency until it is measured on testnet-10 (the open timing
+  gate in `fourk-shared-deadlines.md`, "Live-node verification"), and gives
+  blind simultaneous picks some thinking time. The floor itself is not the
+  target: it would leave the least room for a slow confirmation.
 - Tests: server unit tests next to `sweeper.test.ts` (pairing, self-pair
   refused, timeouts and requeue, forged and wrong-terms codes rejected, rate
   limit); client queue-state tests through `Deps` with the in-memory chain;
