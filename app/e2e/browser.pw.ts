@@ -216,7 +216,7 @@ test("staked hosting, cancellation, cash-out validation and Max reset", async ({
     "50 KAS",
   );
   await page.getByRole("button", { name: "Close", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Free", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "None", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "1 KAS", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "1 KAS", exact: true }).click();
   await page.getByRole("button", { name: "About Move timer", exact: true }).click();
@@ -229,7 +229,7 @@ test("staked hosting, cancellation, cash-out validation and Max reset", async ({
   await expect(page.getByRole("tooltip")).not.toContainText("winnings");
   await page.getByRole("button", { name: "About Move timer", exact: true }).press("Escape");
   await page.getByRole("button", { name: "Fourk", exact: true }).click();
-  await page.getByRole("button", { name: "Free", exact: true }).click();
+  await page.getByRole("button", { name: "None", exact: true }).click();
   await page.getByRole("button", { name: "About Move timer", exact: true }).click();
   await expect(page.getByRole("tooltip")).not.toContainText("winnings");
   await page.getByRole("button", { name: "About Move timer", exact: true }).press("Escape");

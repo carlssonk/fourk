@@ -122,7 +122,7 @@ export const MatchSettings = () => {
                   title="add funds first"
                   onClick={() => saveStake(s)}
                 >
-                  {s === 0n ? "Free" : `${fmtKas(s)} KAS`}
+                  {s === 0n ? "None" : `${fmtKas(s)} KAS`}
                 </Chip>
               );
             })}
