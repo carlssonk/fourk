@@ -5,6 +5,7 @@ import { ensureFunds } from "@shared/lib/dispenser";
 import { CELLS, ROWS, heightOf, isOpen } from "@shared/lib/game";
 import { isStaleMatchError } from "@shared/lib/errors";
 import { inviteLink } from "@shared/lib/invite";
+import { HAS_QUICK_MATCH } from "@shared/lib/matchmaker";
 import { fmtDaaDuration, fmtKas, isStaked, loadCheckpoint, type Match } from "@shared/lib/match";
 import { gameEnd } from "@shared/lib/result";
 import { HAS_SWEEPER, registerSweep } from "@shared/lib/sweeper";
@@ -27,7 +28,9 @@ import {
   profileAtom,
   rpcClientAtom,
   runAction,
+  saveGameMode,
   startConnecting,
+  startQuickMatch,
   updateMatch,
 } from "@shared/state";
 import { Board, PlayerPanel, ResultOverlay } from "./components";
@@ -100,9 +103,14 @@ export const Game = ({ match }: Props) => {
   // Do not pass the visual ending to the watcher/autopilot: they must still
   // settle the match. Leaving early retains the record so collection can resume.
   const leaveEndedGame = () => exitMatch(!!result);
+  // A Quick Match goes back to the queue, in the mode just played; any
+  // other game hosts a new private one.
   const playAgain = () => {
     leaveEndedGame();
-    newGame();
+    if (HAS_QUICK_MATCH && mode.isQuickMatched(match)) {
+      saveGameMode(mode.meta.key);
+      void startQuickMatch();
+    } else newGame();
   };
 
   // The obligation clock only runs once something is staked on it — an
