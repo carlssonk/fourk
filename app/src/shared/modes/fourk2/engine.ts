@@ -19,7 +19,7 @@ import type { GenesisOptions, ModeChainSurface, SpendClass } from "../types";
 import { rederiveJoin } from "../common";
 import { legalSimulColumns, myObligation, roundPhase, simulProgress } from "../fourk/core";
 import { pruneSalts } from "../fourk/saltStore";
-import { core2Of, fromV2State, toV2State, v2, zeroCore2 } from "./core";
+import { core2Of, fromV2State, isCore2, isQuick, toV2State, v2, zeroCore2 } from "./core";
 
 const CONTINUATIONS = new Set<string>(["commit", "reveal", "resolve", "claim_win"]);
 
@@ -96,7 +96,18 @@ export const fourk2Engine = {
 
   /** Quick Match waives the joiner's wait (the covenant's quick flag). */
   joinerExitWait(m: Match): number {
-    return core2Of(m).quick === 1 ? 0 : m.state.moveTimeout;
+    return isQuick(m) ? 0 : m.state.moveTimeout;
+  },
+
+  /** The covenant's quick flag, and a reveal grace equal to the clock. */
+  quickLobbyMarks(m: Match): boolean {
+    return isCore2(m.simul) && isQuick(m) && m.simul.revealTimeout === m.state.moveTimeout;
+  },
+
+  /** The flag is chain state, so it holds on any device; the mark covers a
+   * record written before it was read. */
+  isQuickMatched(m: Match): boolean {
+    return isQuick(m) || !!m.paired;
   },
 
   /** claim_draw waits out the reveal grace (see the covenant). */

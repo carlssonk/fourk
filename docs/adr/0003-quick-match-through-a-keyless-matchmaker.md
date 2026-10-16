@@ -64,29 +64,44 @@ chain while they wait alone.
    through the existing `takeSeat`. The host's watcher sees the join as it
    does for an invite.
 6. **Fallback.** If either side stops polling, or the host posts no valid
-   code within ~30 s of pairing, the other player goes back into the queue.
+   code within 90 s of pairing (first 30 s; raised 2026-10-16, since the
+   grace covers the whole open, a fresh guest's dispenser claim included),
+   the other player goes back into the queue. A host posting to a ticket
+   the matchmaker has dropped is told so at once (410) and closes its lobby.
    A host whose partner left before taking the code stays host, so its
    lobby (open or still opening) goes to the next seeker and no cancel
-   transaction is spent; its 30 s grace keeps running across partners. A
-   host polls through the open, so the 10 s presence check doesn't drop it. Once the code has been handed over the pair is
-   done, and neither side leaving requeues the other. A lobby already
-   opened by a host who then vanished is covered by the covenant's lobby
-   exits and refunds; the matchmaker never serves it again. The poll
-   states the client works from are listed in `app/sweeper/match.ts`.
+   transaction is spent; its grace keeps running across partners. A
+   host polls through the open, so the 10 s presence check doesn't drop
+   it. A kept lobby's code goes to the next seeker without a fresh chain
+   lookup: if it is gone by then, the join fails as "seat gone" and the
+   joiner searches again. Once the code has been handed over the pair is
+   done, and neither side leaving requeues the other; a host whose
+   partner's join hasn't landed within a minute closes the lobby and
+   searches again. A lobby already opened by a host who then vanished is
+   covered by the covenant's lobby exits and refunds; the matchmaker never
+   serves it again. The joiner also refuses a lobby whose host is its own
+   key, which an honest matchmaker never hands out. The poll states the
+   client works from are listed in `app/sweeper/match.ts`.
 
-**Terms (v1).** One fixed preset so everyone lands in one queue: Fourk
-mode, free stake, 1,200 DAA per pick (about 2 minutes; first 3,000, changed
+**Terms (v1).** One fixed preset per game mode, so everyone in a mode
+lands in one queue (first Fourk only; Classic joined 2026-10-16): free
+stake, 1,200 DAA per move (about 2 minutes; first 3,000, changed
 2026-10-16), and the overall cap `timingFor()` gives that clock (about a
-day). Free games are signed by the guest key and funded by the dispenser,
+day). A plan to move to 600 DAA once testnet latency was measured was
+dropped: 2 minutes was chosen on its own merits (see Consequences). Free
+games are signed by the guest key and funded by the dispenser,
 for account holders too, the same split as private free games. The host's
 disc colour wins, as with invites. The preset is one shared constant read
 by the server, the client and both term checks.
 
 **The joiner checks the terms itself.** Before `takeSeat`, the joiner's
-client refuses a code whose decoded state isn't free stake, Fourk mode,
-the preset clock and cap, and an open seat, and requeues. With that check,
-the worst a broken or hostile matchmaker can do is pair badly or not at
-all. It holds no keys, never handles a share code it hasn't checked
+client refuses a code whose decoded state isn't free stake, the mode it
+queued for, the preset clock and cap, and an open seat, and requeues. With
+that check, the worst a broken or hostile matchmaker can do is pair badly
+or not at all. One caveat since Classic joined: a lobby on Classic's terms
+carries no Quick Match flag (the covenant has none), so a hostile pairing
+can hold a Classic joiner for its one-clock exit wait. It holds no keys,
+never handles a share code it hasn't checked
 on-chain, and every transaction is still built and signed in the players'
 browsers.
 
@@ -97,10 +112,11 @@ requeueing.
 
 ## Consequences
 
-- No covenant change. The move-0 forfeit and P2-only dissolve sketched in
-  `app/IDEAS.md` are classic-mode concerns, and classic stays out of Quick
-  Match until it gets them (since joined without them; see the classic
-  amendment below). *Amended 2026-10-16:* a `quick` flag was added to
+- ~~No covenant change.~~ The move-0 forfeit and P2-only dissolve sketched
+  in `app/IDEAS.md` are classic-mode concerns. The original rule, that
+  Classic stays out of Quick Match until it gets them, was dropped when
+  Classic joined without them (see the Classic amendment below).
+  *Amended 2026-10-16:* a `quick` flag was added to
   the Fourk V2 state after all, ahead of staked Quick Match. The host sets it
   at open, the terms (and so the matchmaker and the joiner) require it, and
   `dissolve` lets the joiner leave at once instead of after one clock. There
@@ -117,12 +133,19 @@ requeueing.
   the sweeper too. Players' own clients still send their sweeps, so a
   restart delays payouts but never loses them. Split it into its own
   Compose service if it grows.
-- Deploy needs a `VITE_MATCH_URL` (or one derived from `VITE_SWEEPER_URL`),
-  the `/match` path on the tunnel, the node host in the CSP's `connect-src`,
+- Deploy needs the matchmaker's URL, which the app derives from
+  `VITE_SWEEPER_URL`, the `/match` path on the tunnel, the node host in
+  the CSP's `connect-src`,
   and a matchmaker check in the node health workflow.
-- One queue of free Fourk games is all v1 offers. Staked queues (an account
-  and `STAKE_PRESETS` buckets), more clocks and classic mode are later
-  decisions. *Amended 2026-10-16:* Classic joined, as a second queue. A seek
+- Follow-up before staked queues: the matchmaker checks a lobby's game
+  limit when it is posted, but a kept lobby (its partner left) is handed
+  out again without a fresh look. One left waiting more than an hour drifts
+  past the cap window, so every joiner refuses it and searches again while
+  its host is never told. Harmless while free; decide (re-check on hand-out,
+  or have the host reopen) before stakes are in play.
+- One queue of free Fourk games was all v1 offered. Staked queues (an
+  account and `STAKE_PRESETS` buckets) and more clocks are later decisions.
+  *Amended 2026-10-16:* Classic joined, as a second queue. A seek
   names its mode, only equal modes pair, and the terms (2 minutes per move,
   free) are the same apart from the mode. Classic got no covenant change and
   so no `quick` flag: its joiner still waits out one clock to leave, which a
@@ -139,5 +162,10 @@ requeueing.
 - Tests: server unit tests next to `sweeper.test.ts` (pairing, self-pair
   refused, timeouts and requeue, forged and wrong-terms codes rejected, rate
   limit); client queue-state tests through `Deps` with the in-memory chain;
-  a two-client live test on a throwaway localnet; a two-context Playwright
-  test.
+  and the two-client test on a throwaway localnet, `app/e2e/quick-match.pw.ts`
+  (two browser contexts through the real matchmaker, run by
+  `localnet/browser.sh`).
+- The per-client limits key on the client's address, so local runs, where
+  every window is 127.0.0.1, raise them (`MATCH_SEEK_LIMIT`,
+  `MATCH_REQUEST_LIMIT`, set by `localnet/dev.sh` and `browser.sh`).
+  Deployed, the defaults hold.

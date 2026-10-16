@@ -15,7 +15,7 @@ import {
 } from "./matches";
 import { modeOf } from "../modes/registry";
 import type { GameModeKey } from "../modes/types";
-import type { MatchTiming } from "../lib/covenant";
+import type { DeadlineBounds, MatchTiming } from "../lib/covenant";
 import { getRpc } from "./rpc";
 import { matchWallet, ownedWallet } from "./wallet";
 import { getDiscColor, getGameMode, getMatchTiming, getProfile, getStake } from "./profile";
@@ -57,7 +57,6 @@ export interface Connecting {
 
 export const connectingAtom = atom<Connecting | null>(null);
 
-/** Begin a connect journey; `advanceConnecting` ticks steps off in order. */
 /** A connect journey's wording: a title and its steps, in order. The
  * action ticks the first three; a caller may add steps after them. */
 export interface Journey {
@@ -65,6 +64,7 @@ export interface Journey {
   steps: readonly [string, string, string, ...string[]];
 }
 
+/** Begin a connect journey; `advanceConnecting` ticks steps off in order. */
 export function startConnecting(title: string, steps: readonly string[]): void {
   store.set(connectingAtom, { title, steps, step: 0 });
 }
@@ -109,9 +109,10 @@ export interface HostTerms {
   stake: bigint;
   timing: MatchTiming;
   mode: GameModeKey;
-  /** Opened for Quick Match: marked paired on our record, and in Fourk's
-   * covenant state too (the joiner may leave at once). */
-  quick?: boolean;
+  /** Opened for Quick Match. Sets both markers CONTEXT.md keeps apart: the
+   * paired mark on our record, and in Fourk the covenant's quick flag too
+   * (the joiner may leave at once). */
+  quickMatch?: boolean;
 }
 
 /** The body of newGame, bare so other actions can chain into it (e.g. a
@@ -128,13 +129,15 @@ export async function createGame(
   const stakeSetting = terms ? terms.stake : deps.account.hasOwnedAccount() ? getStake() : 0n;
   const staked = stakeSetting > 0n;
   const stake = staked ? stakeSetting : FREE_STAKE;
-  if (journey) startConnecting(journey.title, journey.steps);
-  else
-    startConnecting("Creating your game", [
+  const shown: Journey = journey ?? {
+    title: "Creating your game",
+    steps: [
       staked ? "Connecting to the Kaspa network" : "Connecting to the game",
       staked ? "Placing your stake" : "Preparing your seat",
       staked ? "Opening the game on-chain" : "Creating your invite link",
-    ]);
+    ],
+  };
+  startConnecting(shown.title, shown.steps);
   // Free games are seated by the invisible guest key and paid for by the
   // dispenser; staked games are seated by the player's own account. The two
   // pots of money never meet.
@@ -155,7 +158,7 @@ export async function createGame(
     ...m,
     ...(me.name && { profiles: { p1: me } }),
     ...(getDiscColor() === "blue" && { p1Color: "blue" as const }),
-    ...(terms?.quick && { paired: true as const }),
+    ...(terms?.quickMatch && { paired: true as const }),
   });
   // Stored the moment the stake is about to leave: a reload while the open
   // confirms must not strand a staked lobby with no record and no cancel.
@@ -168,7 +171,7 @@ export async function createGame(
       saveCheckpoint(m.covenantId, preOpen);
       updateMatch(dress(m));
     };
-    const quick = !!terms?.quick;
+    const quick = !!terms?.quickMatch;
     const match = await deps.chain.openMatch(key, stake, timing, mode, onSubmit, { quick });
     saveCheckpoint(match.covenantId, preOpen);
     const stored = updateMatch(dress(match));
@@ -197,12 +200,12 @@ export const takeSeat = (invite: Match, deps: Deps = realDeps): Promise<void> =>
   runAction(() => sitDown(invite, deps));
 
 /** The body of takeSeat, bare like createGame. Call inside `runAction`.
- * `minRemaining` raises the game-limit floor the seat is held to;
+ * `capBounds` holds the game's time limit to what the caller expects;
  * `journey` rewords the connect screen. */
 export async function sitDown(
   invite: Match,
   deps: Deps = realDeps,
-  { minRemaining, journey }: { minRemaining?: number; journey?: Journey } = {},
+  { capBounds, journey }: { capBounds?: DeadlineBounds; journey?: Journey } = {},
 ): Promise<void> {
   const known = store.get(matchesAtom).find((m) => m.covenantId === invite.covenantId);
   if (known) {
@@ -224,19 +227,21 @@ export async function sitDown(
   if (seatOpen && !iAmHost) {
     const staked = isStaked(invite);
     const { key, myPk } = deps.account.signingWallet({ staked });
-    if (journey) startConnecting(journey.title, journey.steps);
-    else
-      startConnecting("Joining the game", [
+    const shown: Journey = journey ?? {
+      title: "Joining the game",
+      steps: [
         staked ? "Connecting to the Kaspa network" : "Connecting to the game",
         staked ? "Placing your stake" : "Preparing your seat",
         staked ? "Taking your seat on-chain" : "Joining your opponent",
-      ]);
+      ],
+    };
+    startConnecting(shown.title, shown.steps);
     await deps.chain.connect();
     // A deadline the chain has already passed (or nearly so) is a trap —
     // the host could sudden-death the pot back out from under us — and the
     // covenant cannot check it (script proves time passed, never time
     // remaining). Refuse before any funds move.
-    await deps.chain.assertJoinableDeadline(invite, minRemaining);
+    await deps.chain.assertJoinableDeadline(invite, capBounds);
     advanceConnecting();
     await deps.chain.ensureFunds(key, invite.value + feeReserve(myPk, 1), { staked });
     advanceConnecting();

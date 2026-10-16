@@ -13,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import kaspaInit from "kaspa-wasm";
 import fourkInit from "fourk-wasm";
 import * as engine from "../src/shared/lib/engine";
+import { limitFromEnv } from "./limit";
 import { createMatchmaker } from "./match";
 import { MAX_BODY_BYTES, createSweeper, type Reply } from "./sweeper";
 
@@ -43,6 +44,13 @@ let rpc: engine.Rpc | null = null;
 let sweeper: ReturnType<typeof createSweeper> | null = null;
 let matchmaker: ReturnType<typeof createMatchmaker> | null = null;
 
+/** The POST routes. Each reaches its service when called, and the server
+ * answers 503 until both exist (the node may still be syncing). */
+const ROUTES = new Map<string, (body: string, client: string) => Promise<Reply>>([
+  ["/sweep", (body, client) => sweeper!.intake(body, client)],
+  ["/match/seek", (body, client) => matchmaker!.seek(body, client)],
+  ["/match/hosted", (body, client) => matchmaker!.hosted(body, client)],
+]);
 /** GET /match/<ticket>: a seeker's poll. */
 const TICKET_PATH = /^\/match\/([0-9a-f-]{36})$/;
 
@@ -63,6 +71,12 @@ http
     const online = !!rpc?.isConnected;
     if (req.url === "/healthz" && req.method === "GET")
       return send(res, online ? { status: 200, body: "ok" } : { status: 503, body: "no node" });
+    // Known paths first, so an unknown one is a 404 even while the node is
+    // still starting (the health workflow tells the two apart).
+    const url = req.url ?? "";
+    const ticket = TICKET_PATH.exec(url)?.[1];
+    const route = ROUTES.get(url);
+    if (!ticket && !route) return send(res, { status: 404, body: "not found" });
     if (req.method === "OPTIONS") return send(res, { status: 204, body: "" });
     if (!sweeper || !matchmaker || !online) return send(res, { status: 503, body: "starting" });
     const client = String(req.headers["cf-connecting-ip"] ?? req.socket.remoteAddress ?? "");
@@ -74,17 +88,11 @@ http
           send(res, { status: 500, body: "error" });
         });
 
-    const ticket = TICKET_PATH.exec(req.url ?? "")?.[1];
     if (ticket) {
       if (req.method !== "GET") return send(res, { status: 405, body: "GET only" });
       return void reply(matchmaker.poll(ticket, client));
     }
-    const route = new Map([
-      ["/sweep", sweeper.intake],
-      ["/match/seek", matchmaker.seek],
-      ["/match/hosted", matchmaker.hosted],
-    ]).get(req.url ?? "");
-    if (!route) return send(res, { status: 404, body: "not found" });
+    if (!route) return send(res, { status: 404, body: "not found" }); // checked above; narrows
     if (req.method !== "POST") return send(res, { status: 405, body: "POST only" });
 
     const chunks: Buffer[] = [];
@@ -112,7 +120,12 @@ const ready = createSweeper(node);
 rpc = node;
 sweeper = ready;
 // Local runs (localnet/dev.sh, browser.sh) put every client on 127.0.0.1.
-const limit = (name: string) => (process.env[name] ? Number(process.env[name]) : undefined);
+const limit = (name: string) => {
+  const raw = process.env[name];
+  const n = limitFromEnv(raw);
+  if (raw && n === undefined) console.error(`ignoring ${name}=${raw}: not a positive whole number`);
+  return n;
+};
 matchmaker = createMatchmaker(node, Date.now, {
   seekLimit: limit("MATCH_SEEK_LIMIT"),
   requestLimit: limit("MATCH_REQUEST_LIMIT"),

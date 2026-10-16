@@ -43,7 +43,9 @@ export const httpMatchmaker: MatchmakerOps = {
     if (res.status === 202) return "ok";
     // Not indexed on the matchmaker's node yet.
     if (res.status === 404) return "retry";
-    if (res.status === 400 || res.status === 403) return "refused";
+    // Off the terms, not ours, or our ticket is gone (410): posting again
+    // can't help, so the loop closes the lobby and searches again.
+    if (res.status === 400 || res.status === 403 || res.status === 410) return "refused";
     throw new Error(`hosted: ${res.status}`);
   },
 };

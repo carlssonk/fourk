@@ -181,6 +181,12 @@ export interface GameMode extends ModeEngine {
   /** How long the joiner must leave the unstarted lobby untouched before
    * dissolve lets them out (DAA, 0 = at once); the host never waits. */
   joinerExitWait(m: Match): number;
+  /** Whether an open lobby carries this mode's own Quick Match markings
+   * (the shared terms, clock and stake, are lib/quickMatch's). */
+  quickLobbyMarks(m: Match): boolean;
+  /** Whether Quick Match paired this game: from covenant state where the
+   * mode has a flag for it, else the record's own `paired` mark. */
+  isQuickMatched(m: Match): boolean;
   /** The game UTXO age claim_draw demands (0 = none): the sequence the draw
    * crank must carry, and how long after a board-filling transition it
    * waits. */

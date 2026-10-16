@@ -5,7 +5,6 @@
  * the matchmaker being honest.
  */
 
-import { core2Of, isCore2 } from "../modes/fourk2/core";
 import { modeOf } from "../modes/registry";
 import type { GameModeKey } from "../modes/types";
 import { isOpen } from "./game";
@@ -16,9 +15,22 @@ import { FREE_STAKE, NETWORK_ID, type Match } from "./match";
  * Fourk picks are blind and simultaneous, so some thinking time is fair. */
 export const QUICK_MATCH_MOVE_TIMEOUT = 1_200;
 
+/** The whole-game cap a Quick Match opens with, DAA: about a day, the floor
+ * hosted games get (state/profile.ts timingFor) at this clock. */
+export const QUICK_MATCH_TOTAL_CAP = 864_000;
+
+/** The time limit a Quick Match lobby may have left, DAA: the cap, give or
+ * take an hour either way. That covers the time between the host's open
+ * and the join generously, since a pairing that slow has long been dropped
+ * by the matchmaker. Checked by the matchmaker and again by the joiner. */
+export const QUICK_MATCH_CAP_BOUNDS = {
+  min: QUICK_MATCH_TOTAL_CAP - 36_000,
+  max: QUICK_MATCH_TOTAL_CAP + 36_000,
+};
+
 /** The cap isn't compared here: it's an absolute DAA score set at open, so
- * the joiner holds it to the preset at join (state/quickMatch.ts, through
- * `assertJoinableDeadline`'s floor). */
+ * it needs the chain's current score (QUICK_MATCH_CAP_BOUNDS, checked by the
+ * matchmaker and at join through `assertJoinableDeadline`). */
 export function isQuickMatchTerms(m: Match, mode: GameModeKey): boolean {
   if (
     m.network !== NETWORK_ID ||
@@ -28,12 +40,5 @@ export function isQuickMatchTerms(m: Match, mode: GameModeKey): boolean {
     !isOpen(m.state)
   )
     return false;
-  // Classic has no Quick Match flag: its joiner waits out one clock to
-  // leave, as on an invite.
-  if (mode === "classic") return m.simul === undefined;
-  return (
-    isCore2(m.simul) &&
-    core2Of(m).revealTimeout === QUICK_MATCH_MOVE_TIMEOUT &&
-    core2Of(m).quick === 1
-  );
+  return modeOf(m).quickLobbyMarks(m);
 }

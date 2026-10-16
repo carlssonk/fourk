@@ -49,3 +49,39 @@ conversation reveals it was fuzzy.
   codec) calls it instead of re-deriving its own checks. The canonical
   fixed-width codec (`STATE_BYTES`) is a contract-layout mirror, not the
   app's wire format — invite links use the compact share-code format.
+
+## Quick Match
+
+- **Quick Match** — pairing two strangers who both pressed the button, with
+  no invite link ([ADR 0003](docs/adr/0003-quick-match-through-a-keyless-matchmaker.md)).
+  Client loop in `state/quickMatch.ts`; the opposite of a private game,
+  whose host shares a link.
+
+- **Matchmaker** — the `/match` routes in the sweeper process
+  (`app/sweeper/match.ts`). Pairs seekers, picks the host, and forwards the
+  host's share code once its node holds that lobby. Holds no keys and is
+  not trusted: the joiner re-checks everything it is handed. Reached through
+  **MatchmakerOps** (`state/deps.ts`), the seam the loop takes beside
+  ChainOps and AccountOps as **QuickMatchDeps**; `lib/matchmaker.ts` is its
+  HTTP adapter.
+
+- **Ticket** — one seeker's place in the matchmaker's queue. Polling it is
+  the seeker's presence; a ticket that goes quiet is dropped and its partner
+  requeued.
+
+- **Quick Match terms** — what a lobby must be for the queue it was handed
+  to: right network and mode, free stake, the preset clock
+  (`isQuickMatchTerms`, `lib/quickMatch.ts`), plus each mode's own markings
+  (`GameMode.quickLobbyMarks`). The game limit is an absolute score, so the
+  joiner holds it to the preset's cap at join, both ways.
+
+- **quick flag** — Fourk V2 covenant state (`quick`, 0 or 1), set by the
+  host at open: consensus state, carried in share codes, the same on every
+  device. Its one effect is that `dissolve` lets the joiner leave at once.
+  Not to be confused with the **paired mark**.
+
+- **Paired mark** — `Match.paired`, our own record's note that Quick Match
+  paired a game. Never wire state. The only marker Classic has (it has no
+  covenant flag), so a Classic joiner still waits one clock to leave. Ask a
+  game which it is through `GameMode.isQuickMatched`, never either field
+  directly.

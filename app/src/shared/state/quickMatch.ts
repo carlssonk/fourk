@@ -8,7 +8,12 @@
 import { atom, getDefaultStore } from "jotai";
 import { encodeShareCode, type Match } from "../lib/match";
 import { parseInvite } from "../lib/invite";
-import { QUICK_MATCH_MOVE_TIMEOUT, isQuickMatchTerms } from "../lib/quickMatch";
+import {
+  QUICK_MATCH_CAP_BOUNDS,
+  QUICK_MATCH_MOVE_TIMEOUT,
+  QUICK_MATCH_TOTAL_CAP,
+  isQuickMatchTerms,
+} from "../lib/quickMatch";
 import {
   SEAT_GONE,
   createGame,
@@ -23,15 +28,16 @@ import { realDeps, type PollState, type QuickMatchDeps } from "./deps";
 import { SEEK_LIMITED, httpMatchmaker } from "../lib/matchmaker";
 import { matchesAtom, removeMatch, showMatch } from "./matches";
 import { isOpen } from "../lib/game";
-import { getGameMode, timingFor } from "./profile";
+import { getGameMode } from "./profile";
 import type { GameModeKey } from "../modes/types";
 
 export type QuickMatchStatus =
   | { phase: "idle" }
-  /** In the queue since `since` (Date.now()). */
-  | { phase: "searching"; since: number }
+  /** In `mode`'s queue since `since` (Date.now()). The mode is the
+   * search's own: the picker may change meanwhile (another tab). */
+  | { phase: "searching"; since: number; mode: GameModeKey }
   /** Paired: the game is being opened or joined. */
-  | { phase: "setting-up" };
+  | { phase: "setting-up"; mode: GameModeKey };
 
 export const quickMatchAtom = atom<QuickMatchStatus>({ phase: "idle" });
 
@@ -45,7 +51,9 @@ const MAX_POLL_FAILURES = 5;
  * first-time guest's dispenser claim and the join's acceptance on testnet.
  * A join that lands after it still beats the cancel (closeLobby). */
 const JOIN_WAIT_MS = 60_000;
-/** Lobby posts before giving up: the matchmaker's HOST_GRACE_MS (30 s). */
+/** Lobby posts before giving up (about 30 s): the lobby is open, so this
+ * only waits for the matchmaker's node to index it. A ticket the matchmaker
+ * has dropped is refused at once (410), not retried. */
 const MAX_POST_ATTEMPTS = 15;
 
 const SEARCHED_TOO_OFTEN =
@@ -54,16 +62,12 @@ const SEARCHED_TOO_OFTEN =
 export const UNAVAILABLE =
   "Quick Match isn't available right now. You can still start a private game and send the link.";
 
-/** Between a Quick Match host's open and the join: generous, since a
- * pairing that slow has long been dropped by the matchmaker. */
-const CAP_SLACK_DAA = 36_000;
-
 /** What a Quick Match host opens: the player's mode, otherwise fixed. */
 const termsFor = (mode: GameModeKey): HostTerms => ({
   stake: 0n,
-  timing: timingFor(QUICK_MATCH_MOVE_TIMEOUT),
+  timing: { moveTimeout: QUICK_MATCH_MOVE_TIMEOUT, totalCap: QUICK_MATCH_TOTAL_CAP },
   mode,
-  quick: true,
+  quickMatch: true,
 });
 
 /** The connect screens once paired: the opponent is found first, then the
@@ -96,7 +100,8 @@ export async function startQuickMatch(
   const mine = ++run;
   const live = () => mine === run;
   const { myPk } = deps.account.signingWallet({ staked: false });
-  // Read at the press: the mode picker stays live on screen meanwhile.
+  // Read once, at the press: the search keeps this mode (the status carries
+  // it), whatever the picker says later, e.g. from another tab.
   const terms = termsFor(getGameMode());
   // One search, however many tickets it takes: the wait shown counts from
   // the press, not from the latest requeue.
@@ -109,7 +114,7 @@ export async function startQuickMatch(
       return unavailable((e as Error)?.message === SEEK_LIMITED ? SEARCHED_TOO_OFTEN : UNAVAILABLE);
     }
     if (!live()) return;
-    store.set(quickMatchAtom, { phase: "searching", since });
+    store.set(quickMatchAtom, { phase: "searching", since, mode: terms.mode });
     const done = await follow(deps, terms, ticket, live, since);
     if (done) return idle();
     await wait(POLL_MS);
@@ -146,27 +151,30 @@ async function follow(
       // The matchmaker is not trusted with the terms: check them here.
       const invite = parseInvite(poll.code);
       if (!invite || !isQuickMatchTerms(invite, terms.mode)) return false;
-      store.set(quickMatchAtom, { phase: "setting-up" });
+      // Nor with who it pairs: never our own lobby (an honest one can't).
+      const { myPk } = deps.account.signingWallet({ staked: false });
+      if (invite.state.p1 === myPk) return false;
+      store.set(quickMatchAtom, { phase: "setting-up", mode: terms.mode });
       let skipped = false;
       await runAction(async () => {
         try {
           // The cap is an absolute score the terms can't compare, so hold it
           // to the preset here: a short one would cut the game off early.
-          const minRemaining = terms.timing.totalCap - CAP_SLACK_DAA;
+          const capBounds = QUICK_MATCH_CAP_BOUNDS;
           // Marked paired on our record: Classic has no flag for it on chain.
-          await sitDown({ ...invite, paired: true }, deps, { minRemaining, journey: JOINING });
+          await sitDown({ ...invite, paired: true }, deps, { capBounds, journey: JOINING });
         } catch (e) {
           // Someone else got there first, or the lobby's limit is off the
           // terms: not the player's problem, find another.
           const why = (e as Error)?.message;
-          if (why !== SEAT_GONE && why !== "DEADLINE_TOO_CLOSE") throw e;
+          if (why !== SEAT_GONE && !why?.startsWith("DEADLINE_TOO_")) throw e;
           skipped = true;
         }
       });
       return !skipped;
     }
     if (poll.state === "host" && !lobby) {
-      store.set(quickMatchAtom, { phase: "setting-up" });
+      store.set(quickMatchAtom, { phase: "setting-up", mode: terms.mode });
       // The open takes a while; the matchmaker drops a ticket that goes
       // quiet, so keep polling through it.
       const stopBeat = heartbeat(deps, ticket);
@@ -184,9 +192,9 @@ async function follow(
     } else if (poll.state === "open" && lobby) {
       // The partner left before taking the lobby; it stays up for the next.
       showWaiting(false);
-      store.set(quickMatchAtom, { phase: "searching", since });
+      store.set(quickMatchAtom, { phase: "searching", since, mode: terms.mode });
     } else if (poll.state === "hosted" && lobby) {
-      store.set(quickMatchAtom, { phase: "setting-up" });
+      store.set(quickMatchAtom, { phase: "setting-up", mode: terms.mode });
       showWaiting(true);
     } else if (poll.state === "matched" && lobby) {
       // Still held while the join lands, so Cancel can close it meanwhile.

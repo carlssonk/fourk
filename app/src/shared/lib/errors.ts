@@ -18,6 +18,8 @@ export function friendlyError(message: string): string {
   if (message.includes("BAD_ADDRESS")) return "Enter a valid Kaspa address.";
   if (message.includes("DEADLINE_TOO_CLOSE"))
     return "This game is too close to its time limit. Ask the host for a new invite.";
+  if (message.includes("DEADLINE_TOO_FAR"))
+    return "This game's time limit isn't what it should be. Look for another game.";
   if (message.includes("WRONG_NETWORK"))
     return "That invite is for a different Kaspa network than this app is connected to.";
   if (message.includes("ACCOUNT_NOT_SAVED"))

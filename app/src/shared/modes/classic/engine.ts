@@ -45,6 +45,17 @@ export const classicEngine = {
     return m.state.moveTimeout;
   },
 
+  /** No round machine, so nothing to mark: its joiner waits out one clock
+   * to leave, as on an invite. */
+  quickLobbyMarks(m: Match): boolean {
+    return m.simul === undefined;
+  },
+
+  /** No covenant flag: only our own record knows. */
+  isQuickMatched(m: Match): boolean {
+    return !!m.paired;
+  },
+
   /** Classic's draw has no age gate. */
   drawAge(_m: Match): number {
     return 0;

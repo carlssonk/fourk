@@ -403,7 +403,7 @@ test("a host opens its lobby as a Quick Match in covenant state", async () => {
   );
 });
 
-test("a joiner holds the lobby's game limit to the Quick Match cap, not just the general floor", async () => {
+test("a joiner holds the lobby's game limit to the Quick Match cap, both ways", async () => {
   const code = encodeShareCode(lobby(HOST_PK));
   const chain = fakeChain({ joinMatch: joinedBy(GUEST_PK) });
   deps = { chain, account: fakeAccount(), matchmaker: fakeMatchmaker([{ state: "join", code }]) };
@@ -413,7 +413,7 @@ test("a joiner holds the lobby's game limit to the Quick Match cap, not just the
   // seconds between the host's open and this join.
   expect(chain.assertJoinableDeadline).toHaveBeenCalledWith(
     expect.objectContaining({ covenantId: lobby(HOST_PK).covenantId }),
-    864_000 - 36_000,
+    { min: 864_000 - 36_000, max: 864_000 + 36_000 },
   );
 });
 
@@ -629,4 +629,35 @@ test("a Classic joiner takes the seat, the game marked paired", async () => {
     paired: true,
     state: { p2: GUEST_PK },
   });
+});
+
+test("a joiner handed its own lobby skips it and queues again", async () => {
+  // An honest matchmaker never pairs a key with itself; the joiner doesn't
+  // rely on that.
+  const code = encodeShareCode(lobby(GUEST_PK));
+  const chain = fakeChain({ joinMatch: joinedBy(GUEST_PK) });
+  const matchmaker = fakeMatchmaker([{ state: "join", code }, { state: "waiting" }]);
+  vi.mocked(matchmaker.seek).mockResolvedValueOnce("t1").mockResolvedValueOnce("t2");
+  deps = { chain, account: fakeAccount(), matchmaker };
+  void startQuickMatch(deps);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(chain.joinMatch).not.toHaveBeenCalled();
+  expect(store.get(currentMatchAtom)).toBeNull();
+  expect(matchmaker.poll).toHaveBeenLastCalledWith("t2");
+  expect(store.get(quickMatchAtom)).toMatchObject({ phase: "searching" });
+});
+
+test("the search remembers its mode, whatever the picker says meanwhile", async () => {
+  store.set(gameModeAtom, "classic");
+  deps = {
+    chain: fakeChain(),
+    account: fakeAccount(),
+    matchmaker: fakeMatchmaker([{ state: "waiting" }]),
+  };
+  void startQuickMatch(deps);
+  await vi.advanceTimersByTimeAsync(1_000);
+  // Changed in another tab: this search is still Classic's.
+  store.set(gameModeAtom, "fourk2");
+  await vi.advanceTimersByTimeAsync(3_000);
+  expect(store.get(quickMatchAtom)).toMatchObject({ phase: "searching", mode: "classic" });
 });

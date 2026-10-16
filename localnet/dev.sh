@@ -77,19 +77,61 @@ else
 fi
 
 # Built for simnet into the chain's own directory, never sweeper/dist
-# (which infra/node deploys).
+# (which infra/node deploys). Rebuilt every start: the app reloads as code
+# changes, but a sweeper left running from an earlier start would keep the
+# old matchmaker, and the two would quietly disagree (pairing across modes,
+# refusing new terms).
 SWEEPER_PORT=8791
-if curl -sf "http://127.0.0.1:$SWEEPER_PORT/healthz" >/dev/null 2>&1; then
-  echo "sweeper: reusing the one on :$SWEEPER_PORT"
-else
+SWEEPER_BUNDLE="$DATA/sweeper/sweeper.mjs"
+# The hash of the bundle the running sweeper loaded, written when it starts:
+# what "stale" is judged against, not the file on disk.
+SWEEPER_STAMP="$DATA/sweeper.started"
+SWEEPER_URL="http://127.0.0.1:$SWEEPER_PORT/sweep"
+
+start_sweeper() {
   echo "sweeper: running on :$SWEEPER_PORT (log: $DATA/sweeper.log)"
-  VITE_NETWORK_ID=simnet SWEEPER_OUT_DIR="$PWD/$DATA/sweeper" pnpm --dir app build:sweeper >/dev/null
   # Every local window shares 127.0.0.1, so lift the per-client limits.
   MATCH_SEEK_LIMIT=1000 MATCH_REQUEST_LIMIT=100000 \
-    NODE_URL="$KASPA_RPC_URL" PORT="$SWEEPER_PORT" node "$DATA/sweeper/sweeper.mjs" >"$DATA/sweeper.log" 2>&1 &
+    NODE_URL="$KASPA_RPC_URL" PORT="$SWEEPER_PORT" node "$SWEEPER_BUNDLE" >"$DATA/sweeper.log" 2>&1 &
   SWEEPER_PID=$!
+  echo "$fresh" >"$SWEEPER_STAMP"
+}
+
+built=1
+VITE_NETWORK_ID=simnet SWEEPER_OUT_DIR="$PWD/$DATA/sweeper" pnpm --dir app build:sweeper >/dev/null || built=0
+fresh=$(shasum "$SWEEPER_BUNDLE" 2>/dev/null | cut -d' ' -f1 || true)
+holder=$(lsof -t -iTCP:"$SWEEPER_PORT" -sTCP:LISTEN 2>/dev/null || true)
+# Only a sweeper answers /healthz with these (503 "no node" while syncing).
+health=$(curl -s --max-time 2 "http://127.0.0.1:$SWEEPER_PORT/healthz" 2>/dev/null || true)
+
+if [[ -n "$holder" && "$health" != "ok" && "$health" != "no node" ]]; then
+  echo "sweeper: :$SWEEPER_PORT is held by another program; Quick Match and payouts are off"
+  SWEEPER_URL=""
+elif [[ -n "$holder" ]]; then
+  if [[ $built == 0 ]]; then
+    echo "sweeper: build failed, reusing the one already running on :$SWEEPER_PORT"
+  elif [[ "$(cat "$SWEEPER_STAMP" 2>/dev/null)" == "$fresh" ]]; then
+    echo "sweeper: reusing the one on :$SWEEPER_PORT"
+  else
+    echo "sweeper: code changed, restarting the one on :$SWEEPER_PORT"
+    kill $holder 2>/dev/null || true
+    for _ in $(seq 50); do
+      lsof -t -iTCP:"$SWEEPER_PORT" -sTCP:LISTEN >/dev/null 2>&1 || break
+      sleep 0.2
+    done
+    if lsof -t -iTCP:"$SWEEPER_PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+      echo "sweeper: the old one wouldn't stop; reusing it (stale until it does)"
+    else
+      start_sweeper
+    fi
+  fi
+elif [[ $built == 0 ]]; then
+  echo "sweeper: build failed; Quick Match and payouts are off"
+  SWEEPER_URL=""
+else
+  start_sweeper
 fi
 
 VITE_NODE_URL="$KASPA_RPC_URL" VITE_NETWORK_ID=simnet VITE_RESET_MARGIN=500 \
-  VITE_SWEEPER_URL="http://127.0.0.1:$SWEEPER_PORT/sweep" \
+  VITE_SWEEPER_URL="$SWEEPER_URL" \
   pnpm --dir app start

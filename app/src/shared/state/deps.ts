@@ -14,7 +14,7 @@ import type { Match, PlayerProfile } from "../lib/match";
 import type { GameModeKey, GenesisOptions } from "../modes/types";
 import { getRpc } from "./rpc";
 import { hasOwnedAccount, matchWallet, signingWallet, type Wallet } from "./wallet";
-import type { MatchTiming, PrivateKey } from "../lib/covenant";
+import type { DeadlineBounds, MatchTiming, PrivateKey } from "../lib/covenant";
 
 export interface ChainOps {
   /** Resolve the node connection — the step the connect journey ticks on. */
@@ -39,9 +39,10 @@ export interface ChainOps {
     profile: PlayerProfile,
     onSubmit?: (m: Match) => void,
   ): Promise<Match>;
-  /** Refuse a game with less than `minRemaining` (or the general floor) of
+  /** Refuse a game with less than `bounds.min` (or the general floor), or
+   * more than `bounds.max`, of
    * its time limit left. */
-  assertJoinableDeadline(invite: Match, minRemaining?: number): Promise<void>;
+  assertJoinableDeadline(invite: Match, bounds?: DeadlineBounds): Promise<void>;
   /** Close our own open lobby and take the stake back. */
   cancelMatch(key: PrivateKey, match: Match): Promise<void>;
 }
@@ -91,8 +92,8 @@ export const realChain: ChainOps = {
   async joinMatch(key, invite, profile, onSubmit) {
     return cov.joinMatch(await getRpc(), key, invite, profile, onSubmit);
   },
-  async assertJoinableDeadline(invite, minRemaining) {
-    await cov.assertJoinableDeadline(await getRpc(), invite, minRemaining);
+  async assertJoinableDeadline(invite, bounds) {
+    await cov.assertJoinableDeadline(await getRpc(), invite, bounds);
   },
   async cancelMatch(key, match) {
     await cov.cancelMatch(await getRpc(), key, match);

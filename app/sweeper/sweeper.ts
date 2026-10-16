@@ -18,12 +18,12 @@ import { NETWORK_ID, matchFromJson, type Match } from "../src/shared/lib/match";
 import { sweepWinMatch } from "../src/shared/modes/fourk2/actions";
 import { core2Of, isCore2 } from "../src/shared/modes/fourk2/core";
 import { fourk2Engine } from "../src/shared/modes/fourk2/engine";
+import { createLimiter } from "./limit";
 
 export const MAX_BODY_BYTES = 8 * 1024;
 export const MAX_QUEUE = 1000;
 /** Per-client requests per window (CF-Connecting-IP through the tunnel). */
 export const RATE_LIMIT = 20;
-export const RATE_WINDOW_MS = 60_000;
 export const MAX_ATTEMPTS = 5;
 
 export interface Reply {
@@ -40,18 +40,8 @@ interface Pending {
 
 export function createSweeper(rpc: engine.Rpc, now: () => number = Date.now) {
   const queue = new Map<string, Pending>();
-  const hits = new Map<string, { count: number; since: number }>();
+  const limited = createLimiter(RATE_LIMIT, now);
   let ticking = false;
-
-  function limited(client: string): boolean {
-    const t = now();
-    const h = hits.get(client);
-    if (!h || t - h.since >= RATE_WINDOW_MS) {
-      hits.set(client, { count: 1, since: t });
-      return false;
-    }
-    return ++h.count > RATE_LIMIT;
-  }
 
   /** POST /sweep: register a pending win. 202 = queued (or already queued). */
   async function intake(body: string, client: string): Promise<Reply> {
@@ -68,8 +58,7 @@ export function createSweeper(rpc: engine.Rpc, now: () => number = Date.now) {
       return { status: 400, body: "no pending win" };
     // A double win is a split, which the players' clients contest; a sweep
     // would only be refused there.
-    if (isDoubleWin(match.state.board))
-      return { status: 400, body: "double win" };
+    if (isDoubleWin(match.state.board)) return { status: 400, body: "double win" };
 
     const key = `${match.covenantId}:${match.txid}`;
     if (queue.has(key)) return { status: 202, body: "queued" };
@@ -115,8 +104,6 @@ export function createSweeper(rpc: engine.Rpc, now: () => number = Date.now) {
           } else p.nextCheck = now() + 15_000 * p.attempts;
         }
       }
-      // Forget idle clients so the limiter's map stays small.
-      for (const [client, h] of hits) if (now() - h.since >= RATE_WINDOW_MS) hits.delete(client);
     } finally {
       ticking = false;
     }

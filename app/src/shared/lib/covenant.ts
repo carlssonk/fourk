@@ -114,17 +114,32 @@ export async function openMatch(
  * expired-deadline invite and permissionlessly refund both stakes whenever
  * they're losing. The app's seat-taking flow enforces this BEFORE funding
  * the seat; joinMatch itself stays policy-free so tests and tools can
- * exercise short-capped games deliberately. `minRemaining` raises the floor
- * for a caller that knows what cap the game should have (Quick Match). */
+ * exercise short-capped games deliberately. A caller that knows what cap
+ * the game should have (Quick Match) passes `bounds`: `min` raises the
+ * floor, and `max` refuses a limit set far beyond it, which would push an
+ * abandoned game's last-resort exit out of reach. */
 export async function assertJoinableDeadline(
   rpc: Rpc,
   match: Match,
-  minRemaining = 0,
+  { min = 0, max }: DeadlineBounds = {},
 ): Promise<void> {
-  const info: any = await engine.withRetry(() => rpc.getBlockDagInfo());
-  const remaining = match.state.deadline - Number(info.virtualDaaScore);
-  const floor = Math.max(2 * match.state.moveTimeout, 18_000, minRemaining);
+  const remaining = await gameTimeLeft(rpc, match);
+  const floor = Math.max(2 * match.state.moveTimeout, 18_000, min);
   if (match.state.deadline <= 0 || remaining < floor) throw new Error("DEADLINE_TOO_CLOSE");
+  if (max !== undefined && remaining > max) throw new Error("DEADLINE_TOO_FAR");
+}
+
+/** How much of its whole-game time limit a match has left, DAA blocks,
+ * against the chain's current score (negative once it has passed). */
+export async function gameTimeLeft(rpc: Rpc, match: Match): Promise<number> {
+  const info: any = await engine.withRetry(() => rpc.getBlockDagInfo());
+  return match.state.deadline - Number(info.virtualDaaScore);
+}
+
+/** How much of its time limit a game may have left, DAA blocks. */
+export interface DeadlineBounds {
+  min?: number;
+  max?: number;
 }
 
 export async function joinMatch(

@@ -9,7 +9,7 @@ import { fmtDaaDuration, fmtKas, isStaked, loadCheckpoint, type Match } from "@s
 import { gameEnd } from "@shared/lib/result";
 import { HAS_SWEEPER, registerSweep } from "@shared/lib/sweeper";
 import { modeOf } from "@shared/modes/registry";
-import { isCore2, isQuick } from "@shared/modes/fourk2/core";
+import { isCore2 } from "@shared/modes/fourk2/core";
 import type { StatusDescriptor } from "@shared/modes/types";
 import { playClaimReady, playClockExpired, playClockWarning } from "@shared/lib/sound";
 import { DiscLoader } from "@shared/components/DiscLoader";
@@ -341,8 +341,9 @@ export const Game = ({ match }: Props) => {
 
   // The lobby exit, by who's leaving what. A private host kicks: the seat
   // clears into a fresh game with a new link. In Quick Match nobody chose
-  // the opponent or has a link to share, so both seats just leave, at once.
-  const exit = isQuick(match) || match.paired ? "leave" : role === "p1" ? "kick" : "cancel";
+  // the opponent or has a link to share, so both seats just leave: at once,
+  // except a Classic joiner, who still waits out one clock (joinerExitWait).
+  const exit = mode.isQuickMatched(match) ? "leave" : role === "p1" ? "kick" : "cancel";
   const dissolveGame = async () => {
     const ok = await askConfirm(
       exit === "leave"

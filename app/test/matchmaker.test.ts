@@ -18,7 +18,9 @@ vi.mock("../src/shared/lib/engine", async (original) => ({
   fetchGameUtxo: vi.fn(),
 }));
 
-const rpc = {} as engine.Rpc;
+/** The node is at score 36,000, so the fixture's deadline (900,000) leaves
+ * exactly the preset's cap (864,000). */
+const rpc = { getBlockDagInfo: async () => ({ virtualDaaScore: 36_000 }) } as unknown as engine.Rpc;
 let clock = 0;
 const matchmaker = () => createMatchmaker(rpc, () => clock);
 const alice = "11".repeat(32);
@@ -151,7 +153,8 @@ test("refuses a code that isn't the paired host's Quick Match lobby", async () =
   for (const [bad, status] of [
     ["not json", 400],
     [JSON.stringify({ ticket: a, code: "garbage" }), 400],
-    [hosted("no-such-ticket", lobby(alice)), 404],
+    // Gone, not "not indexed yet": the host should stop posting at once.
+    [hosted("no-such-ticket", lobby(alice)), 410],
     // The partner can't host, nor post a lobby of their own.
     [hosted(b, lobby(bob)), 403],
     // Another player's lobby, or one on other terms.
@@ -365,4 +368,33 @@ test("refuses a lobby in another mode than the host queued for", async () => {
   await seek(mm, bob, bob, "classic");
   expect((await mm.hosted(hosted(a, lobby(alice)), "x")).status).toBe(400);
   expect(engine.fetchGameUtxo).not.toHaveBeenCalled();
+});
+
+test("a host still opening its lobby a minute after pairing is kept", async () => {
+  const mm = matchmaker();
+  const a = await seek(mm, alice);
+  const b = await seek(mm, bob);
+  // A fresh guest's dispenser claim and the open's confirmation on testnet.
+  for (let waited = 0; waited < 60_000; waited += 2_000) {
+    clock += 2_000;
+    await poll(mm, a);
+    await poll(mm, b);
+  }
+  expect((await mm.hosted(hosted(a, lobby(alice)), "x")).status).toBe(202);
+  expect(await poll(mm, b)).toMatchObject({ state: "join" });
+});
+
+test("refuses a lobby whose game limit is off the preset's cap, either way", async () => {
+  const mm = matchmaker();
+  const a = await seek(mm, alice);
+  const b = await seek(mm, bob);
+  const capped = (deadline: number) => ({
+    ...lobby(alice),
+    state: { ...lobby(alice).state, deadline },
+  });
+  for (const deadline of [36_000 + 18_600, 36_000 + 8_640_000])
+    expect((await mm.hosted(hosted(a, capped(deadline)), "x")).status, String(deadline)).toBe(400);
+  expect(engine.fetchGameUtxo).not.toHaveBeenCalled();
+  expect(await poll(mm, b)).toMatchObject({ state: "waiting" });
+  expect((await mm.hosted(hosted(a, lobby(alice)), "x")).status).toBe(202);
 });
