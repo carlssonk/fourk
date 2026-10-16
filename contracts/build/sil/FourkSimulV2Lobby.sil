@@ -7,7 +7,8 @@ contract FourkSimulV2Lobby(
     pubkey init_p1,
     int init_move_timeout,
     int init_deadline,
-    int init_reveal_timeout
+    int init_reveal_timeout,
+    int init_quick
 ) {
     // :: shared constants
     int constant COLS = 7;
@@ -51,6 +52,7 @@ contract FourkSimulV2Lobby(
         int pick_deadline;
         int first_committer;
         int reveal_timeout;
+        int quick;
     }
     struct SimulV2LobbyState {
         // :: user declared fields
@@ -58,6 +60,7 @@ contract FourkSimulV2Lobby(
         int move_timeout;
         int deadline;
         int reveal_timeout;
+        int quick;
     }
 
     // :: global functions (isolated using the gen__glob_ namespace)
@@ -111,6 +114,7 @@ contract FourkSimulV2Lobby(
     int move_timeout = init_move_timeout;
     int deadline = init_deadline;
     int reveal_timeout = init_reveal_timeout;
+    int quick = init_quick;
 
     // :: entrypoints
     // :: leader entry (1:N)
@@ -130,6 +134,7 @@ contract FourkSimulV2Lobby(
         require(move_timeout <= MAX_MOVE_TIMEOUT);
         require(deadline > 0);
         require(deadline < DEADLINE_LIMIT);
+        require(quick == 0 || quick == 1);
         require(pk != p1);
         require(checkSig(s, pk));
         SimulV2MatchState next_match = SimulV2MatchState {
@@ -148,6 +153,7 @@ contract FourkSimulV2Lobby(
             pick_deadline: 0,
             first_committer: 0,
             reveal_timeout: reveal_timeout,
+            quick: quick,
         };
         require(tx.outputs[gen__game_output_idx].value == 2 * tx.inputs[this.activeInputIndex].value);
         // :: become FourkSimulV2

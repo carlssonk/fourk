@@ -29,6 +29,23 @@ function started() {
   return v2.resolve(shown, at(P2, 700), 1, salt(1));
 }
 
+test("a Quick Match joiner can leave at once, until the first pick", () => {
+  const quick = v2.join(v2.newMatch(P1, STAKE, 1200, 100_000, 600, 1), at(P2));
+  expect(quick.quick).toBe(1);
+  expect(joined().quick).toBe(0);
+  // Both players were present seconds ago: neither exit waits.
+  expect(v2.dissolve(quick, at(P1))).toEqual(draw);
+  expect(v2.dissolve(quick, at(P2, 1000, 0, 0))).toEqual(draw);
+  expect(() => v2.dissolve(quick, at(STRANGER))).toThrow();
+  // The exits still close at the first pick.
+  const one = v2.commit(quick, at(P1, 400), pick(0));
+  expect(() => v2.dissolve(one, at(P2, 1000, 0, 9999))).toThrow();
+  // Only 0 and 1 open; a forged lobby carrying anything else can't be joined.
+  expect(() => v2.newMatch(P1, STAKE, 1200, 100_000, 600, 2 as 1)).toThrow(/quick/);
+  const forged = { ...v2.newMatch(P1, STAKE, 1200, 100_000, 600), quick: 2 };
+  expect(() => v2.join(forged, at(P2))).toThrow(/quick/);
+});
+
 test("the first pick starts the opponent's window; a stalled first round refunds instead of forfeiting", () => {
   for (const first of [0, 1] as const) {
     const second = (1 - first) as 0 | 1;

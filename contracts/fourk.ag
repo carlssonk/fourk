@@ -390,6 +390,10 @@ state SimulV2MatchState {
     int first_committer;
     // Separate reveal inactivity and board-result challenge allowance.
     int reveal_timeout;
+    // 1 = paired by Quick Match (docs/adr/0003), 0 = an invite. Set by the
+    // host at open and carried unchanged; it only lifts the joiner's lobby
+    // wait in dissolve.
+    int quick;
 }
 
 state SimulV2LobbyState {
@@ -397,6 +401,7 @@ state SimulV2LobbyState {
     int move_timeout;
     int deadline;
     int reveal_timeout;
+    int quick;
 }
 
 actor FourkSimulV2Lobby owns SimulV2LobbyState {
@@ -411,6 +416,7 @@ actor FourkSimulV2Lobby owns SimulV2LobbyState {
         require(move_timeout <= MAX_MOVE_TIMEOUT);
         require(deadline > 0);
         require(deadline < DEADLINE_LIMIT);
+        require(quick == 0 || quick == 1);
         require(pk != p1);
         require(checkSig(s, pk));
 
@@ -429,6 +435,7 @@ actor FourkSimulV2Lobby owns SimulV2LobbyState {
             pick_deadline: 0,
             first_committer: 0,
             reveal_timeout: reveal_timeout,
+            quick: quick,
         };
 
         require(game.value == 2 * self.value);
@@ -491,7 +498,10 @@ actor FourkSimulV2 owns SimulV2MatchState {
         require(commit1 == zero32() && commit2 == zero32());
         require(reveal1 == 0 && reveal2 == 0);
         require(pk == p1 || pk == p2);
-        if (pk == p2) {
+        // An invite can be taken while the host is away, so the joiner waits
+        // out one clock before killing the host's link. Quick Match paired
+        // two players who were both present seconds ago: no wait.
+        if (pk == p2 && quick == 0) {
             require(this.ageDaa >= move_timeout);
         }
         require(checkSig(s, pk));
@@ -557,6 +567,7 @@ actor FourkSimulV2 owns SimulV2MatchState {
             pick_deadline: 0,
             first_committer: 0,
             reveal_timeout: reveal_timeout,
+            quick: quick,
         };
 
         require(pending.value == self.value);
@@ -872,6 +883,7 @@ actor FourkSimulV2 owns SimulV2MatchState {
             pick_deadline: 0,
             first_committer: 0,
             reveal_timeout: reveal_timeout,
+            quick: quick,
         };
 
         require(next.value == self.value);
@@ -969,6 +981,7 @@ actor FourkSimulV2 owns SimulV2MatchState {
             pick_deadline: 0,
             first_committer: 0,
             reveal_timeout: reveal_timeout,
+            quick: quick,
         };
 
         require(next.value == self.value);
@@ -1051,6 +1064,7 @@ actor FourkSimulV2 owns SimulV2MatchState {
             pick_deadline: next_deadline,
             first_committer: next_first,
             reveal_timeout: reveal_timeout,
+            quick: quick,
         };
 
         require(next.value == self.value);

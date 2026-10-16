@@ -30,9 +30,11 @@ to poll for open games. Two on-chain alternatives were considered:
 Being present is what decides whether a pairing works. In Fourk mode an
 absent opponent can't take anyone's stake: the first round can't forfeit
 (`fourk-shared-deadlines.md`, "The first round"), so a host who never picks
-costs the joiner a wait of one picking window and a refund. That is
-tolerable as a safety net and unacceptable as the normal case, so the
-matchmaker has to hand out only players who are there.
+costs the joiner a refund: at first after one picking window, and since the
+covenant's `quick` flag (see the amendment under Consequences) at once,
+through Leave game. That is tolerable as a safety net and unacceptable as
+the normal case, so the matchmaker has to hand out only players who are
+there.
 
 The node box already runs a service of this kind: `app/sweeper` sits
 behind the node's Cloudflare Tunnel, holds no keys, treats every request
@@ -97,7 +99,12 @@ requeueing.
 
 - No covenant change. The move-0 forfeit and P2-only dissolve sketched in
   `app/IDEAS.md` are classic-mode concerns, and classic stays out of Quick
-  Match until it gets them.
+  Match until it gets them. *Amended 2026-10-16:* a `quick` flag was added to
+  the Fourk V2 state after all, ahead of staked Quick Match. The host sets it
+  at open, the terms (and so the matchmaker and the joiner) require it, and
+  `dissolve` lets the joiner leave at once instead of after one clock. There
+  is still no first-move forfeit: the first round stays unforfeitable, and a
+  joiner facing a silent host is refunded after one window.
 - The app depends on an operator service for one feature. Private games
   and every money path keep working without it; when the route is
   unreachable Quick Match says so and points to a private game.

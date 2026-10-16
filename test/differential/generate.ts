@@ -658,6 +658,7 @@ const v2Mode: Mode<v2.State> = {
           move_timeout: s.moveTimeout,
           deadline: s.deadline,
           reveal_timeout: s.revealTimeout,
+          quick: s.quick,
         },
         value: s.stake.toString(),
       };
@@ -668,6 +669,7 @@ const v2Mode: Mode<v2.State> = {
         pick_deadline: s.pickDeadline,
         first_committer: s.firstCommitter,
         reveal_timeout: s.revealTimeout,
+        quick: s.quick,
       },
       value: (2n * s.stake).toString(),
     };
@@ -1063,12 +1065,21 @@ export function generateVectors(): VectorFile {
   const r = rng(0x4f0e_2026);
   const c = new Collector(r);
   classicVectors(c, r);
-  simulVectors(
-    c,
-    v2Rules,
-    (mt, dl) => ({ ...simulLobby(mt, dl), pickDeadline: 0, firstCommitter: 0, revealTimeout: R }),
-    r,
-  );
+  // Invite and Quick Match lobbies: the flag only moves the joiner's
+  // dissolve, but every door must carry it unchanged.
+  for (const quick of [0, 1])
+    simulVectors(
+      c,
+      v2Rules,
+      (mt, dl) => ({
+        ...simulLobby(mt, dl),
+        pickDeadline: 0,
+        firstCommitter: 0,
+        revealTimeout: R,
+        quick,
+      }),
+      r,
+    );
   return c.finish({ door: 8, shape: 4, mutant: 3 });
 }
 

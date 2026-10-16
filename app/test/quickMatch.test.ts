@@ -21,7 +21,7 @@ const lobby: Match = {
     moveTimeout: 3_000,
     deadline: 900_000,
   },
-  simul: zeroCore2(3_000),
+  simul: zeroCore2(3_000, 1),
 };
 
 test("a free Fourk lobby on the 5-minute clock is a Quick Match", () => {
@@ -34,8 +34,12 @@ test("refuses a lobby that differs from the terms in any way", () => {
     ["classic", { ...lobby, mode: undefined, simul: undefined }],
     ["staked", { ...lobby, value: 100_000_000n, state: { ...lobby.state, stake: 100_000_000n } }],
     ["another clock", { ...lobby, state: { ...lobby.state, moveTimeout: 600 } }],
-    ["a shorter reveal window", { ...lobby, simul: zeroCore2(600) }],
-    ["seat taken", { ...lobby, value: FREE_STAKE * 2n, state: { ...lobby.state, p2: "22".repeat(32) } }],
+    ["a shorter reveal window", { ...lobby, simul: zeroCore2(600, 1) }],
+    ["an invite lobby", { ...lobby, simul: zeroCore2(3_000) }],
+    [
+      "seat taken",
+      { ...lobby, value: FREE_STAKE * 2n, state: { ...lobby.state, p2: "22".repeat(32) } },
+    ],
   ];
   for (const [why, m] of off) expect(isQuickMatchTerms(m), why).toBe(false);
 });

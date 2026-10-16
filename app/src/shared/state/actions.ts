@@ -97,6 +97,8 @@ export interface HostTerms {
   stake: bigint;
   timing: MatchTiming;
   mode: GameModeKey;
+  /** Opened for Quick Match (covenant state: the joiner may leave at once). */
+  quick?: boolean;
 }
 
 /** The body of newGame, bare so other actions can chain into it (e.g. a
@@ -144,11 +146,13 @@ export async function createGame(
   try {
     const timing = terms?.timing ?? getMatchTiming();
     const mode = terms?.mode ?? getGameMode();
-    const match = await deps.chain.openMatch(key, stake, timing, mode, (m) => {
+    const onSubmit = (m: Match) => {
       pending = m.covenantId;
       saveCheckpoint(m.covenantId, preOpen);
       updateMatch(dress(m));
-    });
+    };
+    const quick = !!terms?.quick;
+    const match = await deps.chain.openMatch(key, stake, timing, mode, onSubmit, { quick });
     saveCheckpoint(match.covenantId, preOpen);
     const stored = updateMatch(dress(match));
     if (show) showMatch(stored);
@@ -175,8 +179,13 @@ export const SEAT_GONE =
 export const takeSeat = (invite: Match, deps: Deps = realDeps): Promise<void> =>
   runAction(() => sitDown(invite, deps));
 
-/** The body of takeSeat, bare like createGame. Call inside `runAction`. */
-export async function sitDown(invite: Match, deps: Deps = realDeps): Promise<void> {
+/** The body of takeSeat, bare like createGame. Call inside `runAction`.
+ * `minRemaining` raises the game-limit floor the seat is held to. */
+export async function sitDown(
+  invite: Match,
+  deps: Deps = realDeps,
+  { minRemaining }: { minRemaining?: number } = {},
+): Promise<void> {
   const known = store.get(matchesAtom).find((m) => m.covenantId === invite.covenantId);
   if (known) {
     // A game we're already in: reopen our TRACKED state, never the link's. An
@@ -207,7 +216,7 @@ export async function sitDown(invite: Match, deps: Deps = realDeps): Promise<voi
     // the host could sudden-death the pot back out from under us — and the
     // covenant cannot check it (script proves time passed, never time
     // remaining). Refuse before any funds move.
-    await deps.chain.assertJoinableDeadline(invite);
+    await deps.chain.assertJoinableDeadline(invite, minRemaining);
     advanceConnecting();
     await deps.chain.ensureFunds(key, invite.value + feeReserve(myPk, 1), { staked });
     advanceConnecting();

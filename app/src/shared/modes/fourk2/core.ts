@@ -2,8 +2,9 @@
  * Fourk V2 (shared picking deadlines) bridge: the reference rules from
  * fourk/src/simul-v2 adapted to the app's Match model. Everything the legacy
  * fourk core does still applies — a V2 match keeps the classic `State` plus a
- * round machine — and the round machine grows three fields: the shared
- * picking cutoff, who committed first, and the reveal grace.
+ * round machine — and the round machine grows four fields: the shared
+ * picking cutoff, who committed first, the reveal grace, and whether Quick
+ * Match paired the game.
  */
 
 import * as v2 from "../../../../../src/simul-v2/rules";
@@ -21,10 +22,18 @@ export interface SimulCore2 extends SimulCore {
   firstCommitter: number;
   /** Reveal inactivity and challenge-window grace, DAA (600 <= R <= T). */
   revealTimeout: number;
+  /** 1 = paired by Quick Match (the joiner may leave the lobby at once),
+   * 0 = an invite. Set at open, never changes. */
+  quick: number;
 }
 
-export function zeroCore2(revealTimeout: number): SimulCore2 {
-  return { ...ZERO_CORE, pickDeadline: 0, firstCommitter: 0, revealTimeout };
+export function zeroCore2(revealTimeout: number, quick: 0 | 1 = 0): SimulCore2 {
+  return { ...ZERO_CORE, pickDeadline: 0, firstCommitter: 0, revealTimeout, quick };
+}
+
+/** Whether Quick Match paired this game, as its covenant state says. */
+export function isQuick(m: { simul?: SimulCore | undefined }): boolean {
+  return isCore2(m.simul) && m.simul.quick === 1;
 }
 
 export function isCore2(c: SimulCore | undefined): c is SimulCore2 {
@@ -32,7 +41,8 @@ export function isCore2(c: SimulCore | undefined): c is SimulCore2 {
     !!c &&
     typeof (c as SimulCore2).pickDeadline === "number" &&
     typeof (c as SimulCore2).firstCommitter === "number" &&
-    typeof (c as SimulCore2).revealTimeout === "number"
+    typeof (c as SimulCore2).revealTimeout === "number" &&
+    typeof (c as SimulCore2).quick === "number"
   );
 }
 
@@ -49,6 +59,7 @@ export function toV2State(s: State, core: SimulCore2): v2.State {
     pickDeadline: core.pickDeadline,
     firstCommitter: core.firstCommitter,
     revealTimeout: core.revealTimeout,
+    quick: core.quick,
   };
 }
 
@@ -77,6 +88,7 @@ export function fromV2State(ss: v2.State): { state: State; simul: SimulCore2 } {
       pickDeadline: ss.pickDeadline,
       firstCommitter: ss.firstCommitter,
       revealTimeout: ss.revealTimeout,
+      quick: ss.quick,
     },
   };
 }

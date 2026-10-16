@@ -10,7 +10,7 @@ import { ZERO_PK, type State } from "./game";
 import { NETWORK_ID, loadCheckpoint, type Match, type PlayerProfile } from "./match";
 import * as engine from "./engine";
 import { MODES, modeOf } from "../modes/registry";
-import type { ClockSpec, GameModeKey } from "../modes/types";
+import type { ClockSpec, GameModeKey, GenesisOptions } from "../modes/types";
 import { drawMatch as modeDraw, suddenDeathMatch as modeSuddenDeath } from "../modes/common";
 
 // Mode-agnostic engine surface, re-exported so consumers keep one import.
@@ -74,6 +74,7 @@ export async function openMatch(
   timing: engine.MatchTiming,
   modeKey: GameModeKey = "classic",
   onSubmit?: (m: Match) => void,
+  genesisOptions: GenesisOptions = {},
 ): Promise<Match> {
   const mode = MODES[modeKey];
   // A deadline is mandatory — the covenant refuses to seat a joiner without
@@ -97,7 +98,7 @@ export async function openMatch(
     state: genesis,
     txid: "",
     value: stake,
-    ...mode.genesisFields(timing),
+    ...mode.genesisFields(timing, genesisOptions),
   };
   const { covenantId, txid } = await engine.openCovenant(rpc, key, mode, draft, {
     beforeSubmit: (id, tx) => onSubmit?.({ ...draft, covenantId: id, txid: tx }),
@@ -113,11 +114,16 @@ export async function openMatch(
  * expired-deadline invite and permissionlessly refund both stakes whenever
  * they're losing. The app's seat-taking flow enforces this BEFORE funding
  * the seat; joinMatch itself stays policy-free so tests and tools can
- * exercise short-capped games deliberately. */
-export async function assertJoinableDeadline(rpc: Rpc, match: Match): Promise<void> {
+ * exercise short-capped games deliberately. `minRemaining` raises the floor
+ * for a caller that knows what cap the game should have (Quick Match). */
+export async function assertJoinableDeadline(
+  rpc: Rpc,
+  match: Match,
+  minRemaining = 0,
+): Promise<void> {
   const info: any = await engine.withRetry(() => rpc.getBlockDagInfo());
   const remaining = match.state.deadline - Number(info.virtualDaaScore);
-  const floor = Math.max(2 * match.state.moveTimeout, 18_000);
+  const floor = Math.max(2 * match.state.moveTimeout, 18_000, minRemaining);
   if (match.state.deadline <= 0 || remaining < floor) throw new Error("DEADLINE_TOO_CLOSE");
 }
 
@@ -164,9 +170,11 @@ export async function cancelMatch(rpc: Rpc, key: PrivateKey, match: Match): Prom
  */
 export async function dissolveMatch(rpc: Rpc, key: PrivateKey, match: Match): Promise<string> {
   const pkHex = engine.walletPubkey(key);
-  // The joiner's exit proves this.ageDaa >= move_timeout (the anti-grief gate);
-  // the sequence field is what carries that proof. P1's kick is instant.
-  const sequence = pkHex === match.state.p2 ? BigInt(match.state.moveTimeout) : 0n;
+  // The joiner's exit may have to prove this.ageDaa >= move_timeout (the
+  // anti-grief gate); the sequence field is what carries that proof. P1's
+  // kick is instant.
+  const wait = pkHex === match.state.p2 ? modeOf(match).joinerExitWait(match) : 0;
+  const sequence = BigInt(wait);
   return engine.pinnedSplit(
     rpc,
     key,

@@ -103,6 +103,8 @@ describe("fourk2 wire formats", () => {
       [{ commit2: HASH, reveal1: 3, pickDeadline: 5000, firstCommitter: 1 }, {}],
       [{ revealTimeout: 599 }, {}],
       [{ revealTimeout: 1201 }, {}],
+      [{ quick: 2 }, {}],
+      [{ quick: -1 }, { p2: ZERO_PK }],
     ];
     for (const [core, state] of bad) {
       const m = v2Match(core, state);
@@ -113,8 +115,21 @@ describe("fourk2 wire formats", () => {
   });
 
   test("a fourk2 record that lost its V2 fields is refused", () => {
-    const json = JSON.parse(matchToJson(v2Match()));
-    delete json.revealTimeout;
-    expect(() => matchFromJson(JSON.stringify(json))).toThrow(/V2 round state/);
+    for (const key of ["revealTimeout", "quick"]) {
+      const json = JSON.parse(matchToJson(v2Match()));
+      delete json[key];
+      expect(() => matchFromJson(JSON.stringify(json)), key).toThrow(/V2 round state/);
+    }
+  });
+
+  test("the Quick Match flag is consensus state: both codecs carry it", () => {
+    for (const state of [{ p2: ZERO_PK }, {}]) {
+      roundTrips(v2Match({ quick: 1 }, state));
+      expect(decodeMatchBinary(encodeMatchBinary(v2Match({ quick: 1 }, state))).simul).toMatchObject({
+        quick: 1,
+      });
+    }
+    expect(zeroCore2(600).quick).toBe(0);
+    expect(zeroCore2(600, 1).quick).toBe(1);
   });
 });

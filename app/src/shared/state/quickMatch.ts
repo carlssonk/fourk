@@ -12,7 +12,7 @@ import { QUICK_MATCH_MOVE_TIMEOUT, isQuickMatchTerms } from "../lib/quickMatch";
 import { SEAT_GONE, createGame, errorAtom, runAction, sitDown, type HostTerms } from "./actions";
 import { realDeps, type PollState, type QuickMatchDeps } from "./deps";
 import { httpMatchmaker } from "../lib/matchmaker";
-import { matchesAtom, removeMatch, showMatch, updateMatch } from "./matches";
+import { matchesAtom, removeMatch, showMatch } from "./matches";
 import { isOpen } from "../lib/game";
 import { timingFor } from "./profile";
 
@@ -39,10 +39,15 @@ const MAX_POST_ATTEMPTS = 15;
 export const UNAVAILABLE =
   "Quick Match isn't available right now. You can still start a private game and send the link.";
 
+/** Between a Quick Match host's open and the join: generous, since a
+ * pairing that slow has long been dropped by the matchmaker. */
+const CAP_SLACK_DAA = 36_000;
+
 const TERMS: HostTerms = {
   stake: 0n,
   timing: timingFor(QUICK_MATCH_MOVE_TIMEOUT),
   mode: "fourk2",
+  quick: true,
 };
 
 const store = getDefaultStore();
@@ -99,18 +104,22 @@ async function follow(deps: QuickMatchDeps, ticket: string, live: () => boolean)
       const invite = parseInvite(poll.code);
       if (!invite || !isQuickMatchTerms(invite)) return false;
       store.set(quickMatchAtom, { phase: "setting-up" });
-      let taken = false;
+      let skipped = false;
       await runAction(async () => {
         try {
-          await sitDown(invite, deps);
+          // The cap is an absolute score the terms can't compare, so hold it
+          // to the preset here: a short one would cut the game off early.
+          const minRemaining = TERMS.timing.totalCap - CAP_SLACK_DAA;
+          await sitDown(invite, deps, { minRemaining });
         } catch (e) {
-          // Someone else got there first: not the player's problem.
-          if ((e as Error)?.message !== SEAT_GONE) throw e;
-          taken = true;
+          // Someone else got there first, or the lobby's limit is off the
+          // terms: not the player's problem, find another.
+          const why = (e as Error)?.message;
+          if (why !== SEAT_GONE && why !== "DEADLINE_TOO_CLOSE") throw e;
+          skipped = true;
         }
       });
-      if (!taken) markQuick(invite.covenantId);
-      return !taken;
+      return !skipped;
     }
     if (poll.state === "host" && !lobby) {
       store.set(quickMatchAtom, { phase: "setting-up" });
@@ -118,8 +127,7 @@ async function follow(deps: QuickMatchDeps, ticket: string, live: () => boolean)
       // quiet, so keep polling through it.
       const stopBeat = heartbeat(deps, ticket);
       await runAction(async () => {
-        const opened = await createGame(deps, { terms: TERMS, show: false });
-        lobby = updateMatch({ ...opened, quick: true });
+        lobby = await createGame(deps, { terms: TERMS, show: false });
       }).finally(stopBeat);
       if (!lobby || store.get(errorAtom)) return true;
       held = { deps, lobby };
@@ -149,12 +157,6 @@ async function joinOf(lobby: Match): Promise<Match> {
     await wait(1_000);
   }
   return record() ?? lobby;
-}
-
-/** Note on the joined game's record that Quick Match paired it. */
-function markQuick(covenantId: string): void {
-  const m = store.get(matchesAtom).find((x) => x.covenantId === covenantId);
-  if (m) updateMatch({ ...m, quick: true });
 }
 
 /** Poll in the background, ignoring the answers, until the returned stop

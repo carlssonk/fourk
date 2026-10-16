@@ -133,6 +133,7 @@ describe("createGame", () => {
       expect.anything(),
       expect.anything(),
       expect.any(Function),
+      { quick: false },
     );
     expect(store.get(currentMatchAtom)).not.toBeNull();
   });
@@ -156,6 +157,7 @@ describe("createGame", () => {
       expect.anything(),
       expect.anything(),
       expect.any(Function),
+      { quick: false },
     );
   });
 

@@ -13,7 +13,7 @@ state in the P2SH redeem-script preimage, eight classic entrypoints:
 |-----------------|---------|--------|
 | `join`          | open    | P2 adds matching stake + pubkey; output value must be `2 * stake`; re-checks the genesis gates below |
 | `cancel`        | open    | P1 reclaims stake; no deadline needed (a racing join simply orphans it) |
-| `dissolve`      | playing, move 0 | either player unwinds an unstarted match; pinned refunds; the joiner's exit waits out one move clock |
+| `dissolve`      | playing, move 0 | either player unwinds an unstarted match; pinned refunds; the joiner's exit waits out one move clock (in Fourk, not when the `quick` flag is set) |
 | `move`          | playing | drop a disc: your turn, column in range, column not full — the whole rulebook |
 | `winning_move`  | playing | `move` + win witness; terminal, pays mover the pot |
 | `claim_draw`    | playing | move count = 42; splits pot; permissionless crank |
@@ -101,6 +101,13 @@ pure-function contract), extended by `src/simul-v2/`; covenant as the
 `sweep_win`. (A first protocol without shared deadlines, the
 `FourkSimulLobby`/`FourkSimul` pair, is retired: it let a joiner's lone
 first-round pick forfeit an absent host.)
+
+Both V2 actors carry a `quick` flag (0 or 1), set by the host at open and
+copied by every transition. It marks a game Quick Match paired
+([ADR 0003](adr/0003-quick-match-through-a-keyless-matchmaker.md)), and its one
+effect is in `dissolve`: the joiner's exit skips the one-clock wait. That wait
+protects an invite's host, who may be away when the seat is taken; a Quick
+Match pairs two players who were both present seconds before.
 
 Design notes, mirroring the classic decisions:
 

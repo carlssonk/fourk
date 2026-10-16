@@ -138,7 +138,7 @@ fn initial() -> State {
         p1: pk(1), p2: pk(2), board: vec![0u8;42], round: 0i64,
         commit1: vec![0u8;32], commit2: vec![0u8;32], reveal1: 0i64, reveal2: 0i64,
         pending_win: 0i64, move_timeout: 1200i64, deadline: 100_000i64,
-        pick_deadline: 0i64, first_committer: 0i64, reveal_timeout: 600i64,
+        pick_deadline: 0i64, first_committer: 0i64, reveal_timeout: 600i64, quick: 0i64,
     }
 }
 /// The second round's start: the first round resolved one disc each into
@@ -1319,10 +1319,20 @@ fn board_wins_keep_their_challenge_window_and_double_win_contest() {
 }
 
 fn join_game(grace: i64, next: State, player: u8, value: u64) -> Result<Transaction, String> {
+    join_lobby(grace, 0, next, player, value)
+}
+fn join_lobby(
+    grace: i64,
+    quick: i64,
+    next: State,
+    player: u8,
+    value: u64,
+) -> Result<Transaction, String> {
     let builder = TxBuilder::new(artifact()).map_err(|e| e.to_string())?;
     let id = Hash::from_bytes([0xcd; 32]);
-    let lobby =
-        state! { p1: pk(1), move_timeout:1200i64, deadline:100_000i64, reveal_timeout:grace };
+    let lobby = state! {
+        p1: pk(1), move_timeout:1200i64, deadline:100_000i64, reveal_timeout:grace, quick:quick,
+    };
     let utxo = builder
         .covenant_utxo(
             "FourkSimulV2Lobby",
@@ -1398,6 +1408,37 @@ fn joining_enforces_timing_bounds_and_lobby_exits_end_at_the_first_pick() {
         ));
         rejected(run(
             committed(&initial(), 1, 0, 1),
+            None,
+            dissolve(player),
+            1000,
+            0,
+            9999,
+            split(),
+        ));
+    }
+}
+
+fn quick(mut s: State, flag: i64) -> State {
+    number(&mut s, "quick", flag);
+    s
+}
+
+#[test]
+fn a_quick_match_joiner_can_leave_at_once_until_the_first_pick() {
+    // The flag is set by the host at open and carried by join unchanged.
+    ok(join_lobby(600, 1, quick(initial(), 1), 2, POT));
+    rejected(join_lobby(600, 1, initial(), 2, POT));
+    rejected(join_lobby(600, 0, quick(initial(), 1), 2, POT));
+    rejected(join_lobby(600, 2, quick(initial(), 2), 2, POT));
+    // Both players present seconds ago: neither exit waits.
+    ok(run(quick(initial(), 1), None, dissolve(1), 1000, 0, 0, split()));
+    ok(run(quick(initial(), 1), None, dissolve(2), 1000, 0, 0, split()));
+    rejected(run(quick(initial(), 1), None, dissolve(3), 1000, 0, 0, split()));
+    // The exits still close at the first pick.
+    for player in [1u8, 2] {
+        rejected(run(quick(started(), 1), None, dissolve(player), 1000, 0, 9999, split()));
+        rejected(run(
+            committed(&quick(initial(), 1), 1, 0, 1),
             None,
             dissolve(player),
             1000,

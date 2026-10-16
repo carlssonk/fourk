@@ -12,6 +12,13 @@ import type { MatchTiming, ModeEngine, PrivateKey, Rpc, SpendInfo } from "../lib
 import type { State } from "../lib/game";
 import type { Match } from "../lib/match";
 
+/** How a game is opened, beyond its timing. */
+export interface GenesisOptions {
+  /** Paired by Quick Match (Fourk only): the joiner may leave the lobby at
+   * once instead of waiting out one clock. */
+  quick?: boolean;
+}
+
 export type GameModeKey = "classic" | "fourk2";
 
 export interface ModeMeta {
@@ -170,7 +177,10 @@ export interface GameMode extends ModeEngine {
   autoActions(m: Match, ctx: AutoCtx): AutoAction[];
 
   /** Mode-specific Match fields stamped on a fresh genesis. */
-  genesisFields(timing: MatchTiming): Partial<Match>;
+  genesisFields(timing: MatchTiming, opts?: GenesisOptions): Partial<Match>;
+  /** How long the joiner must leave the unstarted lobby untouched before
+   * dissolve lets them out (DAA, 0 = at once); the host never waits. */
+  joinerExitWait(m: Match): number;
   /** The game UTXO age claim_draw demands (0 = none): the sequence the draw
    * crank must carry, and how long after a board-filling transition it
    * waits. */

@@ -191,10 +191,13 @@ async function openAndJoin(
   p1: kaspa.PrivateKey,
   p2: kaspa.PrivateKey,
   moveTimeout: number,
+  quick = false,
 ) {
-  let m = await cov.openMatch(rpc, p1, 1n * KAS, { moveTimeout, totalCap: 864_000 }, "fourk2");
+  const timing = { moveTimeout, totalCap: 864_000 };
+  let m = await cov.openMatch(rpc, p1, 1n * KAS, timing, "fourk2", undefined, { quick });
   expect(m.mode).toBe("fourk2");
   expect(core(m).revealTimeout).toBe(moveTimeout);
+  expect(core(m).quick).toBe(quick ? 1 : 0);
   m = await cov.joinMatch(rpc, p2, m);
   expect(m.value).toBe(2n * KAS);
   expect(core(m).pickDeadline).toBe(0);
@@ -452,6 +455,17 @@ async function playFirstRound(
     const p1Before = await cov.walletBalance(rpc, cov.walletAddress(p1));
     await splitTimeoutMatch(rpc, p1, lone);
     await waitGone(rpc, lone);
+    expectPinnedHalf(await balanceAbove(rpc, p1, p1Before), p1Before);
+  }, 900_000);
+
+  test("a Quick Match joiner leaves a fresh lobby at once, refunded", async () => {
+    const { rpc, p1, p2 } = await setup();
+    const m = await openAndJoin(rpc, p1, p2, 600, true);
+    expect(core(m).quick).toBe(1);
+    // No age on the lobby UTXO at all: the covenant waives the joiner's wait.
+    const p1Before = await cov.walletBalance(rpc, cov.walletAddress(p1));
+    await cov.dissolveMatch(rpc, p2, m);
+    await waitGone(rpc, m);
     expectPinnedHalf(await balanceAbove(rpc, p1, p1Before), p1Before);
   }, 900_000);
 

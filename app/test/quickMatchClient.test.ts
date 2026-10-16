@@ -24,15 +24,7 @@ import type {
 import type { Wallet } from "../src/shared/state/wallet";
 import type { PrivateKey } from "../src/shared/lib/covenant";
 import { CELLS, ZERO_PK } from "../src/shared/lib/game";
-import {
-  FREE_STAKE,
-  NETWORK_ID,
-  decodeShareCode,
-  encodeShareCode,
-  matchFromJson,
-  matchToJson,
-  type Match,
-} from "../src/shared/lib/match";
+import { FREE_STAKE, NETWORK_ID, encodeShareCode, type Match } from "../src/shared/lib/match";
 import { zeroCore2 } from "../src/shared/modes/fourk2/core";
 
 const store = getDefaultStore();
@@ -102,7 +94,7 @@ const lobby = (p1: string, moveTimeout = 3_000): Match => ({
     moveTimeout,
     deadline: 900_000,
   },
-  simul: zeroCore2(moveTimeout),
+  simul: zeroCore2(moveTimeout, 1),
 });
 
 let deps: QuickMatchDeps;
@@ -153,6 +145,7 @@ test("a host opens a lobby on the Quick Match terms and stays home until it's ta
     expect.objectContaining({ moveTimeout: 3_000 }),
     "fourk2",
     expect.any(Function),
+    { quick: true },
   );
   // On record (a reload must find it), but not on screen yet.
   expect(store.get(matchesAtom).map((m) => m.covenantId)).toEqual([opened.covenantId]);
@@ -383,38 +376,50 @@ test("after the handover, the host opens the game once the join has landed", asy
   expect(store.get(quickMatchAtom)).toEqual({ phase: "idle" });
 });
 
-test("both players' records say the game came from Quick Match", async () => {
+test("a host opens its lobby as a Quick Match in covenant state", async () => {
   const opened = lobby(GUEST_PK);
-  const host = fakeMatchmaker([{ state: "host" }, { state: "matched" }]);
-  deps = {
-    chain: fakeChain({ openMatch: vi.fn(async () => opened) }),
-    account: fakeAccount(),
-    matchmaker: host,
-  };
+  const chain = fakeChain({ openMatch: vi.fn(async () => opened) });
+  deps = { chain, account: fakeAccount(), matchmaker: fakeMatchmaker([{ state: "host" }]) };
   void startQuickMatch(deps);
-  await vi.advanceTimersByTimeAsync(40_000);
-  expect(store.get(matchesAtom)[0]).toMatchObject({ covenantId: opened.covenantId, quick: true });
-
-  store.set(matchesAtom, []);
-  const code = encodeShareCode(lobby(HOST_PK));
-  const joiner = fakeMatchmaker([{ state: "join", code }]);
-  deps = {
-    chain: fakeChain({ joinMatch: joinedBy(GUEST_PK) }),
-    account: fakeAccount(),
-    matchmaker: joiner,
-  };
-  void startQuickMatch(deps);
-  await vi.advanceTimersByTimeAsync(5_000);
-  expect(store.get(currentMatchAtom)).toMatchObject({ quick: true });
-  expect(store.get(matchesAtom)[0]).toMatchObject({ quick: true });
+  await vi.advanceTimersByTimeAsync(3_000);
+  expect(chain.openMatch).toHaveBeenCalledWith(
+    expect.anything(),
+    FREE_STAKE,
+    expect.anything(),
+    "fourk2",
+    expect.any(Function),
+    { quick: true },
+  );
 });
 
-test("the Quick Match mark survives chain updates and a reload, but not a share code", () => {
-  const m = { ...lobby(GUEST_PK), quick: true };
-  updateMatch(m);
-  // The watcher's fresher snapshot knows nothing of how the game started.
-  updateMatch({ ...lobby(GUEST_PK), state: { ...m.state, p2: HOST_PK }, value: FREE_STAKE * 2n });
-  expect(store.get(matchesAtom)[0]).toMatchObject({ quick: true });
-  expect(matchFromJson(matchToJson(m))).toMatchObject({ quick: true });
-  expect(decodeShareCode(encodeShareCode(m)).quick).toBeUndefined();
+test("a joiner holds the lobby's game limit to the Quick Match cap, not just the general floor", async () => {
+  const code = encodeShareCode(lobby(HOST_PK));
+  const chain = fakeChain({ joinMatch: joinedBy(GUEST_PK) });
+  deps = { chain, account: fakeAccount(), matchmaker: fakeMatchmaker([{ state: "join", code }]) };
+  void startQuickMatch(deps);
+  await vi.advanceTimersByTimeAsync(5_000);
+  // The preset opens with ~1 day (864,000 DAA); an hour of slack for the
+  // seconds between the host's open and this join.
+  expect(chain.assertJoinableDeadline).toHaveBeenCalledWith(
+    expect.objectContaining({ covenantId: lobby(HOST_PK).covenantId }),
+    864_000 - 36_000,
+  );
+});
+
+test("queues again, quietly, past a lobby whose game limit is cut short", async () => {
+  const code = encodeShareCode(lobby(HOST_PK));
+  const chain = fakeChain({
+    joinMatch: joinedBy(GUEST_PK),
+    assertJoinableDeadline: vi.fn(async () => {
+      throw new Error("DEADLINE_TOO_CLOSE");
+    }),
+  });
+  const matchmaker = fakeMatchmaker([{ state: "join", code }, { state: "waiting" }]);
+  vi.mocked(matchmaker.seek).mockResolvedValueOnce("t1").mockResolvedValueOnce("t2");
+  deps = { chain, account: fakeAccount(), matchmaker };
+  void startQuickMatch(deps);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(chain.joinMatch).not.toHaveBeenCalled();
+  expect(store.get(errorAtom)).toBeNull();
+  expect(matchmaker.poll).toHaveBeenLastCalledWith("t2");
 });

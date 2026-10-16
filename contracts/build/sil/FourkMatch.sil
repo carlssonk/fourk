@@ -43,6 +43,7 @@ contract FourkMatch(
         int pick_deadline;
         int first_committer;
         int reveal_timeout;
+        int quick;
     }
     struct SimulV2LobbyState {
         // :: user declared fields
@@ -50,6 +51,7 @@ contract FourkMatch(
         int move_timeout;
         int deadline;
         int reveal_timeout;
+        int quick;
     }
 
     // :: global functions (isolated using the gen__glob_ namespace)

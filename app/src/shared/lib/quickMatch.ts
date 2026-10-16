@@ -12,8 +12,9 @@ import { FREE_STAKE, NETWORK_ID, type Match } from "./match";
 /** Per-pick clock, DAA blocks: about 5 minutes on testnet-10. */
 export const QUICK_MATCH_MOVE_TIMEOUT = 3_000;
 
-/** The cap isn't compared: it's an absolute DAA score set at open, and a
- * nearly spent one is refused at join by `assertJoinableDeadline`. */
+/** The cap isn't compared here: it's an absolute DAA score set at open, so
+ * the joiner holds it to the preset at join (state/quickMatch.ts, through
+ * `assertJoinableDeadline`'s floor). */
 export function isQuickMatchTerms(m: Match): boolean {
   return (
     m.network === NETWORK_ID &&
@@ -22,6 +23,7 @@ export function isQuickMatchTerms(m: Match): boolean {
     m.state.stake === FREE_STAKE &&
     m.state.moveTimeout === QUICK_MATCH_MOVE_TIMEOUT &&
     core2Of(m).revealTimeout === QUICK_MATCH_MOVE_TIMEOUT &&
+    core2Of(m).quick === 1 &&
     isOpen(m.state)
   );
 }

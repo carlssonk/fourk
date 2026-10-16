@@ -9,7 +9,7 @@ import { fmtDaaDuration, fmtKas, isStaked, loadCheckpoint, type Match } from "@s
 import { gameEnd } from "@shared/lib/result";
 import { HAS_SWEEPER, registerSweep } from "@shared/lib/sweeper";
 import { modeOf } from "@shared/modes/registry";
-import { isCore2 } from "@shared/modes/fourk2/core";
+import { isCore2, isQuick } from "@shared/modes/fourk2/core";
 import type { StatusDescriptor } from "@shared/modes/types";
 import { playClaimReady, playClockExpired, playClockWarning } from "@shared/lib/sound";
 import { DiscLoader } from "@shared/components/DiscLoader";
@@ -129,11 +129,13 @@ export const Game = ({ match }: Props) => {
   // that left a host with no exit from a guest who joined and idled, so it
   // now mirrors the covenant.
   const inLobby = mode.inLobby(match) && !result;
-  const lobbyClock = useMoveClock(match, inLobby && role === "p2", {
+  // The joiner's exit waits out the mode's lobby clock (none in Quick Match).
+  const exitWait = role === "p2" ? mode.joinerExitWait(match) : 0;
+  const lobbyClock = useMoveClock(match, inLobby && exitWait > 0, {
     kind: "age",
-    daa: s.moveTimeout,
+    daa: exitWait,
   });
-  const withdrawGated = role === "p2" && !lobbyClock.expired;
+  const withdrawGated = exitWait > 0 && !lobbyClock.expired;
 
   // ONE optimistic record for both modes: the column just clicked, keyed to
   // the game UTXO it was played on — any fresh match state (our confirmation
@@ -339,9 +341,8 @@ export const Game = ({ match }: Props) => {
 
   // The lobby exit, by who's leaving what. A private host kicks: the seat
   // clears into a fresh game with a new link. In Quick Match nobody chose
-  // the opponent or has a link to share, so both seats just leave (the
-  // joiner still waits out the covenant's clock).
-  const exit = match.quick ? "leave" : role === "p1" ? "kick" : "cancel";
+  // the opponent or has a link to share, so both seats just leave, at once.
+  const exit = isQuick(match) ? "leave" : role === "p1" ? "kick" : "cancel";
   const dissolveGame = async () => {
     const ok = await askConfirm(
       exit === "leave"
@@ -383,17 +384,16 @@ export const Game = ({ match }: Props) => {
       const key = seatKey();
       const rpc = await getRpc();
       advanceConnecting();
-      // The covenant gates the joiner's exit on one move clock — re-check
-      // the age on-chain so a slightly-early click gets minutes, not a
-      // sequence-lock rejection.
-      if (role === "p2") {
+      // The covenant gates an invite joiner's exit on one move clock —
+      // re-check the age on-chain so a slightly-early click gets minutes,
+      // not a sequence-lock rejection.
+      if (exitWait > 0) {
         const mins = await cov.moveClockRemaining(rpc, match, {
           kind: "age",
-          daa: s.moveTimeout,
+          daa: exitWait,
         });
         if (mins) {
-          const verb = exit === "leave" ? "leave" : "cancel";
-          throw new Error(`You can ${verb} in about ${mins} minute${mins === 1 ? "" : "s"}.`);
+          throw new Error(`You can cancel in about ${mins} minute${mins === 1 ? "" : "s"}.`);
         }
       }
       await ensureFunds(rpc, key, cov.FEE_HEADROOM, { staked: isStaked(match) });
@@ -651,19 +651,21 @@ export const Game = ({ match }: Props) => {
             title={
               exit === "kick"
                 ? "Before play starts, you can remove your opponent and get a fresh game with a new invite link."
-                : withdrawGated
-                  ? `You can ${exit} once the lobby timer ends.`
-                  : exit === "leave"
-                    ? "Before play starts, you can leave. The game ends for both players."
+                : exit === "leave"
+                  ? "Before play starts, you can leave. The game ends for both players."
+                  : withdrawGated
+                    ? "You can cancel once the lobby timer ends."
                     : undefined
             }
             onClick={() => void dissolveGame()}
           >
             {exit === "kick"
               ? "Kick opponent"
-              : `${exit === "leave" ? "Leave game" : "Cancel game"}${
-                  withdrawGated && lobbyClock.text ? ` in ${lobbyClock.text}` : ""
-                }`}
+              : exit === "leave"
+                ? "Leave game"
+                : withdrawGated && lobbyClock.text
+                  ? `Cancel game in ${lobbyClock.text}`
+                  : "Cancel game"}
           </button>
         )}
       </div>

@@ -16,7 +16,8 @@ contract FourkSimulV2(
     int init_deadline,
     int init_pick_deadline,
     int init_first_committer,
-    int init_reveal_timeout
+    int init_reveal_timeout,
+    int init_quick
 ) {
     // :: shared constants
     int constant COLS = 7;
@@ -50,6 +51,7 @@ contract FourkSimulV2(
         int move_timeout;
         int deadline;
         int reveal_timeout;
+        int quick;
     }
 
     // :: global functions (isolated using the gen__glob_ namespace)
@@ -112,6 +114,7 @@ contract FourkSimulV2(
     int pick_deadline = init_pick_deadline;
     int first_committer = init_first_committer;
     int reveal_timeout = init_reveal_timeout;
+    int quick = init_quick;
 
     // :: entrypoints
     // :: leader entry (1:N)
@@ -124,7 +127,7 @@ contract FourkSimulV2(
         require(commit1 == zero32() && commit2 == zero32());
         require(reveal1 == 0 && reveal2 == 0);
         require(pk == p1 || pk == p2);
-        if (pk == p2) {
+        if (pk == p2 && quick == 0) {
             require(this.ageDaa >= move_timeout);
         }
         require(checkSig(s, pk));
@@ -189,6 +192,7 @@ contract FourkSimulV2(
             pick_deadline: 0,
             first_committer: 0,
             reveal_timeout: reveal_timeout,
+            quick: quick,
         };
         require(tx.outputs[gen__pending_output_idx].value == tx.inputs[this.activeInputIndex].value);
         require(checkSig(s, owner_pk));
@@ -499,6 +503,7 @@ contract FourkSimulV2(
             pick_deadline: 0,
             first_committer: 0,
             reveal_timeout: reveal_timeout,
+            quick: quick,
         };
         require(tx.outputs[gen__next_output_idx].value == tx.inputs[this.activeInputIndex].value);
         require(checkSig(s, pk));
@@ -591,6 +596,7 @@ contract FourkSimulV2(
             pick_deadline: 0,
             first_committer: 0,
             reveal_timeout: reveal_timeout,
+            quick: quick,
         };
         require(tx.outputs[gen__next_output_idx].value == tx.inputs[this.activeInputIndex].value);
         require(checkSig(s, pk));
@@ -671,6 +677,7 @@ contract FourkSimulV2(
             pick_deadline: next_deadline,
             first_committer: next_first,
             reveal_timeout: reveal_timeout,
+            quick: quick,
         };
         require(tx.outputs[gen__next_output_idx].value == tx.inputs[this.activeInputIndex].value);
         require(checkSig(s, pk));

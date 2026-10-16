@@ -73,9 +73,6 @@ export interface Match {
    * carried by the invite link. On-chain discs are only 1 (creator) and 2
    * (joiner); absent means the classic mapping (p1 red). */
   p1Color?: "red" | "blue";
-  /** Paired by Quick Match rather than an invite. Local bookkeeping only:
-   * kept in this browser's records, never in share codes. */
-  quick?: boolean;
 }
 
 /** The one place the network is named — faucet/fund-dispenser.mjs keeps a
@@ -209,7 +206,6 @@ export function matchToJson(m: Match): string {
       ...(m.profiles && { profiles: m.profiles }),
       ...(m.p1Color && { p1Color: m.p1Color }),
       ...(m.result && { result: m.result }),
-      ...(m.quick && { quick: true }),
     },
     null,
     2,
@@ -242,7 +238,7 @@ const matchJsonSchema = z.object({
   profiles: z.object({ p1: profileSchema.optional(), p2: profileSchema.optional() }).optional(),
   p1Color: z.enum(["red", "blue"]).optional(),
   result: z.string().optional(),
-  quick: z.boolean().optional(),
+  quick: z.number().int().min(0).max(1).optional(),
   // Fourk mode (simultaneous): the round machine rides along.
   mode: z.enum(["fourk2"]).optional(),
   round: z.number().int().min(0).max(255).optional(),
@@ -291,7 +287,6 @@ export function matchFromJson(json: string): Match {
       },
     }),
     ...(raw.p1Color && { p1Color: raw.p1Color }),
-    ...(raw.quick && { quick: true }),
     ...(raw.result && { result: raw.result }),
   };
 }

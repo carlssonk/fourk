@@ -31,7 +31,7 @@ test("two players who press Quick Match end up in the same game", async ({ page,
   }
 });
 
-test("a Quick Match host leaves instead of kicking", async ({ page, browser }) => {
+test("either Quick Match player can leave at once", async ({ page, browser }) => {
   test.setTimeout(150_000);
   const otherContext = await browser.newContext();
   const other = await otherContext.newPage();
@@ -43,32 +43,31 @@ test("a Quick Match host leaves instead of kicking", async ({ page, browser }) =
       await expect(
         player.getByRole("button", { name: "drop a disc in column 1", exact: true }),
       ).toBeEnabled({ timeout: 90_000 });
-    // Both seats leave rather than kick or cancel; the host's exit is open
-    // at once, the joiner's waits out the covenant's clock.
-    const [host, guest] = (await page
-      .getByRole("button", { name: "Leave game", exact: true })
-      .count())
-      ? [page, other]
-      : [other, page];
-    for (const player of [page, other])
+    // Both seats leave rather than kick or cancel, and neither waits: the
+    // covenant waives the joiner's lobby clock in Quick Match.
+    for (const player of [page, other]) {
+      await expect(player.getByRole("button", { name: "Leave game", exact: true })).toBeEnabled();
       await expect(player.getByRole("button", { name: /Kick opponent|Cancel game/ })).toHaveCount(
         0,
       );
-    await expect(guest.getByRole("button", { name: /^Leave game in \d+:\d\d$/ })).toBeDisabled();
-    await host.getByRole("button", { name: "Leave game", exact: true }).click();
-    await host
+    }
+    // Ada queued first, so she hosts: Bo, the joiner, leaves, the exit an
+    // invite would make wait.
+    await other.getByRole("button", { name: "Leave game", exact: true }).click();
+    await other
       .getByRole("dialog", { name: "Leave game?", exact: true })
       .getByRole("button", { name: "Leave game", exact: true })
       .click();
-    // Home, not a fresh private lobby.
-    await expect(host.getByRole("button", { name: "Quick Match", exact: true })).toBeVisible({
+    await expect(other.getByRole("button", { name: "Quick Match", exact: true })).toBeVisible({
       timeout: 60_000,
     });
-    await expect(host.getByLabel("Invite link", { exact: true })).toHaveCount(0);
     // The same endings the kick test accepts (lobby-exits.pw.ts).
-    await expect(guest.getByRole("dialog")).toContainText(/called off|game has ended/i, {
-      timeout: 60_000,
-    });
+    await expect(page.getByRole("dialog")).toContainText(
+      /cancelled|called off|removed|game has ended/i,
+      {
+        timeout: 60_000,
+      },
+    );
   } finally {
     await otherContext.close();
   }

@@ -160,7 +160,8 @@ signatures; the protocol instead makes the first round unable to forfeit:
   that bailing could exploit, and a scanner gains nothing from an absent host.
 
 Before the first pick, the host can dissolve immediately, the guest can
-dissolve after T of inactivity, and permissionless cleanup can split after T.
+dissolve after T of inactivity (immediately in a Quick Match, whose `quick`
+flag waives the wait), and permissionless cleanup can split after T.
 The first committer in the first round has no clock of their own; the opponent
 has T from that pick's acceptance, and the first committer can only wait or be
 refunded. A first pick can land after the cap (the join was accepted before
@@ -195,7 +196,8 @@ start another picking round.
   overhead is unacceptable.
 - Refresh, reconnect, and another device must recover the same D. Never derive
   it from when a browser happened to observe a round.
-- The lobby exits (host kick, guest cancel after one clock) close at the first
+- The lobby exits (host kick, guest cancel after one clock, or both at once in
+  a Quick Match) close at the first
   pick. Nothing in the first round can be escaped by cancelling because nothing
   in it forfeits; from the second round on the round machine has no exit but
   the timeout doors.

@@ -250,6 +250,7 @@ describe("fourk mode in share codes", () => {
     pickDeadline: 0,
     firstCommitter: 0,
     revealTimeout: 600,
+    quick: 0,
   };
 
   test("an open fourk lobby round-trips with its mode", () => {
@@ -358,8 +359,8 @@ describe("fourk mode in share codes", () => {
   test("unknown and retired mode bytes, and slot-mask bits, are rejected", () => {
     const good = encodeMatchBinary({ ...match({ p2: P2 }), mode: "fourk2", simul: zeroCore });
     // Mode section trails the code: [modeByte, round 0, slotMask 0,
-    // pickDeadline 0, firstCommitter 0, revealTimeout varint(600) x2].
-    const modeAt = good.length - 7;
+    // pickDeadline 0, firstCommitter 0, revealTimeout varint(600) x2, quick 0].
+    const modeAt = good.length - 8;
     expect(good[modeAt]).toBe(2);
     for (const retiredOrUnknown of [1, 3]) {
       const bad = Uint8Array.from(good.map((x, i) => (i === modeAt ? retiredOrUnknown : x)));

@@ -34,8 +34,13 @@ export const classicEngine = {
     };
   },
 
-  genesisFields(): Partial<Match> {
+  genesisFields(_timing, opts): Partial<Match> {
+    if (opts?.quick) throw new Error("Quick Match is Fourk only");
     return {};
+  },
+
+  joinerExitWait(m: Match): number {
+    return m.state.moveTimeout;
   },
 
   /** Classic's draw has no age gate. */

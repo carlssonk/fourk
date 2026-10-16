@@ -53,7 +53,7 @@ const lobby = (p1: string, moveTimeout = 3_000): Match => ({
     moveTimeout,
     deadline: 900_000,
   },
-  simul: zeroCore2(moveTimeout),
+  simul: zeroCore2(moveTimeout, 1),
 });
 const hosted = (ticket: string, m: Match) => JSON.stringify({ ticket, code: encodeShareCode(m) });
 

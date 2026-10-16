@@ -11,7 +11,7 @@
 import * as cov from "../lib/covenant";
 import { ensureFunds } from "../lib/dispenser";
 import type { Match, PlayerProfile } from "../lib/match";
-import type { GameModeKey } from "../modes/types";
+import type { GameModeKey, GenesisOptions } from "../modes/types";
 import { getRpc } from "./rpc";
 import { hasOwnedAccount, matchWallet, signingWallet, type Wallet } from "./wallet";
 import type { MatchTiming, PrivateKey } from "../lib/covenant";
@@ -29,6 +29,7 @@ export interface ChainOps {
     timing: MatchTiming,
     modeKey: GameModeKey,
     onSubmit?: (m: Match) => void,
+    genesis?: GenesisOptions,
   ): Promise<Match>;
   /** `onSubmit` sees the record-to-be just before the transaction leaves,
    * so it can be stored first (a reload mid-submit must not lose it). */
@@ -38,7 +39,9 @@ export interface ChainOps {
     profile: PlayerProfile,
     onSubmit?: (m: Match) => void,
   ): Promise<Match>;
-  assertJoinableDeadline(invite: Match): Promise<void>;
+  /** Refuse a game with less than `minRemaining` (or the general floor) of
+   * its time limit left. */
+  assertJoinableDeadline(invite: Match, minRemaining?: number): Promise<void>;
   /** Close our own open lobby and take the stake back. */
   cancelMatch(key: PrivateKey, match: Match): Promise<void>;
 }
@@ -81,14 +84,14 @@ export const realChain: ChainOps = {
   async chainCheckpoint() {
     return cov.chainCheckpoint(await getRpc());
   },
-  async openMatch(key, stake, timing, modeKey, onSubmit) {
-    return cov.openMatch(await getRpc(), key, stake, timing, modeKey, onSubmit);
+  async openMatch(key, stake, timing, modeKey, onSubmit, genesis) {
+    return cov.openMatch(await getRpc(), key, stake, timing, modeKey, onSubmit, genesis);
   },
   async joinMatch(key, invite, profile, onSubmit) {
     return cov.joinMatch(await getRpc(), key, invite, profile, onSubmit);
   },
-  async assertJoinableDeadline(invite) {
-    await cov.assertJoinableDeadline(await getRpc(), invite);
+  async assertJoinableDeadline(invite, minRemaining) {
+    await cov.assertJoinableDeadline(await getRpc(), invite, minRemaining);
   },
   async cancelMatch(key, match) {
     await cov.cancelMatch(await getRpc(), key, match);

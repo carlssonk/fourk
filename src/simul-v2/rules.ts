@@ -1,6 +1,7 @@
 /** Versioned shared-deadline Fourk rulebook. Legacy matches keep src/simul. */
 import * as legacy from "../simul/rules.js";
 import {
+  isSimulOpen,
   newSimulMatch,
   type SimulState,
   ZERO_HASH,
@@ -24,6 +25,9 @@ export interface State extends SimulState {
   pickDeadline: number;
   firstCommitter: number;
   revealTimeout: number;
+  /** 1 = paired by Quick Match, 0 = an invite. Set at open, carried
+   * unchanged; it only lifts the joiner's lobby wait in dissolve. */
+  quick: number;
 }
 
 export interface Ctx extends LegacyCtx {
@@ -54,6 +58,7 @@ export function newMatch(
   moveTimeout: number,
   deadline: number,
   revealTimeout: number,
+  quick: 0 | 1 = 0,
 ): State {
   req(
     Number.isInteger(revealTimeout) &&
@@ -61,11 +66,13 @@ export function newMatch(
       revealTimeout <= moveTimeout,
     "invalid reveal timeout",
   );
+  req(quick === 0 || quick === 1, "invalid quick flag");
   return {
     ...newSimulMatch(p1, stake, moveTimeout, deadline),
     pickDeadline: 0,
     firstCommitter: 0,
     revealTimeout,
+    quick,
   };
 }
 
@@ -76,15 +83,32 @@ export function join(s: State, ctx: Ctx): State {
       s.revealTimeout <= s.moveTimeout,
     "invalid reveal timeout",
   );
+  req(s.quick === 0 || s.quick === 1, "invalid quick flag");
   req(s.pickDeadline === 0 && s.firstCommitter === 0, "invalid lobby state");
   return { ...s, ...legacy.join(s, ctx) };
 }
 
 export const cancel = legacy.cancel;
 
-/** The lobby exits (host now, joiner after one clock) close at the first
- * pick: a lone first-round commit is refunded through splitTimeout instead. */
-export const dissolve = legacy.dissolve;
+/** The lobby exits (host now, joiner after one clock, or at once in Quick
+ * Match) close at the first pick: a lone first-round commit is refunded
+ * through splitTimeout instead. */
+export function dissolve(s: State, ctx: Ctx): Payout[] {
+  req(!isSimulOpen(s), "match not started");
+  // Unreachable in honest play (a line needs rounds), but a directly-created
+  // covenant UTXO could carry it — belt and braces.
+  req(s.pendingWin === 0, "win claim pending");
+  req(s.round === 0, "game has begun");
+  req(s.commit1 === ZERO_HASH && s.commit2 === ZERO_HASH, "game has begun");
+  req(s.reveal1 === 0 && s.reveal2 === 0, "game has begun");
+  req(ctx.signer === s.p1 || ctx.signer === s.p2, "only a player can dissolve");
+  if (ctx.signer === s.p2 && s.quick === 0)
+    req(ctx.utxoAge >= s.moveTimeout, "joiner must wait out the move clock");
+  return [
+    { to: s.p1, amount: s.stake },
+    { to: s.p2, amount: s.stake },
+  ];
+}
 
 /**
  * Seal a pick. From the second round on, the first commit anchors the shared
@@ -322,6 +346,7 @@ export function validateReachableSimulV2State(s: State): void {
   req(Number.isInteger(s.pickDeadline) && s.pickDeadline >= 0, "bad pick deadline");
   req(s.pickDeadline < DEADLINE_LIMIT, "bad pick deadline");
   req([0, 1, 2].includes(s.firstCommitter), "bad first committer");
+  req(s.quick === 0 || s.quick === 1, "invalid quick flag");
   // The cutoff lives exactly as long as the round is collecting commits: the
   // first reveal, a resolve and a win claim all clear it. A lone first-round
   // commit carries none (see commit).

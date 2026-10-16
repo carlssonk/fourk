@@ -15,7 +15,7 @@
 import { phaseOf, toHex, type Match } from "../../lib/match";
 import { findWin, MIN_MOVE_TIMEOUT_DAA, type State } from "../../lib/game";
 import type { ActorState, MatchTiming, SpendInfo } from "../../lib/engine";
-import type { ModeChainSurface, SpendClass } from "../types";
+import type { GenesisOptions, ModeChainSurface, SpendClass } from "../types";
 import { rederiveJoin } from "../common";
 import { legalSimulColumns, myObligation, roundPhase, simulProgress } from "../fourk/core";
 import { pruneSalts } from "../fourk/saltStore";
@@ -58,6 +58,7 @@ export const fourk2Engine = {
         move_timeout: s.moveTimeout,
         deadline: s.deadline,
         reveal_timeout: core.revealTimeout,
+        quick: core.quick,
       };
     const ss = v2Snapshot(m);
     return {
@@ -75,13 +76,14 @@ export const fourk2Engine = {
       pick_deadline: ss.pickDeadline,
       first_committer: ss.firstCommitter,
       reveal_timeout: ss.revealTimeout,
+      quick: ss.quick,
     };
   },
 
   /** The reveal grace defaults to the picking window: a reveal is owed the
    * moment both picks are in, and a shorter grace would forfeit a player
    * who committed early and stepped away in a long-clock game. */
-  genesisFields(timing: MatchTiming): Partial<Match> {
+  genesisFields(timing: MatchTiming, { quick = false }: GenesisOptions = {}): Partial<Match> {
     const revealTimeout = timing.revealTimeout ?? timing.moveTimeout;
     if (
       !Number.isInteger(revealTimeout) ||
@@ -89,7 +91,12 @@ export const fourk2Engine = {
       revealTimeout > timing.moveTimeout
     )
       throw new Error("reveal grace must be between one minute and the picking window");
-    return { mode: "fourk2", simul: zeroCore2(revealTimeout) };
+    return { mode: "fourk2", simul: zeroCore2(revealTimeout, quick ? 1 : 0) };
+  },
+
+  /** Quick Match waives the joiner's wait (the covenant's quick flag). */
+  joinerExitWait(m: Match): number {
+    return core2Of(m).quick === 1 ? 0 : m.state.moveTimeout;
   },
 
   /** claim_draw waits out the reveal grace (see the covenant). */
