@@ -63,6 +63,9 @@ export function mountCapHeader(seconds = 86400, failFirst = false) {
       </div>
     );
   }
+  // This covers Home, whose scrollbar gutter (styles.css) would narrow it;
+  // the game screen it stands in for has none.
+  document.documentElement.style.scrollbarGutter = "auto";
   const container = document.createElement("div");
   container.className = "fixed inset-0 z-50 overflow-auto bg-bg p-4";
   document.body.append(container);

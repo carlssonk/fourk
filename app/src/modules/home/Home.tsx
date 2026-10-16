@@ -200,7 +200,7 @@ export const Home = () => {
   }
 
   return (
-    <div className="pt-8 pb-8 text-center">
+    <div data-screen="home" className="pt-8 pb-8 text-center">
       <BoardBackdrop />
       {/* The wordmark wears the accent — Kaspa's own teal — so the page has
        * one identity colour from title to primary button. */}

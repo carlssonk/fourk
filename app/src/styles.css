@@ -22,10 +22,12 @@
 @layer base {
   /* Room for the scrollbar even when the page doesn't scroll, so opening
    * something that makes it scroll (the private game's settings) doesn't
-   * shift everything sideways. Only below xl, where Your matches stacks
-   * under the card and the page is tall enough for that to happen. */
+   * shift everything sideways. Only on Home, below xl, where Your matches
+   * stacks under the card and the page is tall enough for that to happen:
+   * elsewhere a classic scrollbar's gutter would push centred screens (the
+   * board, the connect screen) off centre. */
   @media (width < 80rem) {
-    html {
+    html:has([data-screen="home"]) {
       scrollbar-gutter: stable;
     }
   }
