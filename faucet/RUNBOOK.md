@@ -59,14 +59,21 @@ new lane. New lanes are claimable after one cooldown (~2 minutes).
 
 ## Monitoring and automatic refills
 
-`.github/workflows/dispenser.yml` runs every 30 minutes. When fewer than 10
-lanes are eligible (`status --min-lanes 10`) it refills 10 lanes x 100 TKAS
-from the funding key in the repo secret `FAUCET_KEY`, then checks that key's
-balance (`balance <keyfile> 2000`). The run fails when the refill fails or
-the key holds under 2,000 TKAS, and GitHub emails the failure to whoever last
+`.github/workflows/dispenser.yml` is scheduled every 30 minutes. When fewer
+than 50 lanes are eligible (`status --min-lanes 50`) it refills 100 lanes x
+50 TKAS (5,000 TKAS, one transaction) from the funding key in the repo
+secret `FAUCET_KEY`, then checks that key's balance (`balance <keyfile>
+10000`). The run fails when the refill fails or the key holds under 10,000
+TKAS (two refills' worth), and GitHub emails the failure to whoever last
 changed that workflow's schedule. The one manual job left is topping up the
 funding key's address from a public testnet faucet when that email comes.
 The thresholds are the `env` block at the top of the workflow.
+
+GitHub delays scheduled runs under load: in October 2026 they came every
+4-5 hours, not every 30 minutes. Size refills to last that long, and don't
+count on the schedule to rescue a burst — dispatch the workflow by hand
+instead. What this setup carries, and the plan for when it stops being
+enough, is in `docs/adr/0004-free-play-funding-capacity.md`.
 
 - Set or rotate the secret without the key passing through anything else:
   `gh secret set FAUCET_KEY < faucet/faucet.key`.
@@ -90,9 +97,12 @@ and keep a funded key at hand (see Abuse below).
 
 ## Float policy
 
-Each free game consumes ~2 claims (both seats), i.e. ~20 TKAS. The default
-refill (3 lanes x 100 TKAS = 30 drips) covers ~15 free games. Size the
-float to your expected traffic between checks, keeping in mind:
+A new guest's first free game costs one claim per seat (10 TKAS). A free
+seat needs ~1 TKAS plus fees, so that drip carries the same guest through
+several more games before they claim again. The CLI's default refill (3
+lanes x 100 TKAS = 30 drips) suits a manual top-up; the workflow's (100 x
+50 TKAS = 500 drips) is sized for burst capacity. Size the float to your
+expected traffic between checks, keeping in mind:
 
 - **More lanes beats bigger lanes for burst capacity**: each lane serves
   one claim per cooldown, so 3 lanes cap throughput at ~3 claims / 2 min

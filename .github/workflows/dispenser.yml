@@ -17,11 +17,17 @@ concurrency:
   group: dispenser
   cancel-in-progress: false
 
+# Many small lanes rather than a few big ones: each lane serves one claim
+# per cooldown (~2 min), so the eligible lane count is the burst capacity
+# and a refill's total drips are what carries the hours between runs.
+# GitHub delays scheduled runs (every 4-5 hours in practice, not 30 min),
+# so a refill has to last that long. Capacity and the plan beyond it:
+# docs/adr/0004-free-play-funding-capacity.md.
 env:
-  MIN_LANES: 10
-  REFILL_LANES: 10
-  REFILL_TKAS_PER_LANE: 100
-  MIN_KEY_TKAS: 2000
+  MIN_LANES: 50
+  REFILL_LANES: 100
+  REFILL_TKAS_PER_LANE: 50
+  MIN_KEY_TKAS: 10000
 
 jobs:
   status:
