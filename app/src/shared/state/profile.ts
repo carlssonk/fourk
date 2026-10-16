@@ -126,10 +126,11 @@ function loadDaa(key: string, fallback: number, min = 0, max = Number.MAX_SAFE_I
   return Number.isInteger(n) && n >= min && n <= max ? n : fallback;
 }
 
-/** The move timer a host starts with until they pick another: 5 minutes.
+/** The move timer a host starts with until they pick another: 2 minutes,
+ * as Quick Match plays.
  * Deliberately not the rulebook's MOVE_TIMEOUT_DAA, which share codes treat
  * as the implicit timing — a UI default must not change how codes decode. */
-export const DEFAULT_MOVE_TIMEOUT_DAA = 3_000;
+export const DEFAULT_MOVE_TIMEOUT_DAA = 1_200;
 
 /** Per-move forfeit clock for hosted games, DAA blocks. */
 export const moveTimeoutAtom = atom<number>(

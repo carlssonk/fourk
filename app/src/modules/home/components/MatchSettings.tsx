@@ -16,7 +16,7 @@ import {
 } from "@shared/state";
 
 /** Per-move forfeit clock presets, in DAA blocks (~600/min on testnet-10). */
-const MOVE_PRESETS = [600, 3000, 9000, 36_000, 864_000];
+const MOVE_PRESETS = [600, 1200, 3000, 9000, 36_000, 864_000];
 
 export const Chip = ({
   on = false,
