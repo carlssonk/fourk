@@ -73,6 +73,9 @@ export interface Match {
    * carried by the invite link. On-chain discs are only 1 (creator) and 2
    * (joiner); absent means the classic mapping (p1 red). */
   p1Color?: "red" | "blue";
+  /** Paired by Quick Match rather than an invite. Local bookkeeping only:
+   * kept in this browser's records, never in share codes. */
+  quick?: boolean;
 }
 
 /** The one place the network is named — faucet/fund-dispenser.mjs keeps a
@@ -126,7 +129,9 @@ export function fmtCountdown(seconds: number): string {
   const days = remaining > 86400 ? Math.floor(remaining / 86400) : 0;
   const hours = Math.floor((remaining - days * 86400) / 3600);
   const minutes = Math.floor((remaining % 3600) / 60);
-  const clock = [hours, minutes, remaining % 60].map((value) => String(value).padStart(2, "0")).join(":");
+  const clock = [hours, minutes, remaining % 60]
+    .map((value) => String(value).padStart(2, "0"))
+    .join(":");
   return days ? `${days}d ${clock}` : clock;
 }
 
@@ -204,6 +209,7 @@ export function matchToJson(m: Match): string {
       ...(m.profiles && { profiles: m.profiles }),
       ...(m.p1Color && { p1Color: m.p1Color }),
       ...(m.result && { result: m.result }),
+      ...(m.quick && { quick: true }),
     },
     null,
     2,
@@ -236,6 +242,7 @@ const matchJsonSchema = z.object({
   profiles: z.object({ p1: profileSchema.optional(), p2: profileSchema.optional() }).optional(),
   p1Color: z.enum(["red", "blue"]).optional(),
   result: z.string().optional(),
+  quick: z.boolean().optional(),
   // Fourk mode (simultaneous): the round machine rides along.
   mode: z.enum(["fourk2"]).optional(),
   round: z.number().int().min(0).max(255).optional(),
@@ -284,6 +291,7 @@ export function matchFromJson(json: string): Match {
       },
     }),
     ...(raw.p1Color && { p1Color: raw.p1Color }),
+    ...(raw.quick && { quick: true }),
     ...(raw.result && { result: raw.result }),
   };
 }

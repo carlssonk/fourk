@@ -12,7 +12,7 @@ import { QUICK_MATCH_MOVE_TIMEOUT, isQuickMatchTerms } from "../lib/quickMatch";
 import { SEAT_GONE, createGame, errorAtom, runAction, sitDown, type HostTerms } from "./actions";
 import { realDeps, type PollState, type QuickMatchDeps } from "./deps";
 import { httpMatchmaker } from "../lib/matchmaker";
-import { matchesAtom, removeMatch, showMatch } from "./matches";
+import { matchesAtom, removeMatch, showMatch, updateMatch } from "./matches";
 import { isOpen } from "../lib/game";
 import { timingFor } from "./profile";
 
@@ -109,6 +109,7 @@ async function follow(deps: QuickMatchDeps, ticket: string, live: () => boolean)
           taken = true;
         }
       });
+      if (!taken) markQuick(invite.covenantId);
       return !taken;
     }
     if (poll.state === "host" && !lobby) {
@@ -117,7 +118,8 @@ async function follow(deps: QuickMatchDeps, ticket: string, live: () => boolean)
       // quiet, so keep polling through it.
       const stopBeat = heartbeat(deps, ticket);
       await runAction(async () => {
-        lobby = await createGame(deps, { terms: TERMS, show: false });
+        const opened = await createGame(deps, { terms: TERMS, show: false });
+        lobby = updateMatch({ ...opened, quick: true });
       }).finally(stopBeat);
       if (!lobby || store.get(errorAtom)) return true;
       held = { deps, lobby };
@@ -147,6 +149,12 @@ async function joinOf(lobby: Match): Promise<Match> {
     await wait(1_000);
   }
   return record() ?? lobby;
+}
+
+/** Note on the joined game's record that Quick Match paired it. */
+function markQuick(covenantId: string): void {
+  const m = store.get(matchesAtom).find((x) => x.covenantId === covenantId);
+  if (m) updateMatch({ ...m, quick: true });
 }
 
 /** Poll in the background, ignoring the answers, until the returned stop

@@ -24,7 +24,15 @@ import type {
 import type { Wallet } from "../src/shared/state/wallet";
 import type { PrivateKey } from "../src/shared/lib/covenant";
 import { CELLS, ZERO_PK } from "../src/shared/lib/game";
-import { FREE_STAKE, NETWORK_ID, encodeShareCode, type Match } from "../src/shared/lib/match";
+import {
+  FREE_STAKE,
+  NETWORK_ID,
+  decodeShareCode,
+  encodeShareCode,
+  matchFromJson,
+  matchToJson,
+  type Match,
+} from "../src/shared/lib/match";
 import { zeroCore2 } from "../src/shared/modes/fourk2/core";
 
 const store = getDefaultStore();
@@ -373,4 +381,40 @@ test("after the handover, the host opens the game once the join has landed", asy
   await vi.advanceTimersByTimeAsync(2_000);
   expect(store.get(currentMatchAtom)?.state.p2).toBe(HOST_PK);
   expect(store.get(quickMatchAtom)).toEqual({ phase: "idle" });
+});
+
+test("both players' records say the game came from Quick Match", async () => {
+  const opened = lobby(GUEST_PK);
+  const host = fakeMatchmaker([{ state: "host" }, { state: "matched" }]);
+  deps = {
+    chain: fakeChain({ openMatch: vi.fn(async () => opened) }),
+    account: fakeAccount(),
+    matchmaker: host,
+  };
+  void startQuickMatch(deps);
+  await vi.advanceTimersByTimeAsync(40_000);
+  expect(store.get(matchesAtom)[0]).toMatchObject({ covenantId: opened.covenantId, quick: true });
+
+  store.set(matchesAtom, []);
+  const code = encodeShareCode(lobby(HOST_PK));
+  const joiner = fakeMatchmaker([{ state: "join", code }]);
+  deps = {
+    chain: fakeChain({ joinMatch: joinedBy(GUEST_PK) }),
+    account: fakeAccount(),
+    matchmaker: joiner,
+  };
+  void startQuickMatch(deps);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(store.get(currentMatchAtom)).toMatchObject({ quick: true });
+  expect(store.get(matchesAtom)[0]).toMatchObject({ quick: true });
+});
+
+test("the Quick Match mark survives chain updates and a reload, but not a share code", () => {
+  const m = { ...lobby(GUEST_PK), quick: true };
+  updateMatch(m);
+  // The watcher's fresher snapshot knows nothing of how the game started.
+  updateMatch({ ...lobby(GUEST_PK), state: { ...m.state, p2: HOST_PK }, value: FREE_STAKE * 2n });
+  expect(store.get(matchesAtom)[0]).toMatchObject({ quick: true });
+  expect(matchFromJson(matchToJson(m))).toMatchObject({ quick: true });
+  expect(decodeShareCode(encodeShareCode(m)).quick).toBeUndefined();
 });

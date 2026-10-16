@@ -337,32 +337,49 @@ export const Game = ({ match }: Props) => {
     }
   };
 
+  // The lobby exit, by who's leaving what. A private host kicks: the seat
+  // clears into a fresh game with a new link. In Quick Match nobody chose
+  // the opponent or has a link to share, so both seats just leave (the
+  // joiner still waits out the covenant's clock).
+  const exit = match.quick ? "leave" : role === "p1" ? "kick" : "cancel";
   const dissolveGame = async () => {
     const ok = await askConfirm(
-      role === "p1"
+      exit === "leave"
         ? {
-            title: "Kick your opponent?",
-            body: staked
-              ? "Their stake returns and their link stops working. You get a fresh game with a new invite link to share."
-              : "Their link stops working. You'll get a fresh game and a new invite link to share.",
-            confirm: "Kick them",
+            title: "Leave game?",
+            body: "The game hasn't started. Leaving ends it for both players.",
+            confirm: "Leave game",
             danger: true,
           }
-        : {
-            title: "Cancel game?",
-            body: staked
-              ? "It hasn't started, so it's called off and both stakes return."
-              : "The game hasn't started. Cancelling ends it for both players.",
-            confirm: "Cancel game",
-            danger: true,
-          },
+        : exit === "kick"
+          ? {
+              title: "Kick your opponent?",
+              body: staked
+                ? "Their stake returns and their link stops working. You get a fresh game with a new invite link to share."
+                : "Their link stops working. You'll get a fresh game and a new invite link to share.",
+              confirm: "Kick them",
+              danger: true,
+            }
+          : {
+              title: "Cancel game?",
+              body: staked
+                ? "It hasn't started, so it's called off and both stakes return."
+                : "The game hasn't started. Cancelling ends it for both players.",
+              confirm: "Cancel game",
+              danger: true,
+            },
     );
     if (!ok) return;
     runAction(async () => {
-      startConnecting(role === "p1" ? "Kicking your opponent" : "Cancelling the game", [
-        staked ? "Connecting to the Kaspa network" : "Connecting to the game",
-        staked ? "Returning both stakes" : "Closing the game",
-      ]);
+      startConnecting(
+        { kick: "Kicking your opponent", leave: "Leaving the game", cancel: "Cancelling the game" }[
+          exit
+        ],
+        [
+          staked ? "Connecting to the Kaspa network" : "Connecting to the game",
+          staked ? "Returning both stakes" : "Closing the game",
+        ],
+      );
       const key = seatKey();
       const rpc = await getRpc();
       advanceConnecting();
@@ -375,7 +392,8 @@ export const Game = ({ match }: Props) => {
           daa: s.moveTimeout,
         });
         if (mins) {
-          throw new Error(`You can cancel in about ${mins} minute${mins === 1 ? "" : "s"}.`);
+          const verb = exit === "leave" ? "leave" : "cancel";
+          throw new Error(`You can ${verb} in about ${mins} minute${mins === 1 ? "" : "s"}.`);
         }
       }
       await ensureFunds(rpc, key, cov.FEE_HEADROOM, { staked: isStaked(match) });
@@ -385,7 +403,7 @@ export const Game = ({ match }: Props) => {
       // it must be a new covenant — a dead link is exactly what keeps the
       // kicked player out — so flow straight into hosting a fresh game with
       // a new link to share.
-      if (role === "p1") await createGame();
+      if (exit === "kick") await createGame();
     });
   };
 
@@ -631,19 +649,21 @@ export const Game = ({ match }: Props) => {
             className="btn btn-danger"
             disabled={busy || withdrawGated}
             title={
-              role === "p1"
+              exit === "kick"
                 ? "Before play starts, you can remove your opponent and get a fresh game with a new invite link."
                 : withdrawGated
-                  ? "You can cancel once the lobby timer ends."
-                  : undefined
+                  ? `You can ${exit} once the lobby timer ends.`
+                  : exit === "leave"
+                    ? "Before play starts, you can leave. The game ends for both players."
+                    : undefined
             }
             onClick={() => void dissolveGame()}
           >
-            {role === "p1"
+            {exit === "kick"
               ? "Kick opponent"
-              : withdrawGated && lobbyClock.text
-                ? `Cancel game in ${lobbyClock.text}`
-                : "Cancel game"}
+              : `${exit === "leave" ? "Leave game" : "Cancel game"}${
+                  withdrawGated && lobbyClock.text ? ` in ${lobbyClock.text}` : ""
+                }`}
           </button>
         )}
       </div>
