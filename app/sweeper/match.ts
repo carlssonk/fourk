@@ -1,0 +1,183 @@
+/**
+ * The matchmaker's core (docs/adr/0003): pair two players who both pressed
+ * Quick Match, have the one who waited longer host, and forward the host's
+ * share code to the partner once the chain holds that lobby.
+ *
+ * It holds no keys and moves no money. Every transaction is built and signed
+ * in the players' browsers, and the joiner re-checks the terms before taking
+ * the seat, so the worst this process can do is pair badly or not at all.
+ *
+ * A ticket's poll answers one of:
+ * - `waiting`: in the queue, or paired and waiting for the host's lobby.
+ * - `host`: paired as host; open the lobby and post its code to /hosted.
+ * - `hosted`: the lobby is verified and waiting for a joiner. If the
+ *   partner left first, the next seeker gets it, so keep the lobby open.
+ * - `join` (with `code`): check the terms and take the seat.
+ * - `matched`: the joiner has the code; stop polling.
+ * - `gone`: the ticket was dropped. Seek again (a host cancels its lobby
+ *   first if it opened one).
+ */
+
+import { randomUUID } from "node:crypto";
+import * as engine from "../src/shared/lib/engine";
+import { decodeShareCode, type Match } from "../src/shared/lib/match";
+import { isQuickMatchTerms } from "../src/shared/lib/quickMatch";
+import { fourk2Engine } from "../src/shared/modes/fourk2/engine";
+import { MAX_BODY_BYTES, RATE_WINDOW_MS, type Reply } from "./sweeper";
+
+/** A ticket not polled for this long has left: its tab closed or slept. */
+export const POLL_GRACE_MS = 10_000;
+/** How long a host has, from pairing, to post a lobby the chain holds. */
+export const HOST_GRACE_MS = 30_000;
+export const MAX_TICKETS = 1000;
+/** Per-client requests per window: a seeker polls about every 2 s, so
+ * this fits two players behind one address (CF-Connecting-IP). */
+export const REQUEST_LIMIT = 120;
+/** Per-client seeks per window. Each one may become a lobby the dispenser
+ * pays for, so this is what bounds a script that keeps requeueing. */
+export const SEEK_LIMIT = 6;
+
+interface Ticket {
+  pk: string;
+  /** When this ticket last seeked or polled. */
+  seen: number;
+  /** The ticket this one is paired with, and whether this one hosts. */
+  partner?: string;
+  hosts?: boolean;
+  pairedAt?: number;
+  /** The host's verified share code, for the partner to take. */
+  code?: string;
+  /** Set on both sides once the partner has been handed the code: the pair
+   * is done, and either one leaving no longer requeues the other. */
+  taken?: boolean;
+}
+
+const json = (status: number, body: object): Reply => ({ status, body: JSON.stringify(body) });
+
+/** The request's JSON object, or null for anything else. */
+function parse(body: string): Record<string, unknown> | null {
+  try {
+    const v: unknown = JSON.parse(body);
+    return v && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+const PK = /^[0-9a-f]{64}$/;
+
+/** Fixed-window counter per client. */
+function limiter(limit: number, now: () => number) {
+  const hits = new Map<string, { count: number; since: number }>();
+  return (client: string): boolean => {
+    const t = now();
+    for (const [c, h] of hits) if (t - h.since >= RATE_WINDOW_MS) hits.delete(c);
+    const h = hits.get(client);
+    if (!h) {
+      hits.set(client, { count: 1, since: t });
+      return false;
+    }
+    return ++h.count > limit;
+  };
+}
+
+export function createMatchmaker(rpc: engine.Rpc, now: () => number = Date.now) {
+  const tickets = new Map<string, Ticket>();
+  const requests = limiter(REQUEST_LIMIT, now);
+  const seeks = limiter(SEEK_LIMIT, now);
+
+  /** The reply that refuses this request before it is read, if any. */
+  function gate(body: string, client: string): Reply | null {
+    if (requests(client)) return json(429, { error: "slow down" });
+    if (Buffer.byteLength(body) > MAX_BODY_BYTES) return json(413, { error: "too large" });
+    return null;
+  }
+
+  /** Drop who has left (or hosted nothing in time), requeue their partners,
+   * and pair whoever is waiting: oldest first, the older one hosting. */
+  function settle(): void {
+    for (const [id, t] of tickets) {
+      const late = t.hosts && !t.code && now() - t.pairedAt! > HOST_GRACE_MS;
+      if (late || now() - t.seen > POLL_GRACE_MS) tickets.delete(id);
+    }
+    // A host keeps a lobby the chain already holds: the next seeker takes it.
+    for (const t of tickets.values())
+      if (t.partner && !t.taken && !tickets.has(t.partner))
+        Object.assign(t, { partner: undefined, hosts: t.code ? true : undefined, pairedAt: undefined });
+    const waiting = [...tickets].filter(([, t]) => !t.partner);
+    // Open lobbies first, then the longest wait: the older one hosts.
+    waiting.sort(([, x], [, y]) => Number(!!y.code) - Number(!!x.code));
+    while (waiting.length > 1) {
+      const [hostId, host] = waiting.shift()!;
+      const i = waiting.findIndex(([, t]) => t.pk !== host.pk && !t.code);
+      if (i < 0) continue;
+      const [id, t] = waiting.splice(i, 1)[0]!;
+      Object.assign(host, { partner: id, hosts: true, pairedAt: now() });
+      Object.assign(t, { partner: hostId, hosts: false, pairedAt: now() });
+    }
+  }
+
+  /** POST /match/seek: join the queue. */
+  async function seek(body: string, client: string): Promise<Reply> {
+    const refused = gate(body, client);
+    if (refused) return refused;
+    if (seeks(client)) return json(429, { error: "slow down" });
+    const pk = parse(body)?.pk;
+    if (typeof pk !== "string" || !PK.test(pk)) return json(400, { error: "bad key" });
+    settle();
+    if (tickets.size >= MAX_TICKETS) return json(503, { error: "busy" });
+    const id = randomUUID();
+    tickets.set(id, { pk, seen: now() });
+    settle();
+    return json(200, { ticket: id });
+  }
+
+  /** GET /match/<ticket>: where this ticket stands. */
+  async function poll(id: string, client: string): Promise<Reply> {
+    const refused = gate("", client);
+    if (refused) return refused;
+    settle();
+    const t = tickets.get(id);
+    if (!t) return json(404, { state: "gone" });
+    t.seen = now();
+    if (t.hosts) return json(200, { state: t.taken ? "matched" : t.code ? "hosted" : "host" });
+    // Repeated until the joiner stops polling: a lost reply must not lose the game.
+    if (t.taken) return json(200, { state: "join", code: t.code });
+    const host = t.partner ? tickets.get(t.partner) : undefined;
+    if (!host?.code) return json(200, { state: "waiting" });
+    host.taken = t.taken = true;
+    t.code = host.code;
+    return json(200, { state: "join", code: t.code });
+  }
+
+  /** POST /match/hosted: the host's lobby, forwarded once the chain has it. */
+  async function hosted(body: string, client: string): Promise<Reply> {
+    const refused = gate(body, client);
+    if (refused) return refused;
+    const req = parse(body);
+    if (typeof req?.ticket !== "string" || typeof req.code !== "string")
+      return json(400, { error: "bad request" });
+    const { ticket, code } = req as { ticket: string; code: string };
+    let lobby: Match;
+    try {
+      lobby = decodeShareCode(code);
+    } catch {
+      return json(400, { error: "not a share code" });
+    }
+    settle();
+    const t = tickets.get(ticket);
+    if (!t) return json(404, { error: "no such ticket" });
+    if (!t.hosts || lobby.state.p1 !== t.pk) return json(403, { error: "not your lobby to host" });
+    if (!isQuickMatchTerms(lobby)) return json(400, { error: "not Quick Match terms" });
+    const entry = await engine.fetchGameUtxo(rpc, fourk2Engine, lobby);
+    // Value from the chain, as in the sweeper: a lobby holds the host's stake.
+    if (!entry || engine.withEntry(lobby, entry).value !== lobby.state.stake)
+      return json(404, { error: "no such lobby" });
+    // Other requests ran during the lookup; the pairing may have moved on.
+    if (tickets.get(ticket) !== t || !t.hosts) return json(404, { error: "no such ticket" });
+    t.code = code;
+    return json(202, {});
+  }
+
+  return { seek, poll, hosted };
+}

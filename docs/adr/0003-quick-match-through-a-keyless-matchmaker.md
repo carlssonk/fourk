@@ -63,8 +63,13 @@ chain while they wait alone.
    does for an invite.
 6. **Fallback.** If either side stops polling, or the host posts no valid
    code within ~30 s of pairing, the other player goes back into the queue.
-   A lobby already opened by a host who then vanished is covered by the
-   covenant's lobby exits and refunds; the matchmaker never serves it again.
+   A host whose partner left before taking the code keeps its verified
+   lobby, and the next seeker is handed it directly, so no cancel
+   transaction is spent. Once the code has been handed over the pair is
+   done, and neither side leaving requeues the other. A lobby already
+   opened by a host who then vanished is covered by the covenant's lobby
+   exits and refunds; the matchmaker never serves it again. The poll
+   states the client works from are listed in `app/sweeper/match.ts`.
 
 **Terms (v1).** One fixed preset so everyone lands in one queue: Fourk
 mode, free stake, 3,000 DAA per pick (about 5 minutes, the app's current

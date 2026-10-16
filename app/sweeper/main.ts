@@ -1,7 +1,8 @@
 /**
- * The sweeper process: one HTTP route behind the node's Cloudflare Tunnel
- * (POST /sweep), a health check for compose (GET /healthz), and a loop that
- * sends due sweeps through the local kaspad. See sweeper.ts for what it
+ * The sweeper process: HTTP routes behind the node's Cloudflare Tunnel
+ * (POST /sweep, and the Quick Match matchmaker under /match), a health
+ * check for compose (GET /healthz), and a loop that sends due sweeps
+ * through the local kaspad. See sweeper.ts and match.ts for what each
  * trusts, and infra/node/README.md for the deploy.
  */
 
@@ -12,6 +13,7 @@ import { fileURLToPath } from "node:url";
 import kaspaInit from "kaspa-wasm";
 import fourkInit from "fourk-wasm";
 import * as engine from "../src/shared/lib/engine";
+import { createMatchmaker } from "./match";
 import { MAX_BODY_BYTES, createSweeper, type Reply } from "./sweeper";
 
 const NODE_URL = process.env.NODE_URL ?? "ws://kaspad:17210";
@@ -39,11 +41,15 @@ async function connect(): Promise<engine.Rpc> {
 // Set once the node is reachable; until then every route answers 503.
 let rpc: engine.Rpc | null = null;
 let sweeper: ReturnType<typeof createSweeper> | null = null;
+let matchmaker: ReturnType<typeof createMatchmaker> | null = null;
 
-// No credentials ride this route, so any origin may post.
+/** GET /match/<ticket>: a seeker's poll. */
+const TICKET_PATH = /^\/match\/([0-9a-f-]{36})$/;
+
+// No credentials ride these routes, so any origin may call them.
 const CORS = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST",
+  "Access-Control-Allow-Methods": "GET, POST",
   "Access-Control-Allow-Headers": "Content-Type",
   "Access-Control-Max-Age": "86400",
 };
@@ -57,10 +63,29 @@ http
     const online = !!rpc?.isConnected;
     if (req.url === "/healthz" && req.method === "GET")
       return send(res, online ? { status: 200, body: "ok" } : { status: 503, body: "no node" });
-    if (req.url !== "/sweep") return send(res, { status: 404, body: "not found" });
     if (req.method === "OPTIONS") return send(res, { status: 204, body: "" });
+    if (!sweeper || !matchmaker || !online) return send(res, { status: 503, body: "starting" });
+    const client = String(req.headers["cf-connecting-ip"] ?? req.socket.remoteAddress ?? "");
+    const reply = (p: Promise<Reply>) =>
+      p
+        .then((r) => send(res, r))
+        .catch((e) => {
+          console.error(`${req.url}: ${String(e)}`);
+          send(res, { status: 500, body: "error" });
+        });
+
+    const ticket = TICKET_PATH.exec(req.url ?? "")?.[1];
+    if (ticket) {
+      if (req.method !== "GET") return send(res, { status: 405, body: "GET only" });
+      return void reply(matchmaker.poll(ticket, client));
+    }
+    const route = new Map([
+      ["/sweep", sweeper.intake],
+      ["/match/seek", matchmaker.seek],
+      ["/match/hosted", matchmaker.hosted],
+    ]).get(req.url ?? "");
+    if (!route) return send(res, { status: 404, body: "not found" });
     if (req.method !== "POST") return send(res, { status: 405, body: "POST only" });
-    if (!sweeper || !online) return send(res, { status: 503, body: "starting" });
 
     const chunks: Buffer[] = [];
     let size = 0;
@@ -74,16 +99,9 @@ http
         send(res, { status: 413, body: "too large" });
       }
     });
-    const intake = sweeper.intake;
     req.on("end", () => {
       if (res.headersSent) return;
-      const client = String(req.headers["cf-connecting-ip"] ?? req.socket.remoteAddress ?? "");
-      intake(Buffer.concat(chunks).toString("utf8"), client)
-        .then((reply) => send(res, reply))
-        .catch((e) => {
-          console.error(`intake: ${String(e)}`);
-          send(res, { status: 500, body: "error" });
-        });
+      void reply(route(Buffer.concat(chunks).toString("utf8"), client));
     });
   })
   .listen(PORT, () => console.log(`sweeper on :${PORT}, node ${NODE_URL}`));
@@ -93,6 +111,7 @@ const node = await connect();
 const ready = createSweeper(node);
 rpc = node;
 sweeper = ready;
+matchmaker = createMatchmaker(node);
 let lastOnline = Date.now();
 setInterval(() => {
   if (node.isConnected) {
