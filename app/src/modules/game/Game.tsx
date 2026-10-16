@@ -633,7 +633,9 @@ export const Game = ({ match }: Props) => {
         </section>
       )}
 
-      <div className="flex flex-wrap items-center justify-center gap-2.5 empty:hidden">
+      {/* Always one button tall, even when empty, so a button appearing or
+       * going away never resizes the board above. */}
+      <div className="flex min-h-10.5 flex-wrap items-center justify-center gap-2.5">
         {ending && overlayDismissed && (
           <button className="btn" disabled={busy} onClick={playAgain}>
             Play again
