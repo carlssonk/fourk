@@ -23,7 +23,8 @@ import { realDeps, type PollState, type QuickMatchDeps } from "./deps";
 import { SEEK_LIMITED, httpMatchmaker } from "../lib/matchmaker";
 import { matchesAtom, removeMatch, showMatch } from "./matches";
 import { isOpen } from "../lib/game";
-import { timingFor } from "./profile";
+import { getGameMode, timingFor } from "./profile";
+import type { GameModeKey } from "../modes/types";
 
 export type QuickMatchStatus =
   | { phase: "idle" }
@@ -57,12 +58,13 @@ export const UNAVAILABLE =
  * pairing that slow has long been dropped by the matchmaker. */
 const CAP_SLACK_DAA = 36_000;
 
-const TERMS: HostTerms = {
+/** What a Quick Match host opens: the player's mode, otherwise fixed. */
+const termsFor = (mode: GameModeKey): HostTerms => ({
   stake: 0n,
   timing: timingFor(QUICK_MATCH_MOVE_TIMEOUT),
-  mode: "fourk2",
+  mode,
   quick: true,
-};
+});
 
 /** The connect screens once paired: the opponent is found first, then the
  * game is made (no invite link: nobody shares one). Free games only. */
@@ -94,19 +96,21 @@ export async function startQuickMatch(
   const mine = ++run;
   const live = () => mine === run;
   const { myPk } = deps.account.signingWallet({ staked: false });
+  // Read at the press: the mode picker stays live on screen meanwhile.
+  const terms = termsFor(getGameMode());
   // One search, however many tickets it takes: the wait shown counts from
   // the press, not from the latest requeue.
   const since = Date.now();
   while (live()) {
     let ticket: string;
     try {
-      ticket = await deps.matchmaker.seek(myPk);
+      ticket = await deps.matchmaker.seek(myPk, terms.mode);
     } catch (e) {
       return unavailable((e as Error)?.message === SEEK_LIMITED ? SEARCHED_TOO_OFTEN : UNAVAILABLE);
     }
     if (!live()) return;
     store.set(quickMatchAtom, { phase: "searching", since });
-    const done = await follow(deps, ticket, live, since);
+    const done = await follow(deps, terms, ticket, live, since);
     if (done) return idle();
     await wait(POLL_MS);
   }
@@ -116,6 +120,7 @@ export async function startQuickMatch(
  * an error on screen), false to seek again. */
 async function follow(
   deps: QuickMatchDeps,
+  terms: HostTerms,
   ticket: string,
   live: () => boolean,
   since: number,
@@ -140,15 +145,16 @@ async function follow(
     if (poll.state === "join") {
       // The matchmaker is not trusted with the terms: check them here.
       const invite = parseInvite(poll.code);
-      if (!invite || !isQuickMatchTerms(invite)) return false;
+      if (!invite || !isQuickMatchTerms(invite, terms.mode)) return false;
       store.set(quickMatchAtom, { phase: "setting-up" });
       let skipped = false;
       await runAction(async () => {
         try {
           // The cap is an absolute score the terms can't compare, so hold it
           // to the preset here: a short one would cut the game off early.
-          const minRemaining = TERMS.timing.totalCap - CAP_SLACK_DAA;
-          await sitDown(invite, deps, { minRemaining, journey: JOINING });
+          const minRemaining = terms.timing.totalCap - CAP_SLACK_DAA;
+          // Marked paired on our record: Classic has no flag for it on chain.
+          await sitDown({ ...invite, paired: true }, deps, { minRemaining, journey: JOINING });
         } catch (e) {
           // Someone else got there first, or the lobby's limit is off the
           // terms: not the player's problem, find another.
@@ -165,7 +171,7 @@ async function follow(
       // quiet, so keep polling through it.
       const stopBeat = heartbeat(deps, ticket);
       await runAction(async () => {
-        lobby = await createGame(deps, { terms: TERMS, show: false, journey: HOSTING });
+        lobby = await createGame(deps, { terms, show: false, journey: HOSTING });
         // Straight on to the last step, on the same screen: no gap for the
         // panel underneath to show through while the lobby is posted.
         showWaiting(true);

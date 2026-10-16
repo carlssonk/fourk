@@ -99,7 +99,8 @@ requeueing.
 
 - No covenant change. The move-0 forfeit and P2-only dissolve sketched in
   `app/IDEAS.md` are classic-mode concerns, and classic stays out of Quick
-  Match until it gets them. *Amended 2026-10-16:* a `quick` flag was added to
+  Match until it gets them (since joined without them; see the classic
+  amendment below). *Amended 2026-10-16:* a `quick` flag was added to
   the Fourk V2 state after all, ahead of staked Quick Match. The host sets it
   at open, the terms (and so the matchmaker and the joiner) require it, and
   `dissolve` lets the joiner leave at once instead of after one clock. There
@@ -121,7 +122,14 @@ requeueing.
   and a matchmaker check in the node health workflow.
 - One queue of free Fourk games is all v1 offers. Staked queues (an account
   and `STAKE_PRESETS` buckets), more clocks and classic mode are later
-  decisions.
+  decisions. *Amended 2026-10-16:* Classic joined, as a second queue. A seek
+  names its mode, only equal modes pair, and the terms (2 minutes per move,
+  free) are the same apart from the mode. Classic got no covenant change and
+  so no `quick` flag: its joiner still waits out one clock to leave, which a
+  silent host can make them sit through, and nothing forfeits at move zero
+  (the `app/IDEAS.md` sketch is still the design for that). The app marks a
+  paired game on its own record (`paired`) so both seats get Leave game
+  rather than Kick opponent or Cancel game.
 - 2 minutes per pick means a stalled opponent can hold you up that long per
   round. It's twice the covenant's 600 DAA floor, which leaves room for
   confirmation latency until it is measured on testnet-10 (the open timing

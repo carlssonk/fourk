@@ -24,12 +24,13 @@ interface Props {
    * button steps down to secondary. */
   headlineLabel?: string;
   onHeadline?: () => void;
-  /** One plain line under the live headline: its own terms (Quick Match
-   * ignores the settings, which are the private game's). */
+  /** One plain line under the live headline: its own terms. */
   headlineNote?: string;
-  /** What kind of game to start (mode, clock, stake), rendered inside the
-   * card below the identity section — create flow only; the join flow
-   * inherits every setting from the invite. */
+  /** The same under the submit button: the private game's terms. */
+  actionNote?: React.ReactNode;
+  /** What both buttons share (the game mode), rendered inside the card
+   * below the identity section — create flow only; the join flow inherits
+   * every setting from the invite. */
   settings?: React.ReactNode;
   /** Offer the disc-colour choice. Hosts pick; joiners always take the
    * other colour, so showing them a picker would promise a choice the
@@ -58,6 +59,7 @@ export const PlayerSetup = ({
   headlineLabel,
   onHeadline,
   headlineNote,
+  actionNote,
   settings,
   pickDiscColor = false,
 }: Props) => {
@@ -220,13 +222,16 @@ export const PlayerSetup = ({
             {headlineNote && <span className="text-xs text-dim">{headlineNote}</span>}
           </div>
         )}
-        <button
-          className={`btn px-8 py-2.5 text-lg ${onHeadline ? "btn-ghost" : ""}`}
-          disabled={busy}
-          onClick={() => submit(onSubmit)}
-        >
-          {actionLabel}
-        </button>
+        <div className="flex flex-col items-center gap-1">
+          <button
+            className={`btn px-8 py-2.5 text-lg ${onHeadline ? "btn-ghost" : ""}`}
+            disabled={busy}
+            onClick={() => submit(onSubmit)}
+          >
+            {actionLabel}
+          </button>
+          {actionNote && <span className="text-xs text-dim">{actionNote}</span>}
+        </div>
       </div>
     </div>
   );

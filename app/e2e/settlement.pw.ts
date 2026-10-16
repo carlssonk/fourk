@@ -21,6 +21,7 @@ test("a Fourk winner and opponent both reach the settled result", async ({ page,
     await page.setViewportSize({ width: 320, height: 740 });
     await other.setViewportSize({ width: 390, height: 844 });
     await page.goto("/");
+    await page.getByRole("button", { name: "change", exact: true }).click();
     await page.getByRole("button", { name: "1 min", exact: true }).click();
     await page.getByRole("button", { name: "Private Game", exact: true }).click();
     await expect(page.getByLabel("Invite link", { exact: true })).toBeVisible();

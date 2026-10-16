@@ -14,6 +14,7 @@ import {
   updateMatch,
 } from "../src/shared/state/matches";
 import { quickMatchAtom, startQuickMatch, stopQuickMatch } from "../src/shared/state/quickMatch";
+import { gameModeAtom } from "../src/shared/state/profile";
 import { SEEK_LIMITED } from "../src/shared/lib/matchmaker";
 import type {
   AccountOps,
@@ -97,6 +98,8 @@ const lobby = (p1: string, moveTimeout = 1_200): Match => ({
   },
   simul: zeroCore2(moveTimeout, 1),
 });
+/** The same lobby in Classic, which has no round machine. */
+const classicLobby = (p1: string): Match => ({ ...lobby(p1), mode: undefined, simul: undefined });
 
 let deps: QuickMatchDeps;
 
@@ -108,6 +111,7 @@ beforeEach(() => {
   store.set(errorAtom, null);
   store.set(busyAtom, false);
   store.set(pendingInviteAtom, null);
+  store.set(gameModeAtom, "fourk2");
 });
 
 afterEach(async () => {
@@ -121,7 +125,7 @@ test("seeks with the guest key, even for an account holder", async () => {
   deps = { chain: fakeChain(), account: fakeAccount(), matchmaker };
   void startQuickMatch(deps);
   await vi.advanceTimersByTimeAsync(5_000);
-  expect(matchmaker.seek).toHaveBeenCalledWith(GUEST_PK);
+  expect(matchmaker.seek).toHaveBeenCalledWith(GUEST_PK, "fourk2");
   expect(store.get(quickMatchAtom)).toMatchObject({ phase: "searching" });
   expect(matchmaker.poll).toHaveBeenCalledWith("t1");
 });
@@ -576,4 +580,53 @@ test("the host's Found an opponent screen never drops out between creating and w
   expect(first).toBeGreaterThanOrEqual(0);
   expect(waiting).toBeGreaterThan(first);
   expect(screens.slice(first, waiting + 1)).not.toContain(null);
+});
+
+test("queues and hosts in the picked mode, the game marked paired", async () => {
+  store.set(gameModeAtom, "classic");
+  const opened = classicLobby(GUEST_PK);
+  const chain = fakeChain({ openMatch: vi.fn(async () => opened) });
+  const matchmaker = fakeMatchmaker([{ state: "host" }, { state: "hosted" }]);
+  deps = { chain, account: fakeAccount(), matchmaker };
+  void startQuickMatch(deps);
+  await vi.advanceTimersByTimeAsync(3_000);
+  expect(matchmaker.seek).toHaveBeenCalledWith(GUEST_PK, "classic");
+  expect(chain.openMatch).toHaveBeenCalledWith(
+    keyOf("guest"),
+    FREE_STAKE,
+    expect.objectContaining({ moveTimeout: 1_200 }),
+    "classic",
+    expect.any(Function),
+    { quick: true },
+  );
+  // Classic's covenant can't say so, so the record does: the in-game exit
+  // reads it to offer Leave game, not Kick opponent.
+  expect(store.get(matchesAtom)[0]).toMatchObject({ covenantId: opened.covenantId, paired: true });
+});
+
+test("a joiner refuses a lobby in another mode than it queued for", async () => {
+  const code = encodeShareCode(lobby(HOST_PK));
+  const chain = fakeChain({ joinMatch: joinedBy(GUEST_PK) });
+  const matchmaker = fakeMatchmaker([{ state: "join", code }, { state: "waiting" }]);
+  vi.mocked(matchmaker.seek).mockResolvedValueOnce("t1").mockResolvedValueOnce("t2");
+  store.set(gameModeAtom, "classic");
+  deps = { chain, account: fakeAccount(), matchmaker };
+  void startQuickMatch(deps);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(chain.joinMatch).not.toHaveBeenCalled();
+  expect(matchmaker.seek).toHaveBeenCalledTimes(2);
+});
+
+test("a Classic joiner takes the seat, the game marked paired", async () => {
+  store.set(gameModeAtom, "classic");
+  const code = encodeShareCode(classicLobby(HOST_PK));
+  const chain = fakeChain({ joinMatch: joinedBy(GUEST_PK) });
+  const matchmaker = fakeMatchmaker([{ state: "join", code }]);
+  deps = { chain, account: fakeAccount(), matchmaker };
+  void startQuickMatch(deps);
+  await vi.advanceTimersByTimeAsync(5_000);
+  expect(store.get(currentMatchAtom)).toMatchObject({
+    paired: true,
+    state: { p2: GUEST_PK },
+  });
 });

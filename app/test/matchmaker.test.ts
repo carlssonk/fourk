@@ -25,9 +25,17 @@ const alice = "11".repeat(32);
 const bob = "22".repeat(32);
 const carol = "33".repeat(32);
 
+/** A seek's body: Fourk unless said otherwise. */
+const seeking = (pk: string, mode = "fourk2") => JSON.stringify({ pk, mode });
+
 /** Join the queue and return the ticket. */
-async function seek(mm: ReturnType<typeof matchmaker>, pk: string, client = pk): Promise<string> {
-  const reply = await mm.seek(JSON.stringify({ pk }), client);
+async function seek(
+  mm: ReturnType<typeof matchmaker>,
+  pk: string,
+  client = pk,
+  mode = "fourk2",
+): Promise<string> {
+  const reply = await mm.seek(seeking(pk, mode), client);
   expect(reply.status).toBe(200);
   return JSON.parse(reply.body).ticket;
 }
@@ -55,6 +63,8 @@ const lobby = (p1: string, moveTimeout = 1_200): Match => ({
   },
   simul: zeroCore2(moveTimeout, 1),
 });
+/** The same lobby in Classic, which has no round machine. */
+const classicLobby = (p1: string): Match => ({ ...lobby(p1), mode: undefined, simul: undefined });
 const hosted = (ticket: string, m: Match) => JSON.stringify({ ticket, code: encodeShareCode(m) });
 
 /** The chain's view of the lobby UTXO. */
@@ -248,30 +258,39 @@ test("hands a host's open lobby to the next seeker when the partner left first",
   expect(engine.fetchGameUtxo).toHaveBeenCalledTimes(1);
 });
 
-test("refuses a seek without a well-formed key, or past the size and queue caps", async () => {
+test("refuses a seek without a well-formed key and mode, or past the size and queue caps", async () => {
   const mm = matchmaker();
-  for (const bad of ["not json", "[]", JSON.stringify({ pk: "zz" }), JSON.stringify({ pk: 7 })])
-    expect((await mm.seek(bad, "a")).status, bad).toBe(400);
+  for (const bad of [
+    "not json",
+    "[]",
+    JSON.stringify({ pk: "zz", mode: "fourk2" }),
+    JSON.stringify({ pk: 7, mode: "fourk2" }),
+    JSON.stringify({ pk: alice }),
+    seeking(alice, "fourk"),
+    seeking(alice, "toString"),
+  ])
+    // A client each, so the seek limit stays out of the way.
+    expect((await mm.seek(bad, bad)).status, bad).toBe(400);
   expect((await mm.seek("x".repeat(MAX_BODY_BYTES + 1), "a")).status).toBe(413);
   expect((await mm.hosted("x".repeat(MAX_BODY_BYTES + 1), "a")).status).toBe(413);
   // Distinct clients and keys, so only the queue cap is in the way.
   const key = (i: number) => i.toString(16).padStart(64, "0");
   for (let i = 0; i < MAX_TICKETS; i++)
-    expect((await mm.seek(JSON.stringify({ pk: key(i) }), `c${i}`)).status).toBe(200);
-  expect((await mm.seek(JSON.stringify({ pk: key(MAX_TICKETS) }), "late")).status).toBe(503);
+    expect((await mm.seek(seeking(key(i)), `c${i}`)).status).toBe(200);
+  expect((await mm.seek(seeking(key(MAX_TICKETS)), "late")).status).toBe(503);
 });
 
 test("limits each client's seeks tightly and its requests loosely", async () => {
   const mm = matchmaker();
   const t = await seek(mm, alice, "a");
   for (let i = 1; i < SEEK_LIMIT; i++) await seek(mm, alice, "a");
-  expect((await mm.seek(JSON.stringify({ pk: alice }), "a")).status).toBe(429);
-  expect((await mm.seek(JSON.stringify({ pk: bob }), "b")).status).toBe(200);
+  expect((await mm.seek(seeking(alice), "a")).status).toBe(429);
+  expect((await mm.seek(seeking(bob), "b")).status).toBe(200);
   for (let i = SEEK_LIMIT + 1; i < REQUEST_LIMIT; i++) await mm.poll(t, "a");
   expect((await mm.poll(t, "a")).status).toBe(429);
   expect((await mm.poll(t, "b")).status).toBe(200);
   clock += 60_000;
-  expect((await mm.seek(JSON.stringify({ pk: alice }), "a")).status).toBe(200);
+  expect((await mm.seek(seeking(alice), "a")).status).toBe(200);
 });
 
 test("keeps a host who is still posting a lobby the node hasn't indexed", async () => {
@@ -317,5 +336,33 @@ test("a host who keeps getting new partners still has to post within the grace",
 test("takes looser limits where every client shares one address (local runs)", async () => {
   const mm = createMatchmaker(rpc, () => clock, { seekLimit: 100, requestLimit: 1000 });
   for (let i = 0; i < SEEK_LIMIT + 5; i++)
-    expect((await mm.seek(JSON.stringify({ pk: alice }), "127.0.0.1")).status).toBe(200);
+    expect((await mm.seek(seeking(alice), "127.0.0.1")).status).toBe(200);
+});
+
+test("pairs only seekers of the same mode", async () => {
+  const mm = matchmaker();
+  const a = await seek(mm, alice, alice, "classic");
+  const b = await seek(mm, bob);
+  expect(await poll(mm, a)).toMatchObject({ state: "waiting" });
+  expect(await poll(mm, b)).toMatchObject({ state: "waiting" });
+  const c = await seek(mm, carol, carol, "classic");
+  expect(await poll(mm, a)).toMatchObject({ state: "host" });
+  expect((await mm.hosted(hosted(a, classicLobby(alice)), "x")).status).toBe(202);
+  expect(await poll(mm, c)).toMatchObject({
+    state: "join",
+    code: encodeShareCode(classicLobby(alice)),
+  });
+  // Looked up at the Classic lobby's own address.
+  expect(vi.mocked(engine.fetchGameUtxo).mock.calls[0]![1].actorOf(classicLobby(alice))).toBe(
+    "FourkLobby",
+  );
+  expect(await poll(mm, b)).toMatchObject({ state: "waiting" });
+});
+
+test("refuses a lobby in another mode than the host queued for", async () => {
+  const mm = matchmaker();
+  const a = await seek(mm, alice, alice, "classic");
+  await seek(mm, bob, bob, "classic");
+  expect((await mm.hosted(hosted(a, lobby(alice)), "x")).status).toBe(400);
+  expect(engine.fetchGameUtxo).not.toHaveBeenCalled();
 });

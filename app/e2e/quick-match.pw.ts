@@ -3,9 +3,10 @@ import { expect, test, type Page } from "@playwright/test";
 // Needs the matchmaker: browser.sh runs the sweeper process beside the app
 // and points VITE_SWEEPER_URL at it.
 
-const quickMatch = async (player: Page, name: string) => {
+const quickMatch = async (player: Page, name: string, mode = "Fourk") => {
   await player.goto("/");
   await player.getByLabel("Username", { exact: true }).fill(name);
+  await player.getByRole("button", { name: mode, exact: true }).click();
   await player.getByRole("button", { name: "Quick Match", exact: true }).click();
 };
 
@@ -26,6 +27,38 @@ test("two players who press Quick Match end up in the same game", async ({ page,
     await expect(other.getByRole("group", { name: /^Player: Ada,/ })).toBeVisible();
     for (const player of [page, other])
       await expect(player.getByLabel("Invite link", { exact: true })).toHaveCount(0);
+  } finally {
+    await otherContext.close();
+  }
+});
+
+test("Classic Quick Match pairs Classic players, who leave rather than kick", async ({
+  page,
+  browser,
+}) => {
+  test.setTimeout(150_000);
+  const otherContext = await browser.newContext();
+  const other = await otherContext.newPage();
+  try {
+    await quickMatch(page, "Ada", "Classic");
+    await expect(page.getByText("Free Classic game, 2 min per move.")).toBeVisible();
+    await quickMatch(other, "Bo", "Classic");
+    // Ada hosts and moves first; Bo waits for her disc.
+    await expect(
+      page.getByRole("button", { name: "drop a disc in column 1", exact: true }),
+    ).toBeEnabled({ timeout: 90_000 });
+    await expect(other.getByRole("group", { name: /^Player: Ada,/ })).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(page.locator("main header")).toContainText("Classic · 2 min per move");
+    // No covenant flag in Classic: the record marks the game paired, so the
+    // host leaves rather than kicks, and the joiner waits out one clock.
+    await expect(page.getByRole("button", { name: "Leave game", exact: true })).toBeEnabled();
+    await expect(other.getByRole("button", { name: /^Leave game in / })).toBeDisabled();
+    for (const player of [page, other])
+      await expect(player.getByRole("button", { name: /Kick opponent|Cancel game/ })).toHaveCount(
+        0,
+      );
   } finally {
     await otherContext.close();
   }

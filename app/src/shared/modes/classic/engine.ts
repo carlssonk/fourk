@@ -34,8 +34,10 @@ export const classicEngine = {
     };
   },
 
-  genesisFields(_timing, opts): Partial<Match> {
-    if (opts?.quick) throw new Error("Quick Match is Fourk only");
+  /** Quick Match changes nothing on chain here: no flag waives the
+   * joiner's wait, so a Classic Quick Match joiner leaves as an invite's
+   * does, after one move clock. */
+  genesisFields(_timing, _opts): Partial<Match> {
     return {};
   },
 

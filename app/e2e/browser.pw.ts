@@ -95,6 +95,7 @@ test("two browsers finish Classic and preserve a game across refresh", async ({
     await page.goto("/");
     await page.getByLabel("Username").fill("Browser host");
     await page.getByRole("button", { name: "Classic", exact: true }).click();
+    await page.getByRole("button", { name: "change", exact: true }).click();
     await page.getByRole("button", { name: "1 min", exact: true }).click();
     await page.getByRole("button", { name: "Private Game", exact: true }).click();
     const link = await page.getByLabel("Invite link", { exact: true }).inputValue();
@@ -216,6 +217,7 @@ test("staked hosting, cancellation, cash-out validation and Max reset", async ({
     "50 KAS",
   );
   await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "change", exact: true }).click();
   await expect(page.getByRole("button", { name: "None", exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "1 KAS", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "1 KAS", exact: true }).click();

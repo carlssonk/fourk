@@ -109,7 +109,8 @@ export interface HostTerms {
   stake: bigint;
   timing: MatchTiming;
   mode: GameModeKey;
-  /** Opened for Quick Match (covenant state: the joiner may leave at once). */
+  /** Opened for Quick Match: marked paired on our record, and in Fourk's
+   * covenant state too (the joiner may leave at once). */
   quick?: boolean;
 }
 
@@ -154,6 +155,7 @@ export async function createGame(
     ...m,
     ...(me.name && { profiles: { p1: me } }),
     ...(getDiscColor() === "blue" && { p1Color: "blue" as const }),
+    ...(terms?.quick && { paired: true as const }),
   });
   // Stored the moment the stake is about to leave: a reload while the open
   // confirms must not strand a staked lobby with no record and no cancel.

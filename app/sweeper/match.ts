@@ -1,7 +1,8 @@
 /**
  * The matchmaker's core (docs/adr/0003): pair two players who both pressed
- * Quick Match, have the one who waited longer host, and forward the host's
- * share code to the partner once the chain holds that lobby.
+ * Quick Match in the same game mode, have the one who waited longer host,
+ * and forward the host's share code to the partner once the chain holds
+ * that lobby.
  *
  * It holds no keys and moves no money. Every transaction is built and signed
  * in the players' browsers, and the joiner re-checks the terms before taking
@@ -23,7 +24,8 @@ import { randomUUID } from "node:crypto";
 import * as engine from "../src/shared/lib/engine";
 import { decodeShareCode, type Match } from "../src/shared/lib/match";
 import { isQuickMatchTerms } from "../src/shared/lib/quickMatch";
-import { fourk2Engine } from "../src/shared/modes/fourk2/engine";
+import { MODES, modeOf } from "../src/shared/modes/registry";
+import type { GameModeKey } from "../src/shared/modes/types";
 import { MAX_BODY_BYTES, RATE_WINDOW_MS, type Reply } from "./sweeper";
 
 /** A ticket not polled for this long has left: its tab closed or slept. */
@@ -40,6 +42,8 @@ export const SEEK_LIMIT = 6;
 
 interface Ticket {
   pk: string;
+  /** The game mode this ticket queues for: only equal modes pair. */
+  mode: GameModeKey;
   /** When this ticket last seeked or polled. */
   seen: number;
   /** The ticket this one is paired with, and whether this one hosts. A
@@ -127,7 +131,7 @@ export function createMatchmaker(
     waiting.sort(([, x], [, y]) => Number(!!y.hosts) - Number(!!x.hosts));
     while (waiting.length > 1) {
       const [hostId, host] = waiting.shift()!;
-      const i = waiting.findIndex(([, t]) => t.pk !== host.pk && !t.hosts);
+      const i = waiting.findIndex(([, t]) => t.pk !== host.pk && t.mode === host.mode && !t.hosts);
       if (i < 0) continue;
       const [id, t] = waiting.splice(i, 1)[0]!;
       Object.assign(host, { partner: id, hosts: true, pairedAt: host.pairedAt ?? now() });
@@ -140,12 +144,16 @@ export function createMatchmaker(
     const refused = gate(body, client);
     if (refused) return refused;
     if (seeks(client)) return json(429, { error: "slow down" });
-    const pk = parse(body)?.pk;
+    const req = parse(body);
+    const pk = req?.pk;
     if (typeof pk !== "string" || !PK.test(pk)) return json(400, { error: "bad key" });
+    const mode = req?.mode;
+    if (typeof mode !== "string" || !Object.hasOwn(MODES, mode))
+      return json(400, { error: "bad mode" });
     settle();
     if (tickets.size >= MAX_TICKETS) return json(503, { error: "busy" });
     const id = randomUUID();
-    tickets.set(id, { pk, seen: now() });
+    tickets.set(id, { pk, mode: mode as GameModeKey, seen: now() });
     settle();
     return json(200, { ticket: id });
   }
@@ -191,8 +199,8 @@ export function createMatchmaker(
     if (!t.hosts || lobby.state.p1 !== t.pk) return json(403, { error: "not your lobby to host" });
     // Posting is the host's poll while it waits for the node to index the lobby.
     t.seen = now();
-    if (!isQuickMatchTerms(lobby)) return json(400, { error: "not Quick Match terms" });
-    const entry = await engine.fetchGameUtxo(rpc, fourk2Engine, lobby);
+    if (!isQuickMatchTerms(lobby, t.mode)) return json(400, { error: "not Quick Match terms" });
+    const entry = await engine.fetchGameUtxo(rpc, modeOf(lobby), lobby);
     // Value from the chain, as in the sweeper: a lobby holds the host's stake.
     if (!entry || engine.withEntry(lobby, entry).value !== lobby.state.stake)
       return json(404, { error: "no such lobby" });

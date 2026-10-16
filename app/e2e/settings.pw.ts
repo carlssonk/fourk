@@ -5,6 +5,8 @@ test("home promotes optional stakes without adding money copy to free gameplay",
 }) => {
   await page.setViewportSize({ width: 320, height: 740 });
   await page.goto("/");
+  // The private game's clock and stake sit behind its summary line.
+  await page.getByRole("button", { name: "change", exact: true }).click();
   await expect(page.getByText("Want to play for stakes?", { exact: false })).toBeVisible();
   await page.getByRole("button", { name: "Create an account", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("play for stakes");
@@ -19,11 +21,13 @@ test("home promotes optional stakes without adding money copy to free gameplay",
   await page.getByRole("button", { name: "Cancel game", exact: true }).click();
   await expect(page.getByRole("dialog")).not.toContainText(/\b(stakes?|pot|payout|refund)\b/i);
   await page.getByRole("dialog").getByRole("button", { name: "Cancel game", exact: true }).click();
+  await page.getByRole("button", { name: "change", exact: true }).click();
   await expect(page.getByText("Want to play for stakes?", { exact: false })).toBeVisible();
 });
 
 test("move timer help appears above the button", async ({ page }) => {
   await page.goto("/");
+  await page.getByRole("button", { name: "change", exact: true }).click();
   const help = page.getByRole("button", { name: "About Move timer", exact: true });
   await help.hover();
   const tooltip = page.getByRole("tooltip");
@@ -35,6 +39,7 @@ test("move timer help appears above the button", async ({ page }) => {
 
 test("move timer help uses the full button hover area", async ({ page }) => {
   await page.goto("/");
+  await page.getByRole("button", { name: "change", exact: true }).click();
   const help = page.getByRole("button", { name: "About Move timer", exact: true });
   const tooltip = page.getByRole("tooltip");
   const box = await help.boundingBox();
@@ -53,6 +58,7 @@ test("move timer help uses the full button hover area", async ({ page }) => {
 
 test("move timer help supports hover, keyboard, dismissal, and mode changes", async ({ page }) => {
   await page.goto("/");
+  await page.getByRole("button", { name: "change", exact: true }).click();
   const help = page.getByRole("button", { name: "About Move timer", exact: true });
   const tooltip = page.getByRole("tooltip");
   await expect(tooltip).toHaveCount(0);
@@ -104,6 +110,7 @@ test("move timer help opens and closes by touch without mobile overflow", async 
   try {
     const page = await context.newPage();
     await page.goto(process.env.PLAYTEST_URL ?? "http://localhost:5173");
+    await page.getByRole("button", { name: "change", exact: true }).tap();
     const help = page.getByRole("button", { name: "About Move timer", exact: true });
     await help.tap();
     await expect(page.getByRole("tooltip")).toBeVisible();

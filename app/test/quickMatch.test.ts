@@ -24,8 +24,17 @@ const lobby: Match = {
   simul: zeroCore2(1_200, 1),
 };
 
-test("a free Fourk lobby on the 2-minute clock is a Quick Match", () => {
-  expect(isQuickMatchTerms(lobby)).toBe(true);
+// The same, in Classic: no round machine, so no Quick Match flag either.
+const classicLobby: Match = { ...lobby, mode: undefined, simul: undefined };
+
+test("a free Fourk lobby on the 2-minute clock is a Fourk Quick Match", () => {
+  expect(isQuickMatchTerms(lobby, "fourk2")).toBe(true);
+  expect(isQuickMatchTerms(lobby, "classic")).toBe(false);
+});
+
+test("a free Classic lobby on the 2-minute clock is a Classic Quick Match", () => {
+  expect(isQuickMatchTerms(classicLobby, "classic")).toBe(true);
+  expect(isQuickMatchTerms(classicLobby, "fourk2")).toBe(false);
 });
 
 test("refuses a lobby that differs from the terms in any way", () => {
@@ -41,5 +50,14 @@ test("refuses a lobby that differs from the terms in any way", () => {
       { ...lobby, value: FREE_STAKE * 2n, state: { ...lobby.state, p2: "22".repeat(32) } },
     ],
   ];
-  for (const [why, m] of off) expect(isQuickMatchTerms(m), why).toBe(false);
+  for (const [why, m] of off) expect(isQuickMatchTerms(m, "fourk2"), why).toBe(false);
+});
+
+test("refuses a Classic lobby off the terms", () => {
+  const off: [string, Match][] = [
+    ["staked", { ...classicLobby, state: { ...classicLobby.state, stake: 100_000_000n } }],
+    ["another clock", { ...classicLobby, state: { ...classicLobby.state, moveTimeout: 3_000 } }],
+    ["seat taken", { ...classicLobby, state: { ...classicLobby.state, p2: "22".repeat(32) } }],
+  ];
+  for (const [why, m] of off) expect(isQuickMatchTerms(m, "classic"), why).toBe(false);
 });

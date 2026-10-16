@@ -10,6 +10,7 @@ for (const mode of ["Classic", "Fourk"] as const) {
     try {
       await page.goto("/");
       await page.getByRole("button", { name: mode, exact: true }).click();
+      await page.getByRole("button", { name: "change", exact: true }).click();
       await page.getByRole("button", { name: "1 min", exact: true }).click();
       await page.getByRole("button", { name: "Private Game", exact: true }).click();
       const oldLink = await page.getByLabel("Invite link", { exact: true }).inputValue();

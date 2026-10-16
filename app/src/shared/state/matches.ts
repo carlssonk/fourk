@@ -39,19 +39,21 @@ export const currentMatchAtom = atom<Match | null>(null);
 export const pendingInviteAtom = atom<Match | null>(null);
 
 /** Upsert into the stored list; the on-screen game follows if it's the same
- * one. Profiles, colour and a recorded result are merged, never dropped: a
- * fresher snapshot that arrived without them (an on-chain discovery, a bare
- * link) keeps what we already know. */
+ * one. Profiles, colour, a recorded result and the Quick Match mark are
+ * merged, never dropped: a fresher snapshot that arrived without them (an
+ * on-chain discovery, a bare link) keeps what we already know. */
 export function updateMatch(m: Match): Match {
   const prev = store.get(matchesAtom).find((x) => x.covenantId === m.covenantId);
   const profiles = { ...prev?.profiles, ...m.profiles };
   const p1Color = m.p1Color ?? prev?.p1Color;
   const result = m.result ?? prev?.result;
+  const paired = m.paired ?? prev?.paired;
   const merged = {
     ...m,
     ...(profiles.p1 || profiles.p2 ? { profiles } : {}),
     ...(p1Color && { p1Color }),
     ...(result && { result }),
+    ...(paired && { paired }),
   };
   store.set(matchesAtom, upsert(store.get(matchesAtom), merged));
   const cur = store.get(currentMatchAtom);

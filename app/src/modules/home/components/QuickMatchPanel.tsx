@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
+import { useAtomValue } from "jotai";
 import { DiscLoader } from "@shared/components/DiscLoader";
 import { fmtDaaDuration } from "@shared/lib/match";
 import { QUICK_MATCH_MOVE_TIMEOUT } from "@shared/lib/quickMatch";
-import type { QuickMatchStatus } from "@shared/state";
+import { MODES } from "@shared/modes/registry";
+import { gameModeAtom, type QuickMatchStatus } from "@shared/state";
 
 /** After this long in the queue, offer the private-game way out. */
 const LONELY_MS = 60_000;
@@ -21,6 +23,8 @@ const fmtElapsed = (ms: number) => {
 
 /** Home while Quick Match runs: in the queue, or paired and setting up. */
 export const QuickMatchPanel = ({ status, busy, onCancel, onPrivateGame }: Props) => {
+  // The mode the search was started in: the picker is off screen meanwhile.
+  const { label, moveNoun } = MODES[useAtomValue(gameModeAtom)].meta;
   const [now, setNow] = useState(Date.now);
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 1000);
@@ -48,7 +52,7 @@ export const QuickMatchPanel = ({ status, busy, onCancel, onPrivateGame }: Props
         <h3 className="text-lg font-semibold">Found an opponent</h3>
       )}
       <p className="mt-1 text-xs text-dim">
-        Free game, {fmtDaaDuration(QUICK_MATCH_MOVE_TIMEOUT)} per pick.
+        Free {label} game, {fmtDaaDuration(QUICK_MATCH_MOVE_TIMEOUT)} per {moveNoun}.
       </p>
       <div className="mt-4 flex flex-wrap justify-center gap-2.5">
         <button className="btn btn-muted" disabled={busy} onClick={onCancel}>

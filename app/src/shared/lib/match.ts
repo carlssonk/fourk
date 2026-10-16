@@ -73,6 +73,9 @@ export interface Match {
    * carried by the invite link. On-chain discs are only 1 (creator) and 2
    * (joiner); absent means the classic mapping (p1 red). */
   p1Color?: "red" | "blue";
+  /** Quick Match paired this game. Our own note, never wire state: Fourk
+   * also carries it in covenant state (`quick`), Classic has nowhere to. */
+  paired?: true;
 }
 
 /** The one place the network is named — faucet/fund-dispenser.mjs keeps a
@@ -206,6 +209,7 @@ export function matchToJson(m: Match): string {
       ...(m.profiles && { profiles: m.profiles }),
       ...(m.p1Color && { p1Color: m.p1Color }),
       ...(m.result && { result: m.result }),
+      ...(m.paired && { paired: true }),
     },
     null,
     2,
@@ -238,6 +242,7 @@ const matchJsonSchema = z.object({
   profiles: z.object({ p1: profileSchema.optional(), p2: profileSchema.optional() }).optional(),
   p1Color: z.enum(["red", "blue"]).optional(),
   result: z.string().optional(),
+  paired: z.literal(true).optional(),
   quick: z.number().int().min(0).max(1).optional(),
   // Fourk mode (simultaneous): the round machine rides along.
   mode: z.enum(["fourk2"]).optional(),
@@ -288,6 +293,7 @@ export function matchFromJson(json: string): Match {
     }),
     ...(raw.p1Color && { p1Color: raw.p1Color }),
     ...(raw.result && { result: raw.result }),
+    ...(raw.paired && { paired: true as const }),
   };
 }
 

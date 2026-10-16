@@ -9,6 +9,7 @@ for (const mode of ["Fourk", "Classic"] as const) {
     await page.goto("/");
     await page.getByLabel("Username").fill("FriendlyPlayer");
     await page.getByRole("button", { name: mode, exact: true }).click();
+    await page.getByRole("button", { name: "change", exact: true }).click();
     await page.getByRole("button", { name: "1 min", exact: true }).click();
     await page.getByRole("button", { name: "Private Game", exact: true }).click();
     await expect(page.getByLabel("Invite link", { exact: true })).toBeVisible();

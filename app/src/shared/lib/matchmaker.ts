@@ -26,8 +26,8 @@ async function call(path: string, body?: object): Promise<Response> {
 
 /** Anything unexpected throws; the Quick Match loop retries or gives up. */
 export const httpMatchmaker: MatchmakerOps = {
-  async seek(pk) {
-    const res = await call("seek", { pk });
+  async seek(pk, mode) {
+    const res = await call("seek", { pk, mode });
     if (res.status === 429) throw new Error(SEEK_LIMITED);
     if (res.status !== 200) throw new Error(`seek: ${res.status}`);
     return ((await res.json()) as { ticket: string }).ticket;

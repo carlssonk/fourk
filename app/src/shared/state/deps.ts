@@ -64,8 +64,8 @@ export type PollState =
 
 /** The matchmaker route on our node (docs/adr/0003). */
 export interface MatchmakerOps {
-  /** Join the queue as `pk`; returns the ticket to poll. */
-  seek(pk: string): Promise<string>;
+  /** Join `mode`'s queue as `pk`; returns the ticket to poll. */
+  seek(pk: string, mode: GameModeKey): Promise<string>;
   poll(ticket: string): Promise<PollState>;
   /** Post the host's lobby: `retry` until the matchmaker's node has it. */
   hosted(ticket: string, code: string): Promise<"ok" | "retry" | "refused">;

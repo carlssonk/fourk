@@ -63,24 +63,12 @@ const Group = ({
   </div>
 );
 
-/**
- * What kind of game to start: mode, clock, stake. Deliberately just these
- * three — they're the settings that survive matchmaking, so the same
- * choices drive Quick Match and Private Game alike. Anything that can't be
- * a matchmaking bucket (disc colour) lives in the profile instead.
- */
-export const MatchSettings = () => {
+/** The game mode: shared by Quick Match and Private Game, so it sits in
+ * the card above both buttons. */
+export const ModeSettings = () => {
   const gameMode = useAtomValue(gameModeAtom);
-  const moveTimeout = useAtomValue(moveTimeoutAtom);
-  const stake = useAtomValue(stakeAtom);
-  const balance = useAtomValue(balanceAtom);
-  const openAccount = useSetAtom(accountPanelAtom);
-  const owned = hasOwnedAccount();
-
   return (
     <div className="mt-4 border-t border-line pt-4 text-sm">
-      {/* Quick Match plays its own fixed terms; these are for invites. */}
-      <p className="mb-2 text-xs font-semibold tracking-wide text-dim uppercase">Private game</p>
       <Group label="Game mode">
         {MODE_LIST.map((m) => (
           <Chip
@@ -93,7 +81,36 @@ export const MatchSettings = () => {
         ))}
       </Group>
       <p className="mt-1.5 text-xs text-dim">{MODES[gameMode].meta.blurb}</p>
+    </div>
+  );
+};
 
+/** The private game's terms in one line, as Quick Match's note reads. A
+ * guest always hosts free, whatever the remembered stake (createGame). */
+export const usePrivateGameSummary = (): string => {
+  const gameMode = useAtomValue(gameModeAtom);
+  const moveTimeout = useAtomValue(moveTimeoutAtom);
+  const stake = useAtomValue(stakeAtom);
+  const shown = hasOwnedAccount() ? stake : 0n;
+  return `${shown > 0n ? `${fmtKas(shown)} KAS` : "Free"} · ${fmtDaaDuration(moveTimeout)} per ${
+    MODES[gameMode].meta.moveNoun
+  }`;
+};
+
+/**
+ * The private game's own terms: clock and stake. Quick Match plays fixed
+ * ones, so these hang off the Private Game button rather than sitting
+ * above both.
+ */
+export const PrivateGameSettings = () => {
+  const moveTimeout = useAtomValue(moveTimeoutAtom);
+  const stake = useAtomValue(stakeAtom);
+  const balance = useAtomValue(balanceAtom);
+  const openAccount = useSetAtom(accountPanelAtom);
+  const owned = hasOwnedAccount();
+
+  return (
+    <div className="text-sm">
       <Group
         label="Move timer"
         help="Time allowed for each move. If you run out, your opponent can claim the win."

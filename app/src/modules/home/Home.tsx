@@ -5,7 +5,7 @@ import { HowToPlayDialog } from "@shared/components/HowToPlayDialog";
 import { InfoTip } from "@shared/components/InfoTip";
 import { isOpen } from "@shared/lib/game";
 import { fmtDaaDuration, fmtKas, isStaked } from "@shared/lib/match";
-import { modeOf } from "@shared/modes/registry";
+import { MODES, modeOf } from "@shared/modes/registry";
 import {
   FEE_MARGIN,
   ownedFeeReserve,
@@ -14,6 +14,7 @@ import {
   busyAtom,
   clearInvite,
   collectMatch,
+  gameModeAtom,
   hasOwnedAccount,
   matchesAtom,
   newGame,
@@ -31,9 +32,11 @@ import {
   AboutDialog,
   BoardBackdrop,
   MatchList,
-  MatchSettings,
+  ModeSettings,
   PlayerSetup,
+  PrivateGameSettings,
   QuickMatchPanel,
+  usePrivateGameSummary,
 } from "./components";
 import { useCollectable, useMatchGlances } from "./hooks";
 
@@ -54,6 +57,9 @@ export const Home = () => {
   const [about, setAbout] = useState(false);
   const [rules, setRules] = useState(false);
   const quick = useAtomValue(quickMatchAtom);
+  const gameMode = useAtomValue(gameModeAtom);
+  const privateTerms = usePrivateGameSummary();
+  const [tweaking, setTweaking] = useState(false);
 
   if (pendingInvite) {
     // Chat apps open links in their own browser, with storage apart from
@@ -212,16 +218,40 @@ export const Home = () => {
       <div className="relative mx-auto w-fit max-w-full">
         <div className="max-w-full">
           {quick.phase === "idle" ? (
-            <PlayerSetup
-              actionLabel="Private Game"
-              headlineLabel="Quick Match"
-              onHeadline={HAS_QUICK_MATCH ? () => void startQuickMatch() : undefined}
-              headlineNote={`Free · ${fmtDaaDuration(QUICK_MATCH_MOVE_TIMEOUT)} per pick`}
-              busy={busy}
-              onSubmit={newGame}
-              settings={<MatchSettings />}
-              pickDiscColor
-            />
+            <>
+              <PlayerSetup
+                actionLabel="Private Game"
+                headlineLabel="Quick Match"
+                onHeadline={HAS_QUICK_MATCH ? () => void startQuickMatch() : undefined}
+                headlineNote={`Free · ${fmtDaaDuration(QUICK_MATCH_MOVE_TIMEOUT)} per ${
+                  MODES[gameMode].meta.moveNoun
+                }`}
+                busy={busy}
+                onSubmit={newGame}
+                // Mode above both buttons, since both play it; the clock and
+                // stake under Private Game, the only one they apply to.
+                settings={<ModeSettings />}
+                actionNote={
+                  <>
+                    {privateTerms} ·{" "}
+                    <button
+                      type="button"
+                      className="cursor-pointer underline hover:text-ink"
+                      aria-expanded={tweaking}
+                      onClick={() => setTweaking(!tweaking)}
+                    >
+                      {tweaking ? "done" : "change"}
+                    </button>
+                  </>
+                }
+                pickDiscColor
+              />
+              {tweaking && (
+                <div className="card mx-auto mb-5 w-115 max-w-full p-4 text-left">
+                  <PrivateGameSettings />
+                </div>
+              )}
+            </>
           ) : (
             <QuickMatchPanel
               status={quick}
