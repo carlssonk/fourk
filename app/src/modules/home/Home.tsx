@@ -20,6 +20,7 @@ import {
   newGame,
   pendingInviteAtom,
   quickMatchAtom,
+  removeMatch,
   showMatch,
   startQuickMatch,
   stopQuickMatch,
@@ -276,6 +277,7 @@ export const Home = () => {
               busy={busy}
               onOpen={showMatch}
               onCollect={collectMatch}
+              onRemove={(m) => removeMatch(m.covenantId)}
             />
           </aside>
         )}
